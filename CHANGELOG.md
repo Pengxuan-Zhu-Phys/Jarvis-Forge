@@ -4,8 +4,7 @@
 
 ### Added
 
-- Import a complete official source index with `jforge apt sources` and `jforge apt import debian`. Refresh that index with `apt update` and query package names through `apt list/search/show`.
-- List supported Debian and Ubuntu sources with `apt sources`; import the chosen source explicitly before using its index.
+- List supported Debian and Ubuntu sources with `jforge apt sources`, then import the chosen source with `jforge apt import debian` or `jforge apt import ubuntu`. Refresh the complete source index with `apt update` and query package names through `apt list/search/show`.
 - Look up missing recipes in the configured official repository during installation, download verified source archives on demand and track generated recipes for future updates and upgrades.
 - Generate user-prefix build recipes for standard CMake, configure and prefix-aware Makefile layouts, and install Neofetch through its Bash command layout.
 - Accept Debian-style package names containing `+` or dots, including compiler and versioned Python package names.
