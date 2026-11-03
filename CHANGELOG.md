@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.3
+
+### Fixed
+
+- Accept Neofetch 7.1.0's expected version output when its `--version` command exits with status 1, while rejecting unexpected output or other exit statuses.
+- Refresh tracked official recipes with `jforge apt update` after upgrading Forge to pick up the corrected Neofetch check.
+
+
 ## 1.0.2
 
 ### Added

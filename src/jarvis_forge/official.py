@@ -337,10 +337,15 @@ def _automatic_recipe(profile, row, source, backend, archive):
                     "(p/'bin/neofetch').chmod(0o755); "
                     "m=p/'share/man/man1'; m.mkdir(parents=True,exist_ok=True); "
                     "shutil.copyfile(s/'neofetch.1',m/'neofetch.1') if (s/'neofetch.1').is_file() else None")
+            check = ("import subprocess,sys; "
+                     "r=subprocess.run([sys.argv[1],'--no_config','--version'],capture_output=True,text=True); "
+                     "sys.stdout.write(r.stdout); sys.stderr.write(r.stderr); "
+                     "sys.exit(0 if r.returncode in (0,1) and r.stdout.strip() == 'Neofetch ' + sys.argv[2] else 1)")
             return {"schema_version": 1, "name": profile["name"], "version": _upstream_version(row["Version"]),
                     "description": "Neofetch system information command from official sources", "source": source,
                     "requires_tools": ["bash"], "install": [["${python}", "-c", copy, "${source}", "${prefix}"]],
-                    "check": [["bash", "-n", "${prefix}/bin/neofetch"], ["${prefix}/bin/neofetch", "--version"]],
+                    "check": [["bash", "-n", "${prefix}/bin/neofetch"],
+                              ["${python}", "-c", check, "${prefix}/bin/neofetch", _upstream_version(row["Version"])]],
                     "environment": {"prepend": {"PATH": ["${prefix}/bin"]}}}
     # Only infer Make installs that explicitly expose a prefix variable.
     makefile = _member_text(archive, source["subdir"], "Makefile")
