@@ -209,12 +209,12 @@ def test_update_sources_is_explicit_and_preserves_good_catalog_on_failure(home, 
     path.unlink()
     edit_sources(home, add=str(source))
     assert not any(p["name"] == "external" for p in Catalog(home).list())
-    update(home)
+    update(home, official=False)
     assert any(p["name"] == "external" for p in Catalog(home).list())
     before = (home.root / "cache/apt/catalog.json").read_bytes()
     (source / "external.yaml").write_text("bad: yaml\n")
     with pytest.raises(ForgeError):
-        update(home)
+        update(home, official=False)
     assert (home.root / "cache/apt/catalog.json").read_bytes() == before
 
 
@@ -265,7 +265,7 @@ def test_managed_directory_symlink_is_rejected(tmp_path):
     root.mkdir()
     (root / "packages").symlink_to(outside, target_is_directory=True)
     with pytest.raises(ForgeError, match="escapes"):
-        update(ForgeHome(root))
+        update(ForgeHome(root), official=False)
     assert list(outside.iterdir()) == []
 
 

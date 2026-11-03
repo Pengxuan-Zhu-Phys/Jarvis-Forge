@@ -104,10 +104,13 @@ Scripts are copied, not relocated together with their dependencies: use stable a
 
 ## User-local package manager
 
-`jforge apt` follows familiar apt command names and operates on Forge recipes and user prefixes. It does not invoke system apt, request sudo, or edit shell startup files. Official source-package metadata can be tracked through `apt import`.
+`jforge apt` follows familiar apt command names and operates on Forge recipes and user prefixes. It does not invoke system apt, request sudo, or edit shell startup files. Import an entire official source index with `apt import` without a package name; source archives are fetched on demand during installation.
 
 ```bash
 jforge apt --help
+jforge apt import --origin debian --suite bookworm
+jforge apt search neofetch
+jforge apt install neofetch
 jforge apt update
 jforge apt search eigen
 jforge apt show eigen
@@ -133,14 +136,29 @@ jforge apt autoremove --dry-run
 
 Every successful instance gets an immutable receipt and activation script; source downloads, recipe snapshots, command logs and checks live in the operation record. Reinstall and upgrade create separate prefixes and preserve old instances. Build or check failure leaves the previous active environment selected. Valid dependencies completed before a later package fails can remain as inactive installations.
 
-The catalog contains only configured recipes. Add your own `recipes/*.yaml`, or register a local recipe directory/file or HTTPS YAML index, then refresh it:
+The catalog combines configured recipes and the imported official source index. Missing recipes are looked up in the selected repository during install; standard CMake/configure and prefix-aware Makefile layouts receive generated build steps, and Neofetch has a Bash installation adapter. Complex layouts report the required adaptation. You can also add `recipes/*.yaml`, or register a local recipe directory/file or HTTPS YAML index:
 
 ```bash
 jforge apt edit-sources --add /path/to/recipes
 jforge apt update
 ```
 
-Bundled recipes change with Forge releases; `update` refreshes configured external sources. `upgrade` resolves newer compatible versions from that catalog. `full-upgrade` uses the same source-recipe resolver and retains old instances; it performs no system-wide removals. Recipe commands are trusted build instructions, not sandboxed code. See the [package manager design and recipe format](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md).
+Bundled recipes change with Forge releases; `update` refreshes the selected official source index, configured recipe sources and tracked official recipes. Use `update --recipes-only` or `install --no-official` for recipe-only operation. `upgrade` resolves newer compatible versions from that catalog. `full-upgrade` uses the same source-recipe resolver and retains old instances; it performs no system-wide removals. Recipe commands are trusted build instructions, not sandboxed code. See the [package manager design and recipe format](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md).
+
+### Import a complete official index
+
+```bash
+jforge apt import --origin debian --suite bookworm
+jforge apt search neofetch
+jforge apt show neofetch
+jforge apt install neofetch
+source "$(jforge apt env --path)"
+neofetch
+```
+
+This imports all source/binary package names in the selected distribution component; it downloads metadata, not every source archive. `--component` defaults to `main`; for example, Ubuntu's additional packages can be selected with `--origin ubuntu --suite noble --component universe`. A repository import changes the default lookup source without removing existing tracked package imports or custom recipes. The initial default is Debian bookworm/main. `apt update` refreshes the full index and tracked recipes; `apt upgrade` builds newer selected versions. Search and show read the cached index without downloading. `apt edit-sources` displays the official source configuration alongside recipe sources.
+
+`apt install` can query the official source even without a prior repository import. It verifies source archives, selects a compatible installation adapter and saves the generated recipe and provenance. Dry-run does not fetch missing metadata: it reports the pending official lookup instead. Official index availability does not imply that every package can be built on every host; missing native tools/libraries and unsupported layouts are reported with operation logs. Debian Build-Depends is retained as information, not automatically treated as a user-prefix dependency solution.
 
 ### Track official Debian and Ubuntu source packages
 
@@ -152,9 +170,9 @@ jforge apt upgrade --dry-run
 jforge apt upgrade
 ```
 
-Import maps a binary or source package name through the official `Sources` index, records source versions and SHA-256, and preserves Debian quilt patches. A reviewed Forge template supplies user-prefix build options and checks. Built-in source adapters cover Eigen and Redis; `--template NAME` reuses a custom Forge recipe. Ubuntu sources use `--origin ubuntu --suite <codename>`.
+Import maps a binary or source package name through the official `Sources` index, records source versions and SHA-256, and preserves Debian quilt patches. This advanced per-package import can reuse an explicit reviewed template for custom options and checks. Built-in reviewed templates cover Eigen and Redis; `--template NAME` reuses a custom Forge recipe. Ubuntu sources use `--origin ubuntu --suite <codename>`.
 
-`update` refreshes these tracked imports without compiling. `upgrade` detects both upstream changes and Debian revision/patch changes, creates new instances, and keeps old ones. Identical official metadata does not force a rebuild. Packages without an adapter are reported as pending; standard CMake/configure layouts receive a draft YAML for review. Drafts do not enter the install catalog or silently become valid updates. Debian Build-Depends fields are retained in the report; they are not blindly translated into Forge dependencies.
+`update` refreshes these tracked imports without compiling. `upgrade` detects both upstream changes and Debian revision/patch changes, creates new instances, and keeps old ones. Identical official metadata does not force a rebuild. Per-package metadata imports without a reviewed template retain draft/pending information. During explicit installation, automatic adapters can generate supported standard layouts; unsupported layouts remain pending. Drafts themselves do not silently enter the install catalog. Debian Build-Depends fields are retained in the report; they are not blindly translated into Forge dependencies.
 
 Default metadata trust is official HTTPS plus Release/index/archive checksums, reported as `apt_signature_verified: false`. To require archive-signature verification, supply `--keyring /path/to/trusted-archive-keyring.gpg`; this requires `gpgv` and fails if verification cannot be completed. The importer builds upstream projects with quilt patches; it does not execute `debian/rules` or reproduce the full Debian binary-package build.
 

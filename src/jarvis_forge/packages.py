@@ -99,7 +99,7 @@ def operation(home, action, request):
     except BaseException as exc:
         result.update(status="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed", error=str(exc))
         if isinstance(exc, ForgeError):
-            exc.hint = f"Operation logs: {directory}"
+            exc.hint = (exc.hint + "\n" if exc.hint else "") + f"Operation logs: {directory}"
         raise
     finally:
         write_json(directory / "result.json", {**result, "finished_at": now()})
@@ -284,10 +284,14 @@ def _run_command(argv, cwd, environment_script, logs, number, timeout, context):
         write_json(probe, record)
 
 
-def install(home, specs, *, jobs=1, timeout=3600, mode="install", progress=None):
+def install(home, specs, *, jobs=1, timeout=3600, mode="install", progress=None, official=True):
     if not math.isfinite(timeout) or timeout <= 0:
         raise ForgeError("--timeout must be finite and positive.")
-    with locked(home), operation(home, mode, {"specs": specs, "jobs": jobs, "timeout_seconds": timeout}) as (op, result):
+    with locked(home), operation(home, mode, {"specs": specs, "jobs": jobs, "timeout_seconds": timeout,
+                                             "official_lookup": official}) as (op, result):
+        if official and mode in {"install", "reinstall"}:
+            from .official import ensure_recipes
+            result["official_imports"] = ensure_recipes(home, specs, op, progress)
         plan = plan_install(home, specs, jobs=jobs, mode=mode, operation_id=op.name)
         write_json(op / "plan.json", plan)
         current = dict(plan["state_before"], active=dict(plan["state_before"]["active"]), manual=list(plan["state_before"]["manual"]))
@@ -472,11 +476,12 @@ def remove(home, specs, *, automatic=False, expected_keys=None):
         return result
 
 
-def update(home):
-    with locked(home), operation(home, "update", {}) as (op, result):
+def update(home, *, official=True):
+    with locked(home), operation(home, "update", {"official": official}) as (op, result):
         result.update(update_catalog(home, op))
         from .official import refresh_official
-        result.update(refresh_official(home, op))
+        if official:
+            result.update(refresh_official(home, op))
         result["available"] = len(Catalog(home).list())
         return result
 

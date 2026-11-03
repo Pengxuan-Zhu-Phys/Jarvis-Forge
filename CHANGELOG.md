@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.2
+
+### Added
+
+- Import a complete official source index by omitting the package name: `jforge apt import --origin debian --suite bookworm`. Refresh that index with `apt update` and query package names through `apt list/search/show`.
+- Look up missing recipes in the configured official repository during installation, download verified source archives on demand and track generated recipes for future updates and upgrades.
+- Generate user-prefix build recipes for standard CMake, configure and prefix-aware Makefile layouts, and install Neofetch through its Bash command layout.
+- Accept Debian-style package names containing `+` or dots, including compiler and versioned Python package names.
+- Provide `apt update --recipes-only` and `apt install --no-official` for recipe-only workflows. Dry-run reports pending official lookups without downloading files.
+
+### Compatibility and upgrade notes
+
+- The default official source is Debian bookworm/main until a repository or first package import selects another origin, suite and component. Repository import downloads metadata; it does not install every package or fetch every source archive.
+- Official index availability does not guarantee that every package has a supported source layout or satisfied build dependencies. Unsupported packages retain their metadata and adapter report; Debian Build-Depends is recorded without blindly installing system packages.
+
+
 ## 1.0.1
 
 ### Added

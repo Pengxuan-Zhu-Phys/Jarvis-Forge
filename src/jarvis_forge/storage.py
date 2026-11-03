@@ -67,6 +67,12 @@ def identifier(value: str) -> str:
     return value
 
 
+def package_name(value: str) -> str:
+    if not re.fullmatch(r"[a-z0-9][a-z0-9+._-]{0,127}", value):
+        raise ForgeError(f"Invalid package name: {value!r}.")
+    return value
+
+
 def default_home_file() -> Path:
     """Keep the remembered data root outside every individual Forge home."""
     configured = os.environ.get("XDG_CONFIG_HOME")
@@ -145,7 +151,7 @@ class ForgeHome:
 
     def packages(self, name: str | None = None) -> list[dict]:
         if name is not None:
-            identifier(name)
+            package_name(name)
         base = self.root / "packages"
         records = []
         for path in sorted(base.glob("*/*/*/manifest.json")):

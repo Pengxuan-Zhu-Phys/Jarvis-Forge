@@ -13,18 +13,30 @@ from packaging.version import InvalidVersion, Version
 import yaml
 
 from .downloads import fetch
-from .storage import ForgeError, ForgeHome, digest, now, read_json, write_json
+from .storage import ForgeError, ForgeHome, digest, now, package_name, read_json, write_json
 from .suite import UniqueLoader
 
 
 def requirement(text: str) -> Requirement:
     value = re.sub(r"\s*\(([^()]+)\)\s*$", r"\1", text.strip())
-    value = re.sub(r"(?<=[A-Za-z0-9_])=(?!=)", "==", value)
+    match = re.fullmatch(r"([a-z0-9][a-z0-9+._-]{0,127})(.*)", value)
+    if not match:
+        raise ForgeError(f"Invalid package constraint: {text!r}")
+    name, constraint = match.groups()
+    constraint = constraint.strip()
+    if constraint and not constraint.startswith(("=", "<", ">", "!", "~", "[", ";", "@")):
+        raise ForgeError(f"Invalid package constraint: {text!r}")
+    if constraint.startswith("=") and not constraint.startswith("=="):
+        constraint = "=" + constraint
     try:
-        req = Requirement(value)
+        # Debian names can contain '+', which PEP 508 distribution names omit.
+        # Reuse its version/marker parser with a placeholder, then retain the
+        # validated Forge/Debian package identity for dependency resolution.
+        req = Requirement("forge-package" + constraint)
+        req.name = package_name(name)
     except InvalidRequirement as exc:
         raise ForgeError(f"Invalid package constraint: {text!r}") from exc
-    if req.extras or req.marker or req.url or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", req.name):
+    if req.extras or req.marker or req.url:
         raise ForgeError(f"Unsupported package constraint: {text!r}")
     return req
 

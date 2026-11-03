@@ -58,15 +58,24 @@ def list_packages(ctx: typer.Context,
             p["name"] == r["name"] and (Version(p["version"]) > Version(r["version"]) or
              (Version(p["version"]) == Version(r["version"]) and p["source"] != r.get("source")))
             for p in catalog.list())]
+    elif not installed_only:
+        from .official import cached_packages
+        known = {p["name"] for p in packages}
+        packages.extend(p for p in cached_packages(ctx.obj.home) if p["name"] not in known
+                        and fnmatch.fnmatchcase(p["name"], pattern))
     _emit(ctx, "list", packages=[p for p in packages if fnmatch.fnmatchcase(p["name"], pattern)])
 
 
 @app.command()
 def search(ctx: typer.Context,
            query: str = typer.Argument(..., help="Match package names and descriptions.", metavar="<query>")):
-    """Search the recipe catalog without downloading or installing."""
-    _emit(ctx, "search", packages=[{"name": p["name"], "version": p["version"], "description": p["description"]}
-                                  for p in Catalog(ctx.obj.home).list(query)])
+    """Search recipes and the imported official index without downloading."""
+    from .official import cached_packages
+    packages = [{"name": p["name"], "version": p["version"], "description": p["description"]}
+                for p in Catalog(ctx.obj.home).list(query)]
+    known = {p["name"] for p in packages}
+    packages.extend(p for p in cached_packages(ctx.obj.home, query) if p["name"] not in known)
+    _emit(ctx, "search", packages=packages)
 
 
 @app.command()
@@ -76,19 +85,34 @@ def show(ctx: typer.Context,
     req = requirement(package)
     choices = [p for p in Catalog(ctx.obj.home).list() if p["name"] == req.name and Version(p["version"]) in req.specifier]
     if not choices:
-        raise ForgeError(f"No recipe matches {package}.", hint="jforge apt search <query>")
+        from .official import cached_packages, _upstream_version
+        choices = cached_packages(ctx.obj.home, req.name, exact=True, details=True)
+        if req.specifier:
+            choices = [p for p in choices if Version(_upstream_version(p["version"])) in req.specifier]
+        if not choices:
+            raise ForgeError(f"No recipe or imported official metadata matches {package}.", hint="jforge apt update")
+        _emit(ctx, "show", package=choices[0], installed_instances=[r for r in installed(ctx.obj.home) if r["name"] == req.name])
+        return
     recipe = max(choices, key=lambda p: Version(p["version"]))
     _emit(ctx, "show", package=recipe, installed_instances=[r for r in installed(ctx.obj.home) if r["name"] == req.name])
 
 
-def _install(ctx, packages, jobs, timeout, dry_run, mode):
+def _install(ctx, packages, jobs, timeout, dry_run, mode, official=True):
     from .cli import _console
     if dry_run:
+        from .official import missing_packages, default_source
+        missing = missing_packages(ctx.obj.home, packages or []) if official and mode in {"install", "reinstall"} else []
+        if missing:
+            _emit(ctx, mode, dry_run=True, plan={"requires_official_lookup": True,
+                  "official_source": default_source(ctx.obj.home), "requested_packages": packages,
+                  "packages": [{"name": name, "action": "official-lookup"} for name in missing],
+                  "note": "Source archives, adapter and build requirements are resolved during install; no files downloaded."})
+            return
         result = plan_install(ctx.obj.home, packages or [], jobs=jobs, mode=mode)
         _emit(ctx, mode, dry_run=True, plan=result)
     else:
         result = install(ctx.obj.home, packages or [], jobs=jobs, timeout=timeout, mode=mode,
-                         progress=lambda message: _console(stderr=True).print(message, markup=False))
+                         progress=lambda message: _console(stderr=True).print(message, markup=False), official=official)
         _emit(ctx, mode, **result)
 
 
@@ -97,9 +121,10 @@ def install_packages(ctx: typer.Context,
                      packages: list[str] = typer.Argument(..., help="Package names or name=version specs.", metavar="<packages>"),
                      jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Parallel build jobs."),
                      timeout: float = typer.Option(3600, "--timeout", help="Timeout per build/check command, in seconds."),
-                     dry_run: bool = typer.Option(False, "--dry-run", "-s", help="Show the plan without writing or downloading.")):
+                     dry_run: bool = typer.Option(False, "--dry-run", "-s", help="Show the plan without writing or downloading."),
+                     no_official: bool = typer.Option(False, "--no-official", help="Use configured recipes only; skip official fallback.")):
     """Download, verify, build and install into private prefixes."""
-    _install(ctx, packages, jobs, timeout, dry_run, "install")
+    _install(ctx, packages, jobs, timeout, dry_run, "install", official=not no_official)
 
 
 @app.command()
@@ -181,14 +206,15 @@ def autoremove(ctx: typer.Context,
 
 
 @app.command("update")
-def update_sources(ctx: typer.Context):
-    """Refresh recipe indexes; installed software is not changed."""
-    _emit(ctx, "update", **update(ctx.obj.home))
+def update_sources(ctx: typer.Context,
+                   recipes_only: bool = typer.Option(False, "--recipes-only", help="Refresh recipes without official repository metadata.")):
+    """Refresh recipes and the selected official source index without upgrading."""
+    _emit(ctx, "update", **update(ctx.obj.home, official=not recipes_only))
 
 
 @app.command("import")
 def import_official(ctx: typer.Context,
-                    package: str = typer.Argument(..., help="Official binary or source package name.", metavar="<package>"),
+                    package: Optional[str] = typer.Argument(None, help="Optional package; omit to import the whole source index.", metavar="<package>"),
                     suite: str = typer.Option(..., "--suite", help="Distribution codename, such as bookworm or jammy.", metavar="<str>"),
                     origin: str = typer.Option("debian", "--origin", help="Official distribution: debian or ubuntu.", metavar="<debian|ubuntu>"),
                     component: str = typer.Option("main", "--component", help="Repository component.", metavar="<str>"),
@@ -196,8 +222,14 @@ def import_official(ctx: typer.Context,
                     template: Optional[str] = typer.Option(None, "--template", help="Reuse a reviewed Forge recipe's build adapter.", metavar="<str>"),
                     source_version: Optional[str] = typer.Option(None, "--source-version", help="Pin an exact Debian source version.", metavar="<str>"),
                     keyring: Optional[Path] = typer.Option(None, "--keyring", help="Require gpgv verification using this trusted archive keyring.", metavar="<path>")):
-    """Import official source metadata and track recipes with apt update."""
-    from .official import import_package
+    """Import an official repository index, or track one source package."""
+    from .official import import_package, import_repository
+    if package is None:
+        if name is not None or template is not None or source_version is not None:
+            raise ForgeError("A package is required for --name, --template or --source-version.")
+        _emit(ctx, "import", **import_repository(ctx.obj.home, origin=origin, suite=suite,
+                                               component=component, keyring=keyring))
+        return
     result = import_package(ctx.obj.home, package, origin=origin, suite=suite, component=component,
                             name=name, template_name=template, source_version=source_version, keyring=keyring)
     _emit(ctx, "import", **result)
@@ -218,7 +250,10 @@ def configure_sources(ctx: typer.Context,
                 raise ForgeError("Source removal cancelled.")
         _emit(ctx, "edit-sources", **edit_sources(ctx.obj.home, add=add, remove_source=remove_source))
     else:
-        _emit(ctx, "edit-sources", path=str(ctx.obj.home.root / "apt/sources.json"), **source_config(ctx.obj.home))
+        from .official import default_source
+        _emit(ctx, "edit-sources", path=str(ctx.obj.home.root / "apt/sources.json"),
+              official_path=str(ctx.obj.home.root / "apt/official.json"), official_source=default_source(ctx.obj.home),
+              **source_config(ctx.obj.home))
 
 
 @app.command("env")
