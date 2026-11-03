@@ -1,0 +1,24 @@
+schema_version: 1
+id: forge-smoke
+description: Produce and verify a small scientific result without external tools.
+steps:
+  - id: calculate
+    argv:
+      - "${python}"
+      - -c
+      - |
+        import json, pathlib
+        pathlib.Path('result.json').write_text(json.dumps({'sum': sum(range(10))}) + '\n')
+        print('Calculated sum(range(10)) = 45')
+    artifacts: [result.json]
+  - id: verify
+    needs: [calculate]
+    argv:
+      - "${python}"
+      - -c
+      - |
+        import json, pathlib
+        result = json.loads(pathlib.Path('result.json').read_text())
+        assert result['sum'] == 45, result
+        print('Result verified')
+
