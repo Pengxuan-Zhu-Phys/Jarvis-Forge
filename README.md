@@ -28,7 +28,7 @@ python3 -m build
 
 ## Try the acceptance workflow
 
-These commands create a private Forge user directory under the current directory and write a smoke-suite YAML. The demo uses Python only; it does not download software or start services.
+These commands create a private Forge user directory under the current directory and write a smoke-suite YAML. The demo's `init` also remembers that directory as your default. The demo uses Python only; it does not download software or start services.
 
 ```bash
 jforge --home .forge-home init
@@ -52,7 +52,17 @@ jforge --home .forge-home compare <older-run-id> <newer-run-id>
 
 ## User directories and package queries
 
-Forge uses `~/.jarvis-forge` by default. `--home` overrides `JFORGE_HOME`, which overrides that default. `paths`, `doctor`, `list`, `info`, `validate`, `plan`, `history`, `show` and `logs` do not initialize a user directory or install software.
+Forge uses `~/.jarvis-forge` until you choose a default with `init`. `jforge init --home /data/my-forge` initializes that directory and remembers it for later commands, including commands started in other terminals and Python environments. Home selection follows `--home`, `JFORGE_HOME`, the remembered default, then `~/.jarvis-forge`, in that order. Using `--home` with another command only overrides that invocation.
+
+The remembered location is stored in `~/.config/jarvis-forge/default-home.json`, or under an absolute `XDG_CONFIG_HOME` when configured. `jforge paths` shows both the selected data directory and this preference file. Initialization does not move existing software or histories. `paths`, `doctor`, `list`, `info`, `validate`, `plan`, `history`, `show` and `logs` do not initialize a user directory or install software.
+
+```bash
+jforge init --home /data/my-forge
+jforge env list
+jforge apt list
+```
+
+Both queries above use `/data/my-forge` without repeating `--home`, provided no `JFORGE_HOME` override is set. Repeating `init --home` with another directory changes the remembered default. A missing remembered directory remains selected; Forge does not silently switch to a different store. To repair a corrupt preference, explicitly initialize the desired directory again.
 
 ```bash
 jforge paths
@@ -70,7 +80,7 @@ You select and prepare Python environments with pyenv or your existing tools. `d
 
 ## Named environments and target Python
 
-All Forge installations for the same user share `~/.jarvis-forge`, independently of the Python version running the CLI. `JFORGE_HOME` and `--home` can explicitly select a different store. Target Python environments do not need Forge installed.
+All Forge installations for the same user share the remembered data directory, independently of the Python version running the CLI; the initial fallback is `~/.jarvis-forge`. `JFORGE_HOME` and `--home` can explicitly override it. Target Python environments do not need Forge installed.
 
 ```bash
 jforge env add cbs --shell /path/to/cbs-env.sh

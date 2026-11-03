@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Remember the directory selected by `jforge init --home PATH` as the user's default across terminals and Python environments.
+- Show the default-location configuration file in `init` and `paths` output.
+
+### Compatibility and upgrade notes
+
+- Home selection now follows `--home`, `JFORGE_HOME`, the remembered default, then `~/.jarvis-forge`, in that order. An explicit `init` saves its successfully initialized directory; other commands do not change the remembered default.
+- Default-location preferences are stored in the user configuration directory, independently of the selected data directory. Existing data is not moved.
+
 ## 1.0.0
 
 ### Added

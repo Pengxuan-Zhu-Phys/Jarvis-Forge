@@ -25,7 +25,7 @@ from .comparison import compare
 from .environment import inspect_environment
 from .environment_registry import show as registered_environment
 from .runner import execute
-from .storage import ForgeError, ForgeHome, identifier, read_json
+from .storage import ForgeError, ForgeHome, default_home_file, identifier, read_json
 from .suite import load_suite, make_plan
 
 
@@ -75,11 +75,12 @@ def emit(ctx: typer.Context, command: str, *, ok=True, **values):
 
 @app.callback(invoke_without_command=True)
 def root(ctx: typer.Context,
-         home: Optional[str] = typer.Option(None, "--home", help="Use this Forge user directory.", metavar="<path>"),
+         home: Optional[str] = typer.Option(None, "--home", help="Use this Forge user directory; init remembers it.", metavar="<path>"),
          as_json: bool = typer.Option(False, "--json", help="Output one JSON object."),
          version: bool = typer.Option(False, "--version", "-v", help="Show the version and exit.", is_eager=True),
          debug: bool = typer.Option(False, "--debug", "-d", help="Show diagnostic tracebacks.")):
-    ctx.obj = Settings(ForgeHome.resolve(home), as_json)
+    # Version queries must remain available even if a saved preference is corrupt.
+    ctx.obj = Settings(ForgeHome.resolve(home, read_default=not version), as_json)
     if version:
         if as_json:
             emit(ctx, "version", name="Jarvis-Forge", version=__version__)
@@ -95,15 +96,17 @@ def root(ctx: typer.Context,
 
 @app.command()
 def init(ctx: typer.Context):
-    """Initialize user directories without installing software."""
+    """Initialize user directories and remember this default location."""
     config = ctx.obj.home.initialize()
-    emit(ctx, "init", **ctx.obj.home.paths(), host_id=config["host_id"])
+    preference = ctx.obj.home.remember_default()
+    emit(ctx, "init", **ctx.obj.home.paths(), host_id=config["host_id"],
+         default_saved=True, default_home_file=str(preference))
 
 
 @app.command()
 def paths(ctx: typer.Context):
     """Show resolved paths without creating directories."""
-    emit(ctx, "paths", **ctx.obj.home.paths())
+    emit(ctx, "paths", **ctx.obj.home.paths(), default_home_file=str(default_home_file()))
 
 
 @app.command()

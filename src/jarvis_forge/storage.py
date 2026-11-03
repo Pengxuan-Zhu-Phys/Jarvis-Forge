@@ -67,14 +67,46 @@ def identifier(value: str) -> str:
     return value
 
 
+def default_home_file() -> Path:
+    """Keep the remembered data root outside every individual Forge home."""
+    configured = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(configured).expanduser() if configured else Path.home() / ".config"
+    if not base.is_absolute():
+        base = Path.home() / ".config"
+    return base / "jarvis-forge" / "default-home.json"
+
+
 @dataclass(frozen=True)
 class ForgeHome:
     root: Path
 
     @classmethod
-    def resolve(cls, explicit: str | None = None) -> ForgeHome:
-        return cls(Path(explicit or os.environ.get("JFORGE_HOME") or
-                        "~/.jarvis-forge").expanduser().resolve())
+    def resolve(cls, explicit: str | None = None, *, read_default: bool = True) -> ForgeHome:
+        selected = explicit or os.environ.get("JFORGE_HOME")
+        if not selected and read_default:
+            preference = default_home_file()
+            if preference.exists() or preference.is_symlink():
+                hint = "Run jforge init --home /absolute/path to reset the remembered default."
+                try:
+                    saved = read_json(preference)
+                except ForgeError as exc:
+                    raise ForgeError(f"Cannot read the remembered Forge home: {preference}", hint=hint) from exc
+                selected = saved.get("default_home")
+                if (saved.get("schema_version") != 1 or not isinstance(selected, str)
+                        or not selected or not Path(selected).is_absolute()):
+                    raise ForgeError(f"Invalid remembered Forge home: {preference}", hint=hint)
+        return cls(Path(selected or "~/.jarvis-forge").expanduser().resolve())
+
+    def remember_default(self) -> Path:
+        """Called by explicit CLI init, never by automatic home initialization."""
+        self.require_initialized()
+        preference = default_home_file()
+        try:
+            write_json(preference, {"schema_version": 1, "default_home": str(self.root.resolve())})
+        except OSError as exc:
+            raise ForgeError(f"Initialized {self.root}, but could not save its default location to {preference}: {exc}",
+                             code=1, hint="Fix the user configuration directory permissions and repeat jforge init.") from exc
+        return preference
 
     def paths(self) -> dict:
         names = ("recipes", "packages", "environments", "suites", "operations",
