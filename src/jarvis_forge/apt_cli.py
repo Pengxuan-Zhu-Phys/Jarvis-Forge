@@ -14,6 +14,7 @@ from .catalog import Catalog, requirement, source_config
 from .packages import (edit_sources, environment_path, install, installed, plan_install,
                        plan_remove, remove, update)
 from .storage import ForgeError
+from .presentation import line
 
 
 app = typer.Typer(invoke_without_command=True, no_args_is_help=False,
@@ -28,6 +29,11 @@ def _emit(ctx, command, **values):
 
 @app.callback()
 def apt(ctx: typer.Context):
+    from .apt_profiles import active_home
+    ctx.obj.user_home = ctx.obj.home
+    # Source selection must remain repairable when a saved scope is missing.
+    if ctx.invoked_subcommand != "switch":
+        ctx.obj.home = active_home(ctx.obj.home)
     if ctx.invoked_subcommand is None:
         if ctx.obj.as_json:
             _emit(ctx, "help", commands=sorted(ctx.command.commands))
@@ -54,10 +60,9 @@ def list_packages(ctx: typer.Context,
                              "status": "installed" if matches else "available", "active": bool(active),
                              "prefix": active["prefix"] if active else "", "description": recipe["description"]})
     if upgradable:
+        from .dependencies import newer
         packages = [r for r in records if r["active"] and any(
-            p["name"] == r["name"] and (Version(p["version"]) > Version(r["version"]) or
-             (Version(p["version"]) == Version(r["version"]) and p["source"] != r.get("source")))
-            for p in catalog.list())]
+            p["name"] == r["name"] and newer(p, r) for p in catalog.list())]
     elif not installed_only:
         from .official import cached_packages
         known = {p["name"] for p in packages}
@@ -90,12 +95,14 @@ def show(ctx: typer.Context,
          package: str = typer.Argument(..., help="Package or package=version.", metavar="<package>")):
     """Show recipe details, dependencies and installed locations."""
     req = requirement(package)
-    choices = [p for p in Catalog(ctx.obj.home).list() if p["name"] == req.name and Version(p["version"]) in req.specifier]
+    from .dependencies import native, matches
+    choices = [p for p in Catalog(ctx.obj.home).list() if matches(p, native(package, root=True))]
     if not choices:
         from .official import cached_packages, _upstream_version
         choices = cached_packages(ctx.obj.home, req.name, exact=True, details=True)
         if req.specifier:
-            choices = [p for p in choices if Version(_upstream_version(p["version"])) in req.specifier]
+            choices = [p for p in choices if matches({"name": req.name, "version": _upstream_version(p["version"]),
+                "provenance": {"kind": "official-apt-source", "debian_version": p["version"], "binary_versions": {req.name: p["version"]}}}, native(package, root=True))]
         if not choices:
             raise ForgeError(f"No recipe or imported official metadata matches {package}.", hint="jforge apt update")
         _emit(ctx, "show", package=choices[0], installed_instances=[r for r in installed(ctx.obj.home) if r["name"] == req.name])
@@ -121,7 +128,7 @@ def _install(ctx, packages, jobs, timeout, dry_run, mode, official=True):
         _emit(ctx, mode, dry_run=True, plan=result)
     else:
         result = install(ctx.obj.home, packages or [], jobs=jobs, timeout=timeout, mode=mode,
-                         progress=lambda message: _console(stderr=True).print(message, markup=False), official=official)
+                         progress=lambda message: line(_console(stderr=True), message), official=official)
         _emit(ctx, mode, **result)
 
 
@@ -177,7 +184,7 @@ def satisfy(ctx: typer.Context,
     else:
         from .cli import _console
         _emit(ctx, "satisfy", **install(ctx.obj.home, constraints, jobs=jobs, timeout=timeout,
-                                      progress=lambda m: _console(stderr=True).print(m, markup=False)))
+                                      progress=lambda m: line(_console(stderr=True), m)))
 
 
 def _remove(ctx, packages, automatic, yes, dry_run):
@@ -221,16 +228,36 @@ def update_sources(ctx: typer.Context,
     _emit(ctx, "update", **update(ctx.obj.home, official=not recipes_only))
 
 
+@app.command("switch")
+def switch_source(ctx: typer.Context,
+                  source: Optional[str] = typer.Argument(None, help="Select debian, ubuntu or legacy.", metavar="<source>"),
+                  suite: Optional[str] = typer.Option(None, "--suite", help="Distribution codename, e.g. noble."),
+                  component: Optional[str] = typer.Option(None, "--component", help="Comma-separated components, e.g. main,universe."),
+                  keyring: Optional[Path] = typer.Option(None, "--keyring", help="Trusted archive keyring.")):
+    """Switch isolated package, metadata and shell environments automatically."""
+    from .apt_profiles import switch, profiles
+    base = ctx.obj.user_home or ctx.obj.home
+    if source is None:
+        if suite or component or keyring:
+            raise ForgeError("Choose a source when supplying source options.")
+        _emit(ctx, "switch", environments=profiles(base))
+    else:
+        if not ctx.obj.as_json:
+            from .cli import _console
+            line(_console(stderr=True), f"Selecting {source} package environment; preparing metadata and shell activation...")
+        _emit(ctx, "switch", **switch(base, source, suite=suite, component=component, keyring=keyring))
+
+
 @app.command("sources")
 def list_official_sources(ctx: typer.Context):
     """List supported official sources and the currently imported source."""
     from .official import REPOSITORIES, default_source
     current = default_source(ctx.obj.home)
-    defaults = {"debian": ("bookworm", "main"), "ubuntu": ("noble", "main")}
+    defaults = {"debian": ("bookworm", "main"), "ubuntu": ("noble", "main,universe")}
     sources = [{"name": name, "url": url, "suite": defaults[name][0], "component": defaults[name][1],
                 "active": bool(current and current["origin"] == name),
                 "selected_suite": current["suite"] if current and current["origin"] == name else None,
-                "selected_component": current["component"] if current and current["origin"] == name else None,
+                "selected_component": ",".join(current.get("components", [current["component"]])) if current and current["origin"] == name else None,
                 "description": f"{defaults[name][0]}/{defaults[name][1]} — {url}"}
                for name, url in REPOSITORIES.items()]
     _emit(ctx, "sources", sources=sources, selected=current)
@@ -257,9 +284,14 @@ def import_official(ctx: typer.Context,
     selected_suite = suite or (current["suite"] if selected_origin == current["origin"] else
                                {"debian": "bookworm", "ubuntu": "noble"}[selected_origin])
     same_source = selected_origin == current["origin"] and selected_suite == current["suite"]
-    selected_component = component or (current["component"] if same_source else "main")
-    same_source = same_source and selected_component == current["component"]
+    selected_component = component or (",".join(current.get("components", [current["component"]])) if same_source else ("main,universe" if selected_origin == "ubuntu" else "main"))
+    same_source = same_source and selected_component == ",".join(current.get("components", [current["component"]]))
     selected_keyring = keyring if keyring is not None else (current.get("keyring") if same_source else None)
+    if ctx.obj.user_home is not None and ctx.obj.home != ctx.obj.user_home:
+        from .official import default_source
+        configured = default_source(ctx.obj.home)
+        if (selected_origin, selected_suite, selected_component) != (configured["origin"], configured["suite"], ",".join(configured.get("components", [configured["component"]]))):
+            raise ForgeError("Use jforge apt switch to select a different source environment.")
     if package is None:
         if name is not None or template is not None or source_version is not None:
             raise ForgeError("A package is required for --name, --template or --source-version.")
@@ -312,17 +344,28 @@ def shell_init(ctx: typer.Context):
         raise ForgeError("shell-init cannot be used with --json.")
     print(r'''# Add eval "$(command jforge apt shell-init)" to your shell startup file.
 jforge() {
-    local _jf_arg _jf_next=0 _jf_home='' _jf_apt=0 _jf_change=0 _jf_path
+    local _jf_arg _jf_next=0 _jf_home='' _jf_apt=0 _jf_change=0 _jf_path _jf_command='' _jf_action='' _jf_skip=0 _jf_target=0
     for _jf_arg in "$@"; do
         if [ "$_jf_next" = 1 ]; then _jf_home=$_jf_arg; _jf_next=0; continue; fi
         case "$_jf_arg" in
             --) break ;;
             --home) _jf_next=1 ;;
             --home=*) _jf_home=${_jf_arg#--home=} ;;
-            apt) _jf_apt=1 ;;
-            install|reinstall|upgrade|full-upgrade|satisfy) [ "$_jf_apt" = 1 ] && _jf_change=1 ;;
+            --help|-h|--dry-run|-s|--version|-v|-V) _jf_skip=1 ;;
+            --json|--debug|-d) ;;
+            --*) ;;
+
+            *)
+                if [ -z "$_jf_command" ]; then _jf_command=$_jf_arg
+                elif [ -z "$_jf_action" ]; then _jf_action=$_jf_arg
+                else _jf_target=1; fi ;;
+
         esac
     done
+    if [ "$_jf_command" = apt ]; then
+        case "$_jf_action" in install|reinstall|upgrade|full-upgrade|satisfy|switch|remove|autoremove) _jf_change=1 ;; esac
+    fi
+    if [ "$_jf_skip" = 1 ] || { [ "$_jf_action" = switch ] && [ "$_jf_target" = 0 ]; }; then _jf_change=0; fi
     if command jforge "$@"; then
         if [ "$_jf_change" = 1 ]; then
             if [ -n "$_jf_home" ]; then

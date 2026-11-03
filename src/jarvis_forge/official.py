@@ -30,12 +30,49 @@ ADAPTERS = {"eigen3": "eigen", "redis": "redis"}
 DEFAULT_SOURCE = {"origin": "debian", "suite": "bookworm", "component": "main", "keyring": None}
 
 
+def source_components(source):
+    values = source.get("components") or str(source.get("component", "main")).split(",")
+    return list(dict.fromkeys(v.strip() for v in values))
+
+
+def _source_key(source):
+    return source["origin"], source["suite"], tuple(source_components(source)), tuple(source.get("pockets", [])), source.get("keyring")
+
+
+def source_selection(profile):
+    result = {key: profile.get(key) for key in DEFAULT_SOURCE}
+    components = source_components(profile)
+    result["component"] = components[0]
+    if len(components) > 1:
+        result["components"] = components
+    if "pockets" in profile:
+        result["pockets"] = list(profile["pockets"])
+    return result
+
+
+def _indexes(snapshot):
+    return snapshot.get("indexes") or [snapshot]
+
+
 def _selector(source):
     if source.get("origin") not in REPOSITORIES:
         raise ForgeError("--origin must be debian or ubuntu.")
-    for field in ("suite", "component"):
-        if not isinstance(source.get(field), str) or not re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,127}", source[field]):
-            raise ForgeError(f"Invalid official source {field}: {source.get(field)!r}")
+    components = source_components(source)
+    for field, value in [("suite", source.get("suite"))] + [("component", v) for v in components]:
+        if not isinstance(value, str) or not re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,127}", value):
+            raise ForgeError(f"Invalid official source {field}: {value!r}")
+    defaults = ["updates", "security"] if ((source["origin"] == "ubuntu" and source["suite"] in {"focal", "jammy", "noble"}) or
+                                                  (source["origin"] == "debian" and source["suite"] in {"bullseye", "bookworm", "trixie"})) else []
+    pockets = source.get("pockets", defaults)
+    if not isinstance(pockets, list) or any(p not in {"updates", "security"} for p in pockets):
+        raise ForgeError("Supported repository pockets are updates and security.")
+    source = dict(source, component=components[0])
+    if pockets or "pockets" in source:
+        source["pockets"] = list(dict.fromkeys(pockets))
+    if len(components) > 1:
+        source["components"] = components
+    else:
+        source.pop("components", None)
     return source
 
 
@@ -43,10 +80,10 @@ def default_source(home):
     config = _load_profiles(home)
     source = config.get("source")
     if source is None and config["imports"]:
-        source = {key: config["imports"][0].get(key) for key in DEFAULT_SOURCE}
+        source = source_selection(config["imports"][0])
     if source is not None and not isinstance(source, dict):
         raise ForgeError("Invalid official source configuration.")
-    return _selector({key: source.get(key, value) for key, value in DEFAULT_SOURCE.items()}) if source else None
+    return _selector({**{key: source.get(key, value) for key, value in DEFAULT_SOURCE.items()}, **{key: source[key] for key in ("components", "pockets") if key in source}}) if source else None
 
 
 def _index_rows(path):
@@ -57,6 +94,11 @@ def _index_rows(path):
     except (lzma.LZMAError, gzip.BadGzipFile, UnicodeError, EOFError) as exc:
         raise ForgeError(f"Cannot read official source index: {exc}", code=1) from exc
 
+
+
+def _index_stamp(path):
+    stat = path.stat()
+    return [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
 
 def _cached_repository(home):
     path = home.root / "cache/apt/official-repository.json"
@@ -69,9 +111,14 @@ def _cached_repository(home):
         raise ForgeError(f"Incomplete official repository cache: {path}", hint="jforge apt update")
     if saved.get("source") != default_source(home):
         return None
-    index = _inside(home, Path(saved["snapshot"]["index"]))
-    if not index.is_file() or digest(index) != saved["snapshot"]["index_sha256"]:
-        raise ForgeError("Official source index is missing or modified.", hint="jforge apt update")
+    verified = saved.get("verified_indexes", {})
+    for index_record in _indexes(saved["snapshot"]):
+        index = _inside(home, Path(index_record["index"]))
+        if not index.is_file():
+            raise ForgeError("Official source index is missing or modified.", hint="jforge apt update")
+        expected = {"sha256": index_record["index_sha256"], "stamp": _index_stamp(index)}
+        if verified.get(str(index)) != expected and digest(index) != index_record["index_sha256"]:
+            raise ForgeError("Official source index is missing or modified.", hint="jforge apt update")
     return saved
 
 
@@ -109,6 +156,8 @@ def _index_list_rows(path):
 def cached_packages(home, query="", *, exact=False, details=False):
     saved = _cached_repository(home)
     if saved is None:
+        if default_source(home) and (home.root / "cache/apt/official-repository.json").exists():
+            raise ForgeError("The selected source configuration has changed; refresh its package indexes.", hint="jforge apt update")
         return []
     index = Path(saved["snapshot"]["index"])
     cache = _inside(home, home.root / "cache/apt/official-list.json")
@@ -116,50 +165,70 @@ def cached_packages(home, query="", *, exact=False, details=False):
     if not details and cache.is_file():
         try:
             data = read_json(cache)
-            if data.get("schema_version") == 1 and data.get("index_sha256") == saved["snapshot"]["index_sha256"] and isinstance(data.get("rows"), list):
+            if data.get("schema_version") == 1 and data.get("index_keys") == [[r.get("suite"), r.get("component", saved["source"]["component"]), r["index_sha256"]] for r in _indexes(saved["snapshot"])] and isinstance(data.get("rows"), list) and all(
+                isinstance(row, dict) and all(isinstance(row.get(k), str) for k in ("Package", "Version"))
+                and all(isinstance(row.get(k, ""), str) for k in ("Binary", "Description", "Forge-Component", "Forge-Suite"))
+                for row in data["rows"]):
                 rows = data["rows"]
         except ForgeError:
             pass  # Rebuild an incomplete or damaged derived cache.
     if rows is None:
-        rows = list(_index_rows(index)) if details else list(_index_list_rows(index))
+        rows = [dict(row, **{"Forge-Component": index_record.get("component", saved["source"]["component"]), "Forge-Suite": index_record.get("suite", saved["source"]["suite"])})
+                for index_record in _indexes(saved["snapshot"])
+                for row in (_index_rows(Path(index_record["index"])) if details else _index_list_rows(Path(index_record["index"])))]
         if not details:
             try:
-                write_json(cache, {"schema_version": 1, "index_sha256": saved["snapshot"]["index_sha256"], "rows": rows})
+                write_json(cache, {"schema_version": 1, "index_keys": [[r.get("suite"), r.get("component", saved["source"]["component"]), r["index_sha256"]] for r in _indexes(saved["snapshot"])], "rows": rows})
             except OSError:
                 pass  # A read-only cache must not prevent listing packages.
-    result = []
+    from debian.debian_support import Version as DebianVersion
+    candidates = {}
     for row in rows:
         names = {row["Package"], *(n.strip() for n in row.get("Binary", "").replace("\n", " ").split(",") if n.strip())}
         for name in sorted(names):
             if (name == query if exact else query.lower() in (name + " " + row.get("Description", "")).lower()):
                 entry = {"name": name, "version": row["Version"], "source_package": row["Package"],
                          "description": row.get("Description", f"Official source package {row['Package']}"),
-                         "origin": f"official:{saved['source']['origin']}:{saved['source']['suite']}",
+                         "origin": f"official:{saved['source']['origin']}:{row.get('Forge-Suite', saved['source']['suite'])}/{row.get('Forge-Component', saved['source']['component'])}",
                          "status": "official-index"}
                 if details:
                     entry["source_record"] = row
-                result.append(entry)
-    return result
+                if name not in candidates or DebianVersion(entry["version"]) > DebianVersion(candidates[name]["version"]):
+                    candidates[name] = entry
+    return [candidates[name] for name in sorted(candidates)]
 
 
 def _save_repository(home, source, snapshot):
     previous = home.root / "cache/apt/official-repository.json"
     old = read_json(previous) if previous.exists() else {}
-    if (old.get("snapshot", {}).get("index_sha256") == snapshot["index_sha256"] and old.get("source") == source
+    if (old.get("snapshot") and [(r["index_sha256"]) for r in _indexes(old["snapshot"])] == [r["index_sha256"] for r in _indexes(snapshot)] and old.get("source") == source
             and isinstance(old.get("source_packages"), int)):
         count = old["source_packages"]
     else:
-        count = sum(1 for _ in _index_rows(Path(snapshot["index"])))
+        count = len({row["Package"] for index_record in _indexes(snapshot) for row in _index_rows(Path(index_record["index"]))})
+    verified = {r["index"]: {"sha256": r["index_sha256"], "stamp": _index_stamp(Path(r["index"]))} for r in _indexes(snapshot)}
     record = {"schema_version": 1, "source": source, "snapshot": snapshot,
-              "source_packages": count, "updated_at": now()}
+              "source_packages": count, "updated_at": now(), "verified_indexes": verified}
     write_json(_inside(home, home.root / "cache/apt/official-repository.json"), record)
     return record
+
+
+def source_family(source):
+    """Identity of an isolated scope, independent of its trust-keyring path."""
+    source = _selector(source)
+    return (source["origin"], source["suite"], tuple(source_components(source)), tuple(source.get("pockets", [])))
 
 
 def import_repository(home, *, origin, suite, component="main", keyring=None):
     source = _selector({"origin": origin, "suite": suite, "component": component,
                         "keyring": str(Path(keyring).expanduser().resolve()) if keyring else None})
     with locked(home), operation(home, "import-repository", source) as (directory, result):
+        previous = default_source(home)
+        different = previous and source_family(previous) != source_family(source)
+        scoped = read_json(home.root / "config.json").get("apt_base_home") if (home.root / "config.json").is_file() else None
+        if different and (scoped or _load_profiles(home)["imports"] or home.packages()):
+            raise ForgeError("This environment already tracks packages from another source selection.",
+                             hint=f"jforge apt switch {origin} --suite {suite} --component {','.join(source_components(source))}")
         snapshot = _snapshot(home, source, directory / "repository", {})
         saved = _save_repository(home, source, snapshot)
         config = _load_profiles(home)
@@ -250,11 +319,25 @@ def source_row(index, package, version=None):
 
 def _snapshot(home, profile, directory, session):
     origin, suite, component = profile["origin"], profile["suite"], profile["component"]
-    key = (origin, suite, component, profile.get("keyring"))
+    key = _source_key(profile)
     if key in session:
         return session[key]
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    repo = REPOSITORIES[origin]
+    if profile.get("pockets"):
+        snapshots = []
+        for selected_suite in [suite] + [suite + "-" + pocket for pocket in profile["pockets"]]:
+            child = dict(profile, suite=selected_suite, pockets=[])
+            snapshots.append(_snapshot(home, child, directory / selected_suite, session))
+        snapshot = dict(snapshots[0], indexes=[record for saved in snapshots for record in _indexes(saved)],
+                        pockets=list(profile["pockets"]),
+                        release_checksums=[{"suite": saved["suite"], "sha256": saved["release_sha256"]} for saved in snapshots])
+        expiries = [saved["valid_until"] for saved in snapshots if saved.get("valid_until")]
+        if expiries:
+            snapshot["valid_until"] = min(expiries, key=parsedate_to_datetime)
+        write_json(directory / "snapshot.json", snapshot)
+        session[key] = snapshot
+        return snapshot
+    repo = ("https://security.debian.org/debian-security" if origin == "debian" and suite.endswith("-security") else REPOSITORIES[origin])
     release = directory / "InRelease"
     fetch(f"{repo}/dists/{suite}/InRelease", release, directory / "release-download")
     signature_verified = False
@@ -278,7 +361,8 @@ def _snapshot(home, profile, directory, session):
     if len(records) != 1:
         raise ForgeError("Invalid repository Release metadata.")
     metadata = records[0]
-    if metadata.get("Origin", "").lower() != origin:
+    expected_origin = origin
+    if metadata.get("Origin", "").lower() != expected_origin:
         raise ForgeError("Repository Origin does not match the selected distribution.")
     if suite not in {metadata.get("Codename"), metadata.get("Suite")}:
         raise ForgeError("Repository suite/codename does not match the requested distribution.")
@@ -287,37 +371,47 @@ def _snapshot(home, profile, directory, session):
         if expires <= datetime.now(timezone.utc):
             raise ForgeError("The repository's Release metadata has expired.", code=1)
     hashes = checksums(metadata.get("SHA256", ""))
-    candidates = [f"{component}/source/Sources.xz", f"{component}/source/Sources.gz"]
-    selected = next((name for name in candidates if name in hashes), None)
-    if not selected:
-        raise ForgeError(f"No supported source index for component {component}.")
-    expected = hashes[selected]
-    target = _inside(home, home.root / "cache/apt/official-indexes" / (expected["sha256"] + Path(selected).suffix))
-    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if not target.is_file() or digest(target) != expected["sha256"] or target.stat().st_size != expected["size"]:
-        downloaded = directory / Path(selected).name
-        fetch(f"{repo}/dists/{suite}/{selected}", downloaded, directory / "index-download")
-        if digest(downloaded) != expected["sha256"] or downloaded.stat().st_size != expected["size"]:
-            raise ForgeError("Official source index does not match Release SHA-256/size.", code=1)
-        shutil.copyfile(downloaded, target)
     from .official_dependencies import architecture
-    arch = architecture()
-    binary_name = next((n for n in (f"{component}/binary-{arch}/Packages.xz", f"{component}/binary-{arch}/Packages.gz") if n in hashes), None)
-    if binary_name is None:
-        raise ForgeError(f"No binary dependency metadata is available for {arch}.")
-    binary_expected = hashes[binary_name]
-    binary_path = _inside(home, home.root / "cache/apt/official-indexes" / (binary_expected["sha256"] + Path(binary_name).suffix))
-    if not binary_path.is_file() or digest(binary_path) != binary_expected["sha256"] or binary_path.stat().st_size != binary_expected["size"]:
-        fetched = directory / Path(binary_name).name
-        fetch(f"{repo}/dists/{suite}/{binary_name}", fetched, directory / "binary-download")
-        if digest(fetched) != binary_expected["sha256"] or fetched.stat().st_size != binary_expected["size"]:
-            raise ForgeError("Binary dependency index does not match Release SHA-256/size.", code=1)
-        shutil.copyfile(fetched, binary_path)
-    snapshot = {"architecture": arch, "binary_index": str(binary_path), "binary_sha256": binary_expected["sha256"],
-                "repo": repo, "index": str(target), "index_sha256": expected["sha256"],
-                "release_sha256": digest(release), "release_date": metadata.get("Date"),
-                "valid_until": metadata.get("Valid-Until"),
-                "codename": metadata.get("Codename"), "apt_signature_verified": signature_verified,
+    try:
+        arch = architecture()
+    except ForgeError:
+        arch = None  # Metadata and explicit source templates remain portable.
+    indexes = []
+    for selected_component in source_components(profile):
+        index_record = {"component": selected_component, "suite": suite, "repo": repo}
+        kinds = [("source", "Sources", "index", "index_sha256")]
+        if arch:
+            kinds.append(("binary-" + arch, "Packages", "binary_index", "binary_sha256"))
+        for folder, basename, path_key, sha_key in kinds:
+            candidates = [f"{selected_component}/{folder}/{basename}.xz", f"{selected_component}/{folder}/{basename}.gz"]
+            selected = next((name for name in candidates if name in hashes), None)
+            if not selected:
+                raise ForgeError(f"No {basename} index for {selected_component}/{folder} in {origin} {suite}.")
+            expected = hashes[selected]
+            target = _inside(home, home.root / "cache/apt/official-indexes" / (expected["sha256"] + Path(selected).suffix))
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if not target.is_file() or digest(target) != expected["sha256"] or target.stat().st_size != expected["size"]:
+                downloaded = directory / f"{selected_component}-{basename}{Path(selected).suffix}"
+                download_url = f"{repo}/dists/{suite}/{selected}"
+                if metadata.get("Acquire-By-Hash", "").lower() in {"yes", "force"}:
+                    hashed_url = f"{repo}/dists/{suite}/{PurePosixPath(selected).parent}/by-hash/SHA256/{expected['sha256']}"
+                    try:
+                        fetch(hashed_url, downloaded, directory / f"{selected_component}-{basename}-by-hash-download")
+                    except ForgeError:
+                        # A mirror can lack an older by-hash object. Fallback is
+                        # still checked against the same signed release digest.
+                        fetch(download_url, downloaded, directory / f"{selected_component}-{basename}-download")
+                else:
+                    fetch(download_url, downloaded, directory / f"{selected_component}-{basename}-download")
+                if digest(downloaded) != expected["sha256"] or downloaded.stat().st_size != expected["size"]:
+                    raise ForgeError(f"{basename} index does not match Release SHA-256/size; the mirror may have changed during refresh.", code=1, hint="Retry jforge apt update; no unverified index was published.")
+                shutil.copyfile(downloaded, target)
+            index_record.update({path_key: str(target), sha_key: expected["sha256"]})
+        indexes.append(index_record)
+    snapshot = {**indexes[0], "indexes": indexes, "architecture": arch,
+                "repo": repo, "release_sha256": digest(release), "release_date": metadata.get("Date"),
+                "valid_until": metadata.get("Valid-Until"), "codename": metadata.get("Codename"),
+                "apt_signature_verified": signature_verified,
                 "trust": "trusted-keyring" if signature_verified else "official-HTTPS-and-checksums"}
     write_json(directory / "snapshot.json", snapshot)
     session[key] = snapshot
@@ -330,38 +424,66 @@ def _archive_layout(path):
             names = [m.name.removeprefix("./") for m in package.getmembers() if m.name not in {".", "./"}]
     except tarfile.TarError as exc:
         raise ForgeError(f"Cannot inspect source archive: {exc}", code=1) from exc
-    roots = {PurePosixPath(safe_relative(name)).parts[0] for name in names}
+    # Archive members are filesystem paths, not URLs. Characters such as #
+    # are valid source filenames (Boost and MariaDB ship them).
+    for name in names:
+        member = PurePosixPath(name)
+        if member.is_absolute() or ".." in member.parts or "\\" in name or "\x00" in name:
+            raise ForgeError(f"Unsafe archive path: {name!r}")
+    roots = {PurePosixPath(name).parts[0] for name in names}
     if len(roots) != 1:
         raise ForgeError("Source archive needs an adapter for its directory layout.")
+    if not roots:
+        raise ForgeError("Source archive contains no files or directories.")
     root = next(iter(roots))
     relative = {str(PurePosixPath(name).relative_to(root)) for name in names}
-    backend = "cmake" if "CMakeLists.txt" in relative else "autotools" if "configure" in relative else "custom"
+    backend = "custom"
+    for directory in ("", "build/cmake", "cmake", "expat", "src", "unix"):
+        prefix = directory + "/" if directory else ""
+        for marker, kind in (("CMakeLists.txt", "cmake"), ("configure", "autotools"), ("meson.build", "meson")):
+            if prefix + marker in relative:
+                backend = kind + (":" + directory if directory else "")
+                return root, backend
     return root, backend
 
 
 def _upstream_version(version):
     upstream = re.sub(r"^\d+:", "", version).rsplit("-", 1)[0] if "-" in version else re.sub(r"^\d+:", "", version)
+    numeric_letter = re.fullmatch(r"(\d+(?:\.\d+)*)([a-zA-Z])", upstream)
+    version_input = numeric_letter[1] + "+" + numeric_letter[2].lower() if numeric_letter else upstream
     try:
-        normalized = str(Version(upstream))
+        normalized = str(Version(version_input))
     except InvalidVersion as exc:
-        raise ForgeError(f"Upstream version {upstream!r} needs an explicit version adapter.") from exc
+        repacked = re.sub(r"[._-]((?:dfsg|ds)[A-Za-z0-9.]*)$", r"+\1", upstream, flags=re.I)
+        if repacked == upstream:
+            match = re.fullmatch(r"(\d+(?:\.\d+)*)([A-Za-z][A-Za-z0-9.]*)", upstream)
+            repacked = match[1] + "+" + match[2].lower() if match else upstream
+        try:
+            normalized = str(Version(repacked))
+        except InvalidVersion:
+            raise ForgeError(f"Upstream version {upstream!r} needs an explicit version adapter.") from exc
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}", normalized):
         raise ForgeError("Normalized upstream version cannot be represented in a Forge recipe.")
     return normalized
 
 
 def _generic_draft(profile, row, source, backend):
-    if backend not in {"cmake", "autotools"}:
+    kind, _, subdirectory = backend.partition(":")
+    if kind not in {"cmake", "autotools", "meson"}:
         return None
-    if backend == "cmake":
-        build = [["cmake", "-S", "${source}", "-B", "${build}", "-DCMAKE_INSTALL_PREFIX=${prefix}", "-DBUILD_TESTING=OFF"],
+    source_directory = "${source}" + ("/" + subdirectory if subdirectory else "")
+    if kind == "cmake":
+        build = [["cmake", "-S", source_directory, "-B", "${build}", "-DCMAKE_INSTALL_PREFIX=${prefix}", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTING=OFF"],
                  ["cmake", "--build", "${build}", "--parallel", "${jobs}"]]
-        install = [["cmake", "--install", "${build}"]]
-        tools = ["cmake", "cc", "c++"]
+        install, tools = [["cmake", "--install", "${build}"]], ["cmake", "cc", "c++"]
+    elif kind == "meson":
+        build = [["meson", "setup", "${build}", source_directory, "--prefix=${prefix}", "--libdir=lib", "--buildtype=release", "--wrap-mode=nodownload"],
+                 ["meson", "compile", "-C", "${build}", "-j", "${jobs}"]]
+        install, tools = [["meson", "install", "-C", "${build}"]], ["meson", "ninja", "cc", "c++"]
     else:
-        build = [["${source}/configure", "--prefix=${prefix}"], ["make", "-j${jobs}"]]
+        build = [[source_directory + "/configure", "--prefix=${prefix}"], ["make", "-j${jobs}"]]
         install, tools = [["make", "install"]], ["make", "cc", "c++"]
-    return {"schema_version": 1, "name": profile["name"], "version": _upstream_version(row["Version"]),
+    return {"schema_version": 2 if source.get("components") else 1, "name": profile["name"], "version": _upstream_version(row["Version"]),
             "description": f"Draft build adapter for {row['Package']}", "source": source,
             "requires_tools": tools + (["patch"] if source.get("patch_archive") else []),
             "depends": [], "build": build, "install": install,
@@ -382,12 +504,53 @@ def _member_text(archive, root, name):
 
 
 def _automatic_recipe(profile, row, source, backend, archive):
+    # Metadata-only packages are dependency nodes, not empty native builds.
+    if row["Package"] in {"boost-defaults", "libjpeg8-empty", "mpi-defaults", "blas-defaults"}:
+        return {"schema_version": 2, "name": profile["name"], "version": _upstream_version(row["Version"]),
+                "description": "Dependency metapackage from official source metadata", "source": source,
+                "install": [["${python}", "-c", "from pathlib import Path; import sys; (Path(sys.argv[1])/'.jforge-metapackage').write_text(sys.argv[2])", "${prefix}", row["Package"]]],
+                "check": [["${python}", "-c", "from pathlib import Path; import sys; assert (Path(sys.argv[1])/'.jforge-metapackage').is_file()", "${prefix}"]],
+                "artifacts": [".jforge-metapackage"], "provenance": {"build_adapter": "metapackage"}, "environment": {}}
+    if row["Package"].startswith("boost1."):
+        if not re.fullmatch(r"libboost(?:\d+\.\d+)?-dev", profile["package"] if "package" in profile else profile["name"]):
+            return None  # Compiled Boost components require their own feature contract.
+        with tarfile.open(archive, "r:*") as package:
+            names = {member.name.removeprefix("./") for member in package.getmembers() if member.isfile()}
+        root = source["subdir"]
+        if f"{root}/boost/version.hpp" not in names and not any(
+                name.startswith(root + "/libs/") and name.endswith("/include/boost/version.hpp") for name in names):
+            return None
+        copy_headers = ("from pathlib import Path\nimport shutil,sys\n"
+                        "s=Path(sys.argv[1]); dst=Path(sys.argv[2])/'include/boost'\n"
+                        "parts=([s/'boost'] if (s/'boost').is_dir() else sorted((s/'libs').glob('**/include/boost')))\n"
+                        "for part in parts:\n"
+                        " for f in part.rglob('*'):\n"
+                        "  if f.is_file():\n"
+                        "   target=dst/f.relative_to(part); target.parent.mkdir(parents=True,exist_ok=True)\n"
+                        "   if target.exists() and target.read_bytes()!=f.read_bytes(): raise SystemExit('Conflicting Boost header: '+str(target))\n"
+                        "   shutil.copy2(f,target)\n")
+        return {"schema_version": 2, "name": profile["name"], "version": _upstream_version(row["Version"]),
+                "description": "Boost development headers", "source": source,
+                "install": [["${python}", "-c", copy_headers, "${source}", "${prefix}"]],
+                "check": [["${python}", "-c", "from pathlib import Path; import sys; assert (Path(sys.argv[1])/'include/boost/version.hpp').is_file()", "${prefix}"]],
+                "artifacts": ["include/boost/version.hpp"], "provenance": {"build_adapter": "boost-headers"},
+                "environment": {"prepend": {"CMAKE_PREFIX_PATH": ["${prefix}"], "CPATH": ["${prefix}/include"]}, "set": {"BOOST_ROOT": "${prefix}", "BOOST_INCLUDEDIR": "${prefix}/include"}}}
+    if row["Package"] == "openssl" and _member_text(archive, source["subdir"], "Configure") is not None:
+        return {"schema_version": 2, "name": profile["name"], "version": _upstream_version(row["Version"]),
+                "description": "OpenSSL libraries and command line tools", "source": source,
+                "requires_tools": ["perl", "make", "cc"], "build": [["perl", "${source}/Configure", "--prefix=${prefix}", "--openssldir=${prefix}/ssl", "--libdir=lib"], ["make", "-j${jobs}"]],
+                "install": [["make", "install_sw"]], "check": [["${prefix}/bin/openssl", "version"]],
+                "artifacts": ["bin/openssl", "include/openssl/ssl.h", "lib/pkgconfig/openssl.pc"], "provenance": {"build_adapter": "openssl"},
+                "environment": {"prepend": {"PATH": ["${prefix}/bin"], "CMAKE_PREFIX_PATH": ["${prefix}"], "PKG_CONFIG_PATH": ["${prefix}/lib/pkgconfig"], "CPATH": ["${prefix}/include"], "LIBRARY_PATH": ["${prefix}/lib"], "LD_LIBRARY_PATH": ["${prefix}/lib"]}}}
     recipe = _generic_draft(profile, row, source, backend)
     if recipe:
         recipe["provenance"] = {}
+        if row["Package"] == "eigen3":
+            recipe["build"][0].append("-DEIGEN_BUILD_DOC=OFF")
+            recipe["provenance"]["build_adapter"] = "eigen-headers"
         recipe["description"] = f"{row['Package']} from official {profile['origin']} sources ({backend})"
         recipe["environment"]["prepend"].update({"PKG_CONFIG_PATH": ["${prefix}/lib/pkgconfig", "${prefix}/lib64/pkgconfig", "${prefix}/share/pkgconfig"],
-                                                 "LD_LIBRARY_PATH": ["${prefix}/lib", "${prefix}/lib64"]})
+                                                 "LD_LIBRARY_PATH": ["${prefix}/lib", "${prefix}/lib64"], "LIBRARY_PATH": ["${prefix}/lib", "${prefix}/lib64"], "CPATH": ["${prefix}/include"]})
         recipe["check"] = [["${python}", "-c", "from pathlib import Path; import sys; assert any(p.is_file() for p in Path(sys.argv[1]).rglob('*'))", "${prefix}"]]
         if (row["Package"] == "gsl" and backend == "autotools" and "+dfsg" in row["Version"]
                 and _member_text(archive, source["subdir"], "doc/autoconf.rst") is None):
@@ -443,19 +606,39 @@ def _automatic_recipe(profile, row, source, backend, archive):
     return None
 
 
+
+def source_archives(row):
+    """Select the main archive and named components without discarding inputs."""
+    hashes = checksums(row.get("Checksums-Sha256", ""))
+    extension = r"(?:gz|bz2|xz|lzma)"
+    mains = [name for name in hashes if re.search(r"\.orig\.tar\." + extension + r"$", name)]
+    addons = [name for name in hashes if ".orig-" in name and not name.endswith(".asc")]
+    if not mains:
+        mains = [name for name in hashes if re.search(r"\.tar\." + extension + r"$", name) and ".debian." not in name and ".orig-" not in name]
+    if len(mains) != 1:
+        raise ForgeError(f"Expected one main source archive for {row['Package']}; found {mains or 'none'}. Components: {addons}")
+    main = mains[0]
+    prefix = main.split(".orig.tar.", 1)[0]
+    components, seen = [], set()
+    for filename in sorted(addons):
+        match = re.fullmatch(re.escape(prefix) + r"\.orig-([A-Za-z0-9][A-Za-z0-9-]*)\.tar\." + extension, filename)
+        if not match or match[1].lower() == "debian" or match[1].lower() in seen:
+            raise ForgeError(f"Invalid or duplicate source component archive: {filename}")
+        seen.add(match[1].lower())
+        components.append((match[1], filename))
+    return main, components
+
 def _candidate(home, profile, row, snapshot, directory):
     hashes = checksums(row.get("Checksums-Sha256", ""))
-    original = [n for n in hashes if re.search(r"\.orig\.tar\.(gz|bz2|xz)$", n)]
-    if not original:
-        original = [n for n in hashes if re.search(r"\.tar\.(gz|bz2|xz)$", n) and ".debian." not in n]
-    if len(original) != 1 or any(".orig-" in n for n in hashes):
-        raise ForgeError("Native/multiple-original source packages require an adapter.")
-    original = original[0]
+    original, components = source_archives(row)
     base = safe_relative(row.get("Directory", ""))
     url = lambda n: snapshot["repo"] + "/" + quote(base + "/" + n, safe="/+~._-")
     source = {"url": url(original), "sha256": hashes[original]["sha256"]}
     archive = verified_archive(home, source, directory / "source-download")
     source["subdir"], backend = _archive_layout(archive)
+    if components:
+        source["components"] = [{"name": name, "url": url(filename), "sha256": hashes[filename]["sha256"]}
+                                for name, filename in components]
     packaging = [n for n in hashes if re.search(r"\.debian\.tar\.(gz|bz2|xz)$", n)]
     if len(packaging) > 1 or any(n.endswith(".diff.gz") for n in hashes):
         raise ForgeError("This Debian source format needs a packaging adapter.")
@@ -476,66 +659,100 @@ def _candidate(home, profile, row, snapshot, directory):
                       "draft_recipe": _generic_draft(profile, row, source, backend)}
     recipe = copy.deepcopy(template)
     expected_backend = "cmake" if "cmake" in recipe.get("requires_tools", []) else None
-    if expected_backend and backend != expected_backend:
+    if expected_backend and backend.split(":", 1)[0] != expected_backend:
         raise ForgeError(f"Source build system changed from {expected_backend} to {backend}.")
     recipe.update(name=profile["name"], version=_upstream_version(row["Version"]), source=source)
+    if components:
+        recipe["schema_version"] = 2
     recipe["description"] = template.get("description", row["Package"])
     if source.get("patch_archive"):
         recipe["requires_tools"] = list(dict.fromkeys([*recipe.get("requires_tools", []), "patch"]))
     recipe["provenance"] = {"kind": "official-apt-source", "status": "generated",
                             "origin": profile["origin"], "suite": profile["suite"], "component": profile["component"],
                             "source_package": row["Package"], "debian_version": row["Version"],
+                            "source_components": [name for name, _ in components], "release_suite": profile.get("release_suite", profile["suite"]),
                             "requested_package": profile["package"], "source_variant": "upstream-with-quilt-patches" if ".orig." in original else "native-source",
                             "dependency_policy": "Forge template; Debian Build-Depends retained in import report"}
+    if template.get("provenance", {}).get("build_adapter"):
+        recipe["provenance"]["build_adapter"] = template["provenance"]["build_adapter"]
+    elif row["Package"] == "eigen3" and {"-DBUILD_TESTING=OFF", "-DEIGEN_BUILD_DOC=OFF"} <= {arg for command in recipe.get("build", []) for arg in command}:
+        recipe["provenance"]["build_adapter"] = "eigen-headers"
     if profile.get("automatic"):
         recipe["provenance"]["automatic_adapter"] = True
     validate_recipe(recipe, "official source import")
-    return recipe, {"detected_backend": backend, "patches": patch_names,
+    return recipe, {"detected_backend": backend, "patches": patch_names, "components": source.get("components", []),
                     "debian_build_dependencies": {k: v for k, v in row.items() if k.startswith("Build-Depends")},
                     "scope": "Builds the upstream project with quilt patches; does not execute debian/rules or produce .deb packages."}
 
 
 def _binary_rows(home, snapshot, session):
-    key = ("binary-rows", snapshot.get("binary_sha256"))
+    key = ("binary-rows", tuple(r.get("binary_sha256") for r in _indexes(snapshot)))
     if key not in session:
-        if not snapshot.get("binary_index"):
-            raise ForgeError("The official cache predates dependency metadata.", hint="jforge apt update")
-        path = _inside(home, Path(snapshot["binary_index"]))
-        if not path.is_file() or digest(path) != snapshot["binary_sha256"]:
-            raise ForgeError("Binary dependency index is missing or modified.", hint="jforge apt update")
         wanted = {"Package", "Version", "Source", "Depends", "Pre-Depends", "Provides", "Architecture"}
-        session[key] = [{k: v for k, v in row.items() if k in wanted} for row in _index_rows(path)]
+        rows = []
+        for index_record in _indexes(snapshot):
+            if not index_record.get("binary_index"):
+                raise ForgeError("The official cache has no native binary dependency metadata.", hint="Run jforge apt update on the target Linux machine.")
+            path = _inside(home, Path(index_record["binary_index"]))
+            if not path.is_file() or digest(path) != index_record["binary_sha256"]:
+                raise ForgeError("Binary dependency index is missing or modified.", hint="jforge apt update")
+            rows.extend({**{k: v for k, v in row.items() if k in wanted}, "Forge-Component": index_record.get("component")}
+                        for row in _index_rows(path))
+        session[key] = rows
     return session[key]
 
 
 def _derive(home, profile, directory, session):
+    profile = _selector(profile)
     snapshot = _snapshot(home, profile, directory / "repository", session)
-    binary_rows = _binary_rows(home, snapshot, session)
+    binary_rows = _binary_rows(home, snapshot, session) if snapshot.get("binary_index") else []
     from .official_dependencies import source_identity, parse, attach
+    if profile.get("automatic"):
+        from .official_dependencies import architecture
+        architecture()  # Only real automatic builds require a native Linux target.
     requested = profile["package"]
-    binary = next((r for r in binary_rows if r["Package"] == requested), None)
+    from debian.debian_support import Version as DebianVersion
+    binaries = [r for r in binary_rows if r["Package"] == requested]
+    if profile.get("source_version"):
+        binaries = [r for r in binaries if source_identity(r)[1] == profile["source_version"]]
+    binary = max(binaries, key=lambda r: DebianVersion(r["Version"])) if binaries else None
     if binary is None and profile.get("automatic"):
         providers = [r for r in binary_rows if any(a["name"] == requested for group in parse(r.get("Provides", ""), snapshot["architecture"]) for a in group)]
+        unique = {}
+        for provider in providers:
+            previous = unique.get(provider["Package"])
+            if previous is None or DebianVersion(provider["Version"]) > DebianVersion(previous["Version"]):
+                unique[provider["Package"]] = provider
+        providers = list(unique.values())
         if len(providers) == 1:
             binary = providers[0]
         elif len(providers) > 1:
             raise ForgeError(f"Virtual dependency {requested} needs an explicit provider: " + ", ".join(r["Package"] for r in providers[:12]))
     source_name, source_version = source_identity(binary) if binary else (requested, profile.get("source_version"))
-    source_key = ("source-rows", snapshot["index_sha256"])
+    source_key = ("source-rows", tuple(r["index_sha256"] for r in _indexes(snapshot)))
     if source_key not in session:
         table = {}
-        for source_record in _index_rows(Path(snapshot["index"])):
-            table.setdefault(source_record["Package"], []).append(source_record)
+        for index_record in _indexes(snapshot):
+            for source_record in _index_rows(Path(index_record["index"])):
+                record = dict(source_record, **{"Forge-Component": index_record.get("component", profile["component"]), "Forge-Suite": index_record.get("suite", profile["suite"]), "Forge-Repo": index_record.get("repo", snapshot["repo"])})
+                table.setdefault(record["Package"], []).append(record)
+                for name in record.get("Binary", "").replace("\n", " ").split(","):
+                    if name.strip() and name.strip() != record["Package"]:
+                        table.setdefault(name.strip(), []).append(record)
         session[source_key] = table
     records = session[source_key].get(source_name, [])
     selected_version = profile.get("source_version") or source_version
     records = [r for r in records if not selected_version or r["Version"] == selected_version]
-    if len(records) != 1:
-        raise ForgeError(f"Expected one source record for {requested}; found {len(records)}.", hint="jforge apt update")
-    row = records[0]
+    if not records:
+        raise ForgeError(f"No source record for {requested} at the selected version.", hint="jforge apt update")
+    records.sort(key=lambda r: DebianVersion(r["Version"]))
+    row = records[-1]
+    identical_version = [r for r in records if r["Version"] == row["Version"]]
+    if len({r.get("Checksums-Sha256") for r in identical_version}) > 1:
+        raise ForgeError(f"Inconsistent source checksums for {requested}={row['Version']}")
     write_json(directory / "source-record.json", row)
     try:
-        recipe, details = _candidate(home, profile, row, snapshot, directory)
+        recipe, details = _candidate(home, dict(profile, component=row["Forge-Component"], suite=row["Forge-Suite"], release_suite=profile["suite"]), row, dict(snapshot, repo=row["Forge-Repo"]), directory)
         if recipe and profile.get("automatic"):
             recipe = attach(recipe, row, binary["Package"] if binary else requested, binary_rows, snapshot["architecture"])
             validate_recipe(recipe, "official dependency adapter")
@@ -575,6 +792,9 @@ def refresh_official(home, operation_dir, *, refresh_repository=True):
     source = default_source(home)
     snapshot = _snapshot(home, source, operation_dir / "official-repository", session) if refresh_repository and source else None
     for index, profile in enumerate(profiles):
+        if source and source_family(profile) == source_family(source):
+            # A tightened source keyring also applies to previously tracked recipes.
+            profile = {**profile, **source_selection(source)}
         directory = _inside(home, operation_dir / f"official-{index}")
         directory.mkdir(mode=0o700)
         report = _derive(home, profile, directory, session)
@@ -596,9 +816,11 @@ def refresh_official(home, operation_dir, *, refresh_repository=True):
 
 
 def _profile(home, package, *, origin, suite, component="main", name=None,
-                   template_name=None, source_version=None, keyring=None, automatic=False):
+                   template_name=None, source_version=None, keyring=None, automatic=False, components=None, pockets=None):
     if origin not in REPOSITORIES:
         raise ForgeError("--origin must be debian or ubuntu.")
+    selection = _selector({"origin": origin, "suite": suite, "component": component, **({"components": components} if components else {}), **({"pockets": pockets} if pockets is not None else {})})
+    component = selection["component"]
     for value in (package, suite, component):
         if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,127}", value):
             raise ForgeError(f"Invalid official source selector: {value}")
@@ -617,7 +839,9 @@ def _profile(home, package, *, origin, suite, component="main", name=None,
     package_name(target)
     return {"package": package, "origin": origin, "suite": suite, "component": component,
                "name": target, "template": template, "source_version": source_version,
-               "keyring": str(Path(keyring).expanduser().resolve()) if keyring else None, "automatic": automatic}
+               "keyring": str(Path(keyring).expanduser().resolve()) if keyring else None, "automatic": automatic,
+               **({"components": selection["components"]} if selection.get("components") else {}),
+               **({"pockets": selection["pockets"]} if "pockets" in selection else {})}
 
 
 def _store_import(home, profile, report, directory):
@@ -625,7 +849,7 @@ def _store_import(home, profile, report, directory):
     profiles = _load_profiles(home)
     profiles["imports"] = [p for p in profiles["imports"] if p["name"] != target] + [profile]
     if "source" not in profiles:
-        profiles["source"] = {key: profile.get(key) for key in DEFAULT_SOURCE}
+        profiles["source"] = source_selection(profile)
     current = _cached(home)
     current["pending"] = [p for p in current["pending"] if p["name"] != target]
     current["packages"] = [p for p in current["packages"] if p["recipe"]["name"] != target]
@@ -636,7 +860,7 @@ def _store_import(home, profile, report, directory):
                                    "report": str(directory / "import-report.json")})
     write_json(_inside(home, home.root / "apt/official.json"), profiles)
     write_json(_inside(home, home.root / "cache/apt/official.json"), current)
-    source = {key: profile.get(key) for key in DEFAULT_SOURCE}
+    source = source_selection(profile)
     if source == default_source(home):
         _save_repository(home, source, report["snapshot"])
 
@@ -662,20 +886,20 @@ def import_package(home, package, *, origin, suite, component="main", name=None,
 def missing_packages(home, specs):
     from .dependencies import native, matches
     recipes = Catalog(home).list()
-    return sorted({native(spec)["name"] for spec in specs if not any(matches(p, native(spec)) for p in recipes)})
+    return sorted({native(spec, root=True)["name"] for spec in specs if not any(matches(p, native(spec, root=True)) for p in recipes)})
 
 
 def ensure_recipes(home, specs, directory, progress=None):
     """Discover the complete candidate closure before starting any compilation."""
     from .dependencies import native, matches, groups
-    pending = [(native(spec), [native(spec)["name"]]) for spec in specs]
+    pending = [(native(spec, root=True), [native(spec, root=True)["name"]]) for spec in specs]
     visited, reports, session, errors = set(), [], {}, []
     source = default_source(home)
     cached = _cached_repository(home) if source else None
     if cached and cached["snapshot"].get("binary_index"):
         expiry = cached["snapshot"].get("valid_until")
         if not expiry or parsedate_to_datetime(expiry) > datetime.now(timezone.utc):
-            session[(source["origin"], source["suite"], source["component"], source.get("keyring"))] = cached["snapshot"]
+            session[_source_key(source)] = cached["snapshot"]
     while pending:
         req, chain = pending.pop(0)
         marker = tuple(sorted(req.items()))
@@ -685,6 +909,13 @@ def ensure_recipes(home, specs, directory, progress=None):
         if len(visited) > 200:
             raise ForgeError("Official dependency discovery limit exceeded; split the request or supply dedicated recipes.")
         choices = [p for p in Catalog(home).list() if matches(p, req)]
+        if not choices:
+            from .packages import installed_recipe
+            for record in home.packages():
+                if record.get("managed_by") == "jforge-apt":
+                    snapshot_recipe = installed_recipe(home, record)
+                    if snapshot_recipe and matches(snapshot_recipe, req):
+                        choices.append(snapshot_recipe)
         legacy = any(p.get("provenance", {}).get("automatic_adapter") and p["schema_version"] == 1 for p in choices)
         if not choices or legacy:
             previous = next((p for p in _load_profiles(home)["imports"] if p["name"] == req["name"]), None)

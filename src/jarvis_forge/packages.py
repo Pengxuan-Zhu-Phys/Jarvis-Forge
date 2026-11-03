@@ -17,13 +17,15 @@ import socket
 import subprocess
 import sys
 import time
+import tempfile
+import copy
 import uuid
 
 from packaging.version import Version
 
 from . import __version__
 from .catalog import Catalog, requirement, source_config, update_catalog
-from .downloads import fetch, unpack
+from .downloads import fetch, unpack, unpack_component
 from .runner import _stop
 from .storage import ForgeError, ForgeHome, digest, new_id, now, read_json, write_json
 from .suite import expand
@@ -134,6 +136,56 @@ def _context(recipes):
             "flags": {k: os.environ[k] for k in ("CC", "CXX", "FC", "CFLAGS", "CXXFLAGS", "FFLAGS", "FCFLAGS", "CPPFLAGS", "LDFLAGS") if k in os.environ}}
 
 
+
+def installed_recipe(home, record):
+    """Recover a checked recipe snapshot without requiring its old source catalog."""
+    snapshot = record.get("recipe")
+    if snapshot is None and record.get("operation_id"):
+        path = _inside(home, home.root / "operations" / record["operation_id"] / record["name"] / "recipe.json")
+        if path.is_file():
+            snapshot = read_json(path)
+    if not isinstance(snapshot, dict):
+        return None
+    actual = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
+    if record.get("recipe_sha256") != actual:
+        raise ForgeError(f"Installed recipe snapshot is modified: {record['name']}", code=1)
+    snapshot = copy.deepcopy(snapshot)
+    requests = snapshot.get("provenance", {}).pop("dependency_requests", {})
+    for field, value in requests.items():
+        if field in snapshot or value:
+            snapshot[field] = value
+    from .catalog import validate_recipe
+    return validate_recipe(snapshot, "installed:" + record["name"])
+
+
+@contextmanager
+def metadata_transaction(home):
+    paths = [home.root / name for name in ("cache/apt/catalog.json", "cache/apt/official.json", "cache/apt/official-repository.json", "apt/official.json")]
+    before = {path: path.read_bytes() if path.exists() else None for path in paths}
+    try:
+        yield
+    except BaseException:
+        for path, content in before.items():
+            if content is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=".restore-")
+                try:
+                    with os.fdopen(handle, "wb") as stream:
+                        stream.write(content)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(temporary, path)
+                finally:
+                    Path(temporary).unlink(missing_ok=True)
+        raise
+
+def installed_version(record):
+    provenance = record.get("provenance", {})
+    return provenance.get("binary_versions", {}).get(record["name"]) or provenance.get("debian_version") or record["version"]
+
+
 def plan_install(home, specs, *, jobs=1, mode="install", operation_id="planned-operation", verify_external=False, external_log=None):
     if jobs < 1:
         raise ForgeError("--jobs must be at least 1.")
@@ -149,7 +201,8 @@ def plan_install(home, specs, *, jobs=1, mode="install", operation_id="planned-o
             if name not in previous["active"]:
                 name = next((r["name"] for key, r in records.items()
                              if key in previous["active"].values() and req.name in r.get("provenance", {}).get("binary_versions", {})), name)
-            normalized.append(name + str(req.specifier))
+            constraint = getattr(req, "forge_debian_constraint", None)
+            normalized.append(name + ("".join(constraint) if constraint else str(req.specifier)))
         specs = normalized
     requested = [requirement(spec).name for spec in specs]
     roots = {name: records[key] for name, key in previous["active"].items()
@@ -159,7 +212,9 @@ def plan_install(home, specs, *, jobs=1, mode="install", operation_id="planned-o
         pending = read_json(official).get("pending", [])
         relevant = set(requested or roots) if mode in {"upgrade", "full-upgrade"} else {
             requirement(s).name for s in specs if not requirement(s).specifier}
-        blocked = [p for p in pending if p["name"] in relevant]
+        blocked = [p for p in pending if p["name"] in relevant and not any(
+            r["name"] == p["name"] and r.get("provenance", {}).get("kind") != "official-apt-source"
+            for r in Catalog(home).list())]
         if blocked:
             raise ForgeError("Official recipe updates need an adapter: " +
                              "; ".join(f"{p['name']}: {p['reason']}" for p in blocked))
@@ -168,17 +223,39 @@ def plan_install(home, specs, *, jobs=1, mode="install", operation_id="planned-o
         unknown = set(names) - set(previous["active"])
         if unknown:
             raise ForgeError(f"Packages are not active: {', '.join(sorted(unknown))}")
-        selected_specs = [f"{name}>={records[previous['active'][name]]['version']}" for name in names]
+        selected_specs = [name if records[previous["active"][name]].get("provenance", {}).get("debian_version")
+                          else f"{name}>={records[previous['active'][name]]['version']}" for name in names]
         selected_specs += specs
-        selected_specs += [f"{name}=={r['version']}" for name, r in roots.items() if name not in names]
+        selected_specs += [f"{name}=={installed_version(r)}" for name, r in roots.items() if name not in names]
         requested = list(roots)
     else:
         selected_specs = list(specs)
         if mode == "reinstall":
-            selected_specs = [f"{requirement(s).name}=={records[previous['active'][requirement(s).name]]['version']}"
+            selected_specs = [f"{requirement(s).name}=={installed_version(records[previous['active'][requirement(s).name]])}"
                               if not requirement(s).specifier and requirement(s).name in previous["active"] else s for s in specs]
-        selected_specs += [f"{name}=={r['version']}" for name, r in roots.items() if name not in requested]
-    recipes = Catalog(home).resolve(selected_specs) if selected_specs else []
+        selected_specs += [f"{name}=={installed_version(r)}" for name, r in roots.items() if name not in requested]
+    catalog = Catalog(home)
+    candidates = [item["recipe"] for item in catalog.items.values()]
+    preferred = []
+    for key, record in records.items():
+        if record.get("managed_by") != "jforge-apt":
+            continue
+        snapshot = installed_recipe(home, record)
+        if snapshot is None:
+            continue
+        if snapshot not in candidates:
+            candidates.append(snapshot)
+        aliases = set(snapshot.get("provenance", {}).get("binary_versions", {})) | {snapshot["name"]}
+        if mode not in {"upgrade", "full-upgrade"} and key in previous["active"].values() and not aliases.intersection(requested):
+            preferred.append(snapshot)
+    from .dependencies import resolve
+    minimums = []
+    if mode in {"upgrade", "full-upgrade"}:
+        for name in names:
+            old = records[previous["active"][name]]
+            if old.get("provenance", {}).get("debian_version"):
+                minimums.append({"name": name, "relation": ">=", "version": installed_version(old)})
+    recipes = resolve(candidates, selected_specs, preferred=preferred, root_requirements=minimums) if selected_specs else []
     context = _context(recipes) if recipes else {}
     if verify_external and any(r.get("provenance", {}).get("external_dependencies") for r in recipes):
         from .official_dependencies import check_external
@@ -245,7 +322,7 @@ def _shell_environment(recipe, bindings):
 
 
 def _activation(home, keys, records):
-    lines, done, visiting = ["#!/usr/bin/env bash", "# Generated by Jarvis-Forge."], set(), set()
+    env_files, done, visiting = [], set(), set()
 
     def add(key):
         if key in done:
@@ -259,12 +336,13 @@ def _activation(home, keys, records):
         env_file = _inside(home, Path(item["environment_file"]))
         if not env_file.is_file():
             raise ForgeError(f"Missing installed environment file: {env_file}")
-        lines.append("source " + shlex.quote(str(env_file)))
+        env_files.append(env_file)
         visiting.remove(key)
         done.add(key)
     for key in keys:
         add(key)
-    return "\n".join(lines) + "\n"
+    from .shell_activation import activation
+    return activation(home, env_files)
 
 
 def _publish(home, current, operation_id):
@@ -281,10 +359,20 @@ def _publish(home, current, operation_id):
 def _run_command(argv, cwd, environment_script, logs, number, timeout, context, progress=None):
     script = logs / f"command-{number}.sh"
     probe = logs / f"command-{number}.json"
-    record = {"argv": argv, "cwd": str(cwd), "environment": str(environment_script), "started_at": now(),
+    requested_argv = list(argv)
+    selected_tool = context.get("tools", {}).get(argv[0])
+    if selected_tool and selected_tool.get("path"):
+        argv = [*selected_tool.get("argv", [selected_tool["path"], "--version"])[:-1], *argv[1:]]
+    record = {"argv": argv, "requested_argv": requested_argv, "cwd": str(cwd), "environment": str(environment_script), "started_at": now(),
               "timeout_seconds": timeout, "status": "running"}
     write_json(probe, record)
-    script.write_text("set -e\nset -o pipefail\nsource " + shlex.quote(str(environment_script)) + '\nexec "$@"\n')
+    script_lines = ["set -e", "set -o pipefail", "source " + shlex.quote(str(environment_script))]
+    for tool, variable in (("cc", "CC"), ("c++", "CXX"), ("gfortran", "FC")):
+        selected = context.get("tools", {}).get(tool)
+        if selected and selected.get("path"):
+            compiler = selected.get("argv", [selected["path"], "--version"])[:-1]
+            script_lines.append("export " + variable + "=" + shlex.quote(shlex.join(compiler)))
+    script.write_text("\n".join(script_lines) + '\nexec "$@"\n')
     started = time.monotonic()
     try:
         with (logs / f"command-{number}.stdout.log").open("wb") as out, (logs / f"command-{number}.stderr.log").open("wb") as err:
@@ -446,6 +534,16 @@ def _install_one(home, item, context, op, timeout, records, progress=None):
     source = Path(item["bindings"]["source"])
     if not source.is_dir():
         raise ForgeError(f"Archive lacks the declared source directory: {recipe['source']['subdir']}", code=1)
+    component_reports = []
+    for index, component in enumerate(recipe["source"].get("components", [])):
+        if progress:
+            progress(f"{item['name']}: fetching source component {component['name']}")
+        component_archive = verified_archive(home, component, logs / f"component-{index}-download")
+        destination = _inside(home, source / component["name"])
+        unpack_component(component_archive, destination, _inside(home, work / f"component-{index}"))
+        component_reports.append({"name": component["name"], "sha256": component["sha256"], "destination": str(destination)})
+    if component_reports:
+        write_json(logs / "source-components.json", {"components": component_reports})
     patches = []
     if recipe["source"].get("patch_archive"):
         patch_archive = verified_archive(home, recipe["source"]["patch_archive"], logs / "patch-download")
@@ -463,7 +561,7 @@ def _install_one(home, item, context, op, timeout, records, progress=None):
                   "dependencies": item["dependencies"], "environment_file": str(env_file),
                   "activation": str(package_dir / "activate.sh"), "source": recipe["source"],
                   "recipe_sha256": hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest(),
-                  "provenance": recipe.get("provenance", {}),
+                  "provenance": recipe.get("provenance", {}), "recipe": recipe,
                   "context": context, "operation_id": op.name, "installed_at": now(), "status": "installed"}
         activation = package_dir / "activate.sh"
         activation.write_text(_activation(home, [item["key"]], {**records, item["key"]: record}), encoding="utf-8")
@@ -521,6 +619,8 @@ def quilt_patches(packaging):
     base = packaging / "debian/patches"
     series = base / "series"
     if not series.exists():
+        if series.is_symlink():
+            raise ForgeError(f"Patch series has a missing target: {series}")
         return []
     result = []
     for line in series.read_text(encoding="utf-8").splitlines():
@@ -578,10 +678,11 @@ def plan_remove(home, specs, *, automatic=False):
         selected = set()
         for spec in specs:
             req = requirement(spec)
-            matches = {key for key, item in records.items() if item["name"] == req.name and Version(item["version"]) in req.specifier}
-            if not matches:
+            from .dependencies import native, matches
+            matching = {key for key, item in records.items() if matches(item, native(spec, root=True))}
+            if not matching:
                 raise ForgeError(f"No installed package matches {spec}.")
-            selected.update(matches)
+            selected.update(matching)
     for key in selected:
         item = records[key]
         package_dir = _inside(home, home.root / "packages" / Path(key).parent)
@@ -606,19 +707,23 @@ def remove(home, specs, *, automatic=False, expected_keys=None):
         current["manual"] = [key for key in current["manual"] if key not in chosen]
         # Generate the surviving environment before deleting any installation.
         _publish(home, current, op.name)
+        result["state_committed"] = True
+        result["removed"] = []
         for key in plan["keys"]:
             shutil.rmtree(home.root / "packages" / Path(key).parent)
+            result["removed"].append(key)
         result["packages"] = plan["packages"]
         return result
 
 
 def update(home, *, official=True):
     with locked(home), operation(home, "update", {"official": official}) as (op, result):
-        result.update(update_catalog(home, op))
-        from .official import refresh_official
-        if official:
-            result.update(refresh_official(home, op))
-        result["available"] = len(Catalog(home).list())
+        with metadata_transaction(home):
+            result.update(update_catalog(home, op))
+            from .official import refresh_official
+            if official:
+                result.update(refresh_official(home, op))
+            result["available"] = len(Catalog(home).list())
         return result
 
 

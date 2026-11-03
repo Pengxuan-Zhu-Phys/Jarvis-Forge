@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
 import shutil
+import os
 import subprocess
 import tarfile
 from urllib.parse import unquote, urlparse
@@ -40,9 +41,11 @@ def fetch(url: str, target: Path, logs: Path) -> None:
 
 
 def unpack(archive: Path, destination: Path) -> None:
-    """Extract regular files/directories only; never follow archive links."""
+    """Extract files first, then validate internal links without following archive writes."""
     destination.mkdir(parents=True, exist_ok=False, mode=0o700)
     total, count = 0, 0
+    links = []
+    created_links = []
 
     def target(name, size):
         nonlocal total, count
@@ -60,10 +63,15 @@ def unpack(archive: Path, destination: Path) -> None:
             with zipfile.ZipFile(archive) as package:
                 for member in package.infolist():
                     mode = member.external_attr >> 16
-                    if (mode & 0o170000) not in {0, 0o040000, 0o100000}:
-                        raise ForgeError(f"Archive links/special files are unsupported: {member.filename}", code=1)
+                    kind = mode & 0o170000
+                    if kind not in {0, 0o040000, 0o100000, 0o120000}:
+                        raise ForgeError(f"Archive special files are unsupported: {member.filename}", code=1)
                     path = target(member.filename, member.file_size)
-                    if member.is_dir():
+                    if kind == 0o120000:
+                        if member.file_size > 65536:
+                            raise ForgeError("Archive link target is too long.", code=1)
+                        links.append((path, package.read(member).decode("utf-8"), "symlink"))
+                    elif member.is_dir():
                         path.mkdir(parents=True, exist_ok=True)
                     else:
                         path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,15 +81,72 @@ def unpack(archive: Path, destination: Path) -> None:
         else:
             with tarfile.open(archive, "r:*") as package:
                 for member in package:
-                    if not member.isdir() and not member.isfile():
-                        raise ForgeError(f"Archive links/special files are unsupported: {member.name}", code=1)
+                    if not (member.isdir() or member.isfile() or member.issym() or member.islnk()):
+                        raise ForgeError(f"Archive special files are unsupported: {member.name}", code=1)
                     path = target(member.name, member.size)
-                    if member.isdir():
+                    if member.issym() or member.islnk():
+                        links.append((path, member.linkname, "symlink" if member.issym() else "hardlink"))
+                    elif member.isdir():
                         path.mkdir(parents=True, exist_ok=True)
                     else:
                         path.parent.mkdir(parents=True, exist_ok=True)
                         with package.extractfile(member) as src, path.open("xb") as dst:
                             shutil.copyfileobj(src, dst)
                         path.chmod((member.mode & 0o777) or 0o644)
-    except (tarfile.TarError, zipfile.BadZipFile, OSError) as exc:
+        root = destination.resolve()
+        for path, linkname, kind in links:
+            link = PurePosixPath(linkname)
+            if link.is_absolute() or "\\" in linkname or not linkname:
+                raise ForgeError(f"Unsafe archive link: {path.name} -> {linkname}", code=1)
+            candidate = path.parent / linkname if kind == "symlink" else destination / linkname
+            if not candidate.resolve().is_relative_to(root):
+                raise ForgeError(f"Archive link escapes extraction root: {path.name} -> {linkname}", code=1)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists() or path.is_symlink():
+                raise ForgeError(f"Archive link collides with another member: {path}", code=1)
+        pending = [entry for entry in links if entry[2] == "hardlink"]
+        while pending:
+            later = []
+            for path, linkname, kind in pending:
+                source = destination / linkname
+                if source.is_file() and not source.is_symlink():
+                    os.link(source, path)
+                    created_links.append(path)
+                else:
+                    later.append((path, linkname, kind))
+            if len(later) == len(pending):
+                raise ForgeError("Archive has unresolved or cyclic hardlinks.", code=1)
+            pending = later
+        for path, linkname, kind in links:
+            if kind == "symlink":
+                path.symlink_to(linkname)
+                created_links.append(path)
+        for path, _, _ in links:
+            if not path.resolve().is_relative_to(root):
+                raise ForgeError(f"Archive link chain escapes extraction root: {path}", code=1)
+    except (ForgeError, tarfile.TarError, zipfile.BadZipFile, OSError, UnicodeError, RuntimeError) as exc:
+        for path in reversed(created_links):
+            path.unlink(missing_ok=True)
+        if isinstance(exc, ForgeError):
+            raise
         raise ForgeError(f"Cannot unpack source archive: {exc}", code=1) from exc
+
+
+def unpack_component(archive: Path, destination: Path, staging: Path) -> None:
+    """Apply dpkg-source's component layout in an isolated source work tree."""
+    unpack(archive, staging)
+    entries = list(staging.iterdir())
+    payload = entries[0] if len(entries) == 1 and entries[0].is_dir() else staging
+    if destination.is_symlink():
+        raise ForgeError(f"Component destination must not be a symlink: {destination}")
+    if destination.exists():
+        if destination.is_dir():
+            shutil.rmtree(destination)
+        else:
+            destination.unlink()
+    payload.rename(destination)
+    if payload != staging:
+        staging.rmdir()
+    for path in destination.rglob("*"):
+        if path.is_symlink() and not path.resolve().is_relative_to(destination.parent.resolve()):
+            raise ForgeError(f"Source component link escapes the combined source tree: {path}", code=1)

@@ -208,11 +208,17 @@ def test_no_new_signature_verification_claim_for_default_https_import(repository
     assert read_json(Path(result["report"]))["snapshot"]["apt_signature_verified"] is False
 
 
-def test_import_help_and_explicit_suite_requirement(capsys):
+def test_import_help_and_default_suite(capsys, monkeypatch, tmp_path):
     assert main(["apt", "import", "-h"]) == 0
     assert "--suite" in capsys.readouterr().out
-    assert main(["apt", "import", "foo", "--json"]) == 2
-    assert not json.loads(capsys.readouterr().out)["ok"]
+    captured = {}
+    def import_package(home, package, **kwargs):
+        captured.update(package=package, **kwargs)
+        return {"import_status": "needs_adapter"}
+    monkeypatch.setattr(official, "import_package", import_package)
+    assert main(["--home", str(tmp_path / "home"), "apt", "import", "foo", "--json"]) == 0
+    assert captured["suite"] == "bookworm" and captured["origin"] == "debian"
+    assert json.loads(capsys.readouterr().out)["ok"]
 
 
 def test_unchanged_official_update_does_not_force_reinstallation(repository):

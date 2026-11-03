@@ -22,9 +22,9 @@ TOOLS = {"cmake": "cmake", "make": "make", "gcc": "cc", "g++": "c++", "gfortran"
          "pkg-config": "pkg-config", "pkgconf": "pkgconf", "bash": "bash", "python3": "python3",
          "autoconf": "autoconf", "automake": "automake", "m4": "m4", "texinfo": "makeinfo",
          "gettext": "gettext", "patch": "patch", "bison": "bison", "flex": "flex",
-         "gawk": "gawk", "awk": "awk", "binutils": "ld"}
+         "gawk": "gawk", "awk": "awk", "binutils": "ld", "perl": "perl", "libtool": "libtoolize", "meson": "meson", "ninja-build": "ninja", "bc": "bc"}
 # These drive debian/rules, which the upstream CMake/configure adapters do not execute.
-PACKAGING = {"debhelper", "debhelper-compat", "dh-autoreconf", "dh-strip-nondeterminism", "dpkg-dev"}
+PACKAGING = {"debhelper", "debhelper-compat", "dh-autoreconf", "dh-strip-nondeterminism", "dpkg-dev", "dh-exec"}
 
 
 def architecture():
@@ -38,11 +38,19 @@ def architecture():
 
 
 def _arch_match(value, arch):
-    if value in {"any", "linux-any", f"any-{arch}", f"linux-{arch}", arch}:
+    if value in {arch, "linux-" + arch}:
         return True
-    if "any" in value:
+    parts = value.split("-")
+    if "any" not in parts:
+        return False
+    if len(parts) > 4:
         raise ForgeError(f"Unsupported architecture wildcard: {value}")
-    return False
+    # Debian native GNU/Linux architecture tuples are ABI-libc-OS-CPU.
+    # Right-aligned wildcards such as kfreebsd-any are valid and simply
+    # do not match this Linux host; negative restrictions must not fail.
+    pattern = ["any"] * (4 - len(parts)) + parts
+    target = ["base", "gnu", "linux", arch]
+    return all(want == "any" or want == actual for want, actual in zip(pattern, target))
 
 
 def parse(text, arch):
@@ -93,9 +101,17 @@ def source_identity(row):
 
 
 def attach(recipe, row, requested, binary_rows, arch):
+    recipe.setdefault("provenance", {})
     if requested.endswith(("-dbg", "-dbgsym", "-doc", "-data", "-common")):
         raise ForgeError(f"The binary output {requested} needs a dedicated artifact adapter.")
-    own = {p["Package"]: p for p in binary_rows if source_identity(p) == (row["Package"], row["Version"])}
+    from debian.debian_support import Version as DebianVersion
+    own = {}
+    for provider in binary_rows:
+        if source_identity(provider) != (row["Package"], row["Version"]):
+            continue
+        previous = own.get(provider["Package"])
+        if previous is None or DebianVersion(provider["Version"]) > DebianVersion(previous["Version"]):
+            own[provider["Package"]] = provider
     versions = {name: p["Version"] for name, p in own.items()}
     for p in own.values():
         for group in parse(p.get("Provides", ""), arch):
@@ -133,6 +149,14 @@ def attach(recipe, row, requested, binary_rows, arch):
                 provided.setdefault(atom["name"], atom.get("version"))
     mapped, external, decisions = [], [], []
     for kind, group in relationships:
+        adapter = recipe.get("provenance", {}).get("build_adapter")
+        if kind == "build" and (adapter in {"metapackage", "boost-headers"} or (adapter == "eigen-headers" and not any(a["name"] == "cmake" for a in group))):
+            decisions.append({"alternatives": group, "disposition": "not-required-by-adapter", "reason": adapter + " copies no compiled Debian payload and does not run Debian packaging/tests"})
+            continue
+        if adapter == "boost-headers" and any(re.fullmatch(r"libstdc\+\+-[0-9]+-dev", a["name"]) for a in group):
+            external.append({"name": "build-essential", "kind": kind})
+            decisions.append({"alternatives": group, "disposition": "native-compiler-headers", "reason": "Rebuilt headers use the user-selected C++ standard library rather than Debian's prebuilt compiler ABI"})
+            continue
         if kind == "build" and any(a["name"] in PACKAGING for a in group):
             decisions.append({"alternatives": group, "disposition": "not-required-by-upstream-adapter",
                               "reason": "The selected adapter does not execute debian/rules or produce Debian packages."})
@@ -144,7 +168,15 @@ def attach(recipe, row, requested, binary_rows, arch):
         system = next((a for a in group if a["name"] in {"libc6", "libc6-dev", "libgcc-s1", "libstdc++6"}), None)
         chosen = tool or system
         if chosen:
-            external.append({**chosen, "kind": kind})
+            if kind == "run" and chosen["name"] in {"libc6", "libgcc-s1", "libstdc++6"}:
+                # These minima describe Ubuntu/Debian's prebuilt ELF artifacts.
+                # Source builds link to the user's selected native toolchain.
+                external.append({"name": chosen["name"], "kind": kind, "binary_requirement": chosen,
+                                 "version_policy": "rebuilt-native-abi"})
+                decisions.append({"alternatives": group, "disposition": "rebuilt-native-abi",
+                                  "reason": "Probe the native runtime; prebuilt distribution ABI minima do not constrain a source rebuild"})
+            else:
+                external.append({**chosen, "kind": kind})
             continue
         if any(a["name"] in versions for a in group):
             # A genuine build dependency on its own source requires bootstrap support.
@@ -156,7 +188,7 @@ def attach(recipe, row, requested, binary_rows, arch):
     for atom in external:
         if atom["name"] in TOOLS:
             recipe["requires_tools"] = list(dict.fromkeys(recipe.get("requires_tools", []) + [TOOLS[atom["name"]]]))
-    if requested.startswith("lib"):
+    if requested.startswith("lib") and recipe.get("provenance", {}).get("build_adapter") != "metapackage":
         if requested.endswith("-dev"):
             command = "from pathlib import Path; import sys; p=Path(sys.argv[1]); assert any(x.is_file() for x in (p/'include').rglob('*')), 'No development headers installed'"
         else:
@@ -211,8 +243,13 @@ def check_external(recipes, evidence_path=None):
                 argv = shlex.split(os.environ.get("CC", "cc")) + ["-x", "c", "-fsyntax-only", "-"]
                 result = run(argv, input="#include <stdlib.h>\nint main(void){return 0;}\n", capture_output=True, text=True, timeout=15)
                 version = None
-                if result.returncode or (name == "build-essential" and not shutil.which(shlex.split(os.environ.get("CXX", "c++"))[0])):
+                if result.returncode:
                     raise ForgeError(f"Native development environment is unavailable for {recipe['name']}: {result.stderr[-1000:]}")
+                if name == "build-essential":
+                    cxx = shlex.split(os.environ.get("CXX", "c++")) + ["-x", "c++", "-fsyntax-only", "-"]
+                    cxx_probe = run(cxx, input="#include <vector>\nint main(){std::vector<int> v;}\n", capture_output=True, text=True, timeout=15)
+                    if cxx_probe.returncode:
+                        raise ForgeError(f"Native C++ headers are unavailable for {recipe['name']}: {cxx_probe.stderr[-1000:]}")
             elif name == "libc6":
                 value = os.confstr("CS_GNU_LIBC_VERSION")
                 version = value.split()[-1] if value else None
@@ -240,6 +277,6 @@ def check_external(recipes, evidence_path=None):
             if atom.get("relation") and (not compared or not version_matches(compared, atom["relation"], atom["version"])):
                 raise ForgeError(f"External dependency version is not satisfied: {recipe['name']} -> {atom}; found {version}",
                                  hint="Load a compatible user-selected environment or supply a dedicated build adapter.")
-            entry.update(argv=argv, version=version, compared_version=compared, version_policy="native-provider-upstream-version", status="ready")
+            entry.update(argv=argv, version=version, compared_version=compared, version_policy=atom.get("version_policy", "native-provider-upstream-version"), status="ready")
             save()
     return evidence

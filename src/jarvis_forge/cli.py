@@ -16,11 +16,10 @@ from typing import Optional
 
 import click
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
 import typer
 
 from . import __version__
+from .presentation import render, line, error as render_error
 from .comparison import compare
 from .environment import inspect_environment
 from .environment_registry import show as registered_environment
@@ -39,6 +38,7 @@ app = typer.Typer(add_completion=False, pretty_exceptions_enable=False,
 class Settings:
     home: ForgeHome
     as_json: bool
+    user_home: ForgeHome | None = None
 
 
 def _console(stderr=False) -> Console:
@@ -54,22 +54,7 @@ def emit(ctx: typer.Context, command: str, *, ok=True, **values):
     if ctx.obj.as_json:
         print(json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False))
     else:
-        console = _console()
-        for key, value in values.items():
-            if isinstance(value, list) and value and isinstance(value[0], dict):
-                columns = [k for k in ("name", "version", "install_id", "prefix", "run_id", "suite_id",
-                                      "status", "active", "automatic", "action", "id", "before", "after", "command_changed", "revision", "python", "python_version", "path", "description")
-                           if k in value[0]]
-                if columns:
-                    table = Table(title=key.replace("_", " ").title(), box=None)
-                    for column in columns:
-                        table.add_column(column)
-                    for item in value:
-                        table.add_row(*(str(item.get(k, "")) for k in columns))
-                    console.print(table)
-                    continue
-            console.print(f"{key}: " + (json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)),
-                          markup=False)
+        render(_console(), command, values)
     return result
 
 
@@ -106,7 +91,14 @@ def init(ctx: typer.Context):
 @app.command()
 def paths(ctx: typer.Context):
     """Show resolved paths without creating directories."""
-    emit(ctx, "paths", **ctx.obj.home.paths(), default_home_file=str(default_home_file()))
+    from .apt_profiles import active_home
+    selected = active_home(ctx.obj.home)
+    paths = ctx.obj.home.paths()
+    paths["apt_home"] = str(selected.root)
+    if selected != ctx.obj.home:
+        paths.update(apt_home=str(selected.root), packages=str(selected.root / "packages"), apt=str(selected.root / "apt"),
+                     apt_environment=str(selected.root / "environments/apt"))
+    emit(ctx, "paths", **paths, default_home_file=str(default_home_file()))
 
 
 @app.command()
@@ -128,33 +120,33 @@ def doctor(ctx: typer.Context,
              python=sys.executable, python_version=platform.python_version(),
              tools=environment["tools"], environment=environment)
         return
-    console = _console()
-    console.print(f"Controller Python: {sys.executable} ({platform.python_version()})", markup=False)
-    console.print(f"Environment script: {environment['environment_shell']['path'] if shell else '(inherited environment)'}", markup=False)
-    table = Table("Tool", "Path", "Version / status", box=None)
-    for name, tool in {**environment["compilers"], **environment["tool_details"]}.items():
-        table.add_row(name, tool.get("path") or "—", tool.get("version") or tool["status"])
-    console.print(table)
+    targets = {}
     for name, target in environment["pythons"].items():
-        if target["status"] == "found":
-            console.print(f"{name}: {target['executable']} ({target['version']}); prefix={target['prefix']}", markup=False)
+        observed = {key: target[key] for key in ("status", "executable", "version", "prefix", "base_prefix", "error") if key in target}
+        if "packages" in target:
             packages = {item["name"].lower(): item["version"] for item in target["packages"]}
-            console.print("  " + "; ".join(f"{key}={packages.get(key, 'missing')}" for key in ("pyyaml", "pybind11")), markup=False)
-        else:
-            console.print(f"{name}: {target['status']}", markup=False)
-    for key in ("PYENV_ROOT", "PYENV_VERSION", "VIRTUAL_ENV", "LOADEDMODULES"):
-        console.print(f"{key}: {environment['variables'].get(key, '(unset)')}", markup=False)
-    if environment["pyenv"].get("selection"):
-        console.print(f"pyenv selection: {environment['pyenv']['selection']}", markup=False)
+            observed["packages"] = {key: packages.get(key, "missing") for key in ("pyyaml", "pybind11")}
+        targets[name] = observed
+    render(_console(), "doctor", {
+        "controller_python": sys.executable,
+        "controller_python_version": platform.python_version(),
+        "environment_script": environment["environment_shell"]["path"] if shell else "inherited environment",
+        "tools": [{"name": name, "path": tool.get("path"), "version": tool.get("version"), "status": tool["status"]}
+                  for name, tool in {**environment["compilers"], **environment["tool_details"]}.items()],
+        "pythons": targets,
+        "variables": {key: environment["variables"].get(key) for key in ("PYENV_ROOT", "PYENV_VERSION", "VIRTUAL_ENV", "LOADEDMODULES")},
+        "pyenv_selection": environment["pyenv"].get("selection"),
+    })
     for stream, content in environment["activation_output"].items():
         if content:
-            _console(stderr=True).print(f"Activation {stream}:\n{content}", markup=False)
+            line(_console(stderr=True), f"Activation {stream}:\n{content}")
 
 
 @app.command("list")
 def list_packages(ctx: typer.Context):
-    """List recorded software installations."""
-    emit(ctx, "list", packages=ctx.obj.home.packages())
+    """List recorded software installation instances."""
+    from .apt_profiles import active_home
+    emit(ctx, "list", packages=active_home(ctx.obj.home).packages())
 
 
 @app.command()
@@ -166,7 +158,9 @@ def info(ctx: typer.Context,
     """Locate recorded software versions and installation prefixes."""
     if path and ctx.obj.as_json:
         raise ForgeError("--path and --json are mutually exclusive.")
-    records = [item for item in ctx.obj.home.packages(package)
+    from .apt_profiles import active_home
+    selected = active_home(ctx.obj.home)
+    records = [item for item in selected.packages() if (item["name"] == package or package in item.get("provenance", {}).get("binary_versions", {}))
                if (version is None or item["version"] == version)
                and (instance is None or item["install_id"] == instance)]
     if not records:
@@ -219,7 +213,7 @@ def run(ctx: typer.Context,
         suffix = f" {event['step_id']}" if "step_id" in event else ""
         if "status" in event:
             suffix += f" {event['status']}"
-        _console(stderr=True).print(f"[{event['run_id']}] {event['event']}{suffix}", markup=False)
+        line(_console(stderr=True), f"[{event['run_id']}] {event['event']}{suffix}")
 
     result = execute(ctx.obj.home, suite, progress=progress, environment_name=env)
     emit(ctx, "run", ok=result["status"] == "passed", **result)
@@ -351,7 +345,6 @@ def main(argv: Optional[list[str]] = None, prog: str = "jforge") -> int:
         print(json.dumps({"ok": False, "command": "error", "error": {
             "type": type(exc).__name__, "message": str(exc), "hint": exc.hint}}, indent=2))
     else:
-        _console(stderr=True).print(Panel(str(exc) + (f"\nTry: {exc.hint}" if exc.hint else ""),
-                                          title=prog, border_style="red"), markup=False)
+        render_error(_console(stderr=True), prog, str(exc), exc.hint)
     return exc.code
 

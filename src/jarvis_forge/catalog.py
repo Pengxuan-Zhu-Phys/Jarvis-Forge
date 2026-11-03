@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from importlib.resources import files
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
@@ -16,6 +17,25 @@ from .downloads import fetch
 from .storage import ForgeError, ForgeHome, digest, now, package_name, read_json, write_json
 from .suite import UniqueLoader
 
+
+
+@dataclass(frozen=True)
+class DebianSpecifier:
+    relation: str
+    version: str
+
+    def __str__(self):
+        return ("==" if self.relation == "=" else self.relation) + self.version
+
+    def __contains__(self, value):
+        from .dependencies import version_matches
+        return version_matches(str(value), self.relation, self.version)
+
+
+@dataclass
+class DebianRequirement:
+    name: str
+    specifier: DebianSpecifier
 
 def requirement(text: str) -> Requirement:
     value = re.sub(r"\s*\(([^()]+)\)\s*$", r"\1", text.strip())
@@ -35,9 +55,23 @@ def requirement(text: str) -> Requirement:
         req = Requirement("forge-package" + constraint)
         req.name = package_name(name)
     except InvalidRequirement as exc:
+        debian = re.fullmatch(r"(<<|<=|==|=|>=|>>|<|>)\s*([0-9][A-Za-z0-9.+:~\-]*)", constraint)
+        if debian:
+            relation = {"==": "=", "<": "<<", ">": ">>"}.get(debian[1], debian[1])
+            from debian.debian_support import Version as DebianVersion
+            try:
+                DebianVersion(debian[2])
+            except ValueError:
+                raise ForgeError(f"Invalid Debian version in package constraint: {text!r}") from exc
+            return DebianRequirement(package_name(name), DebianSpecifier(relation, debian[2]))
         raise ForgeError(f"Invalid package constraint: {text!r}") from exc
     if req.extras or req.marker or req.url:
         raise ForgeError(f"Unsupported package constraint: {text!r}")
+    native_version = re.fullmatch(r"(<<|<=|==|=|>=|>>|<|>)\s*([0-9][A-Za-z0-9.+:~\-]*)", constraint)
+    if native_version and any(c in native_version[2] for c in "-:~"):
+        req.forge_debian_constraint = ({"==": "=", "<": "<<", ">": ">>"}.get(native_version[1], native_version[1]), native_version[2])
+    if constraint.startswith("==") and "*" not in constraint:
+        req.forge_exact_version = constraint[2:].strip()
     return req
 
 
@@ -58,6 +92,12 @@ def validate_recipe(recipe: dict, origin: str) -> dict:
         path = Path(artifact)
         if path.is_absolute() or ".." in path.parts or artifact == ".":
             raise ForgeError(f"Invalid installed artifact path in {origin}: {artifact}")
+    for section in recipe.get("environment", {}).values():
+        if any(name.startswith("_JFORGE_") for name in section):
+            raise ForgeError(f"Reserved Forge activation variable in {origin}.")
+    component_names = [c["name"].lower() for c in recipe["source"].get("components", [])]
+    if "debian" in component_names or len(component_names) != len(set(component_names)):
+        raise ForgeError(f"Duplicate or reserved source component name in {origin}.")
     subdir = Path(recipe["source"]["subdir"])
     if subdir.is_absolute() or ".." in subdir.parts:
         raise ForgeError(f"Invalid source subdirectory in {origin}.")

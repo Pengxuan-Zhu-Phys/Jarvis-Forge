@@ -67,6 +67,8 @@ def verify(record):
 
 def show(home, name, revision=None, *, strict=False):
     if name == "apt":
+        from .apt_profiles import active_home
+        home = active_home(home)
         if revision:
             raise ForgeError("Use jforge apt env for the current apt activation script.")
         state_path = home.root / "apt/state.json"
@@ -114,10 +116,11 @@ def show(home, name, revision=None, *, strict=False):
 
 
 def list_environments(home):
+    from .apt_profiles import active_home
     records = [show(home, path.parent.name)
                for path in sorted((home.root / "environments").glob("*/current.json"))
                if path.parent.name != "apt"]
-    state_path = home.root / "apt/state.json"
+    state_path = active_home(home).root / "apt/state.json"
     if state_path.exists() and read_json(state_path).get("activation"):
         records.append(show(home, "apt"))
     return sorted(records, key=lambda item: item["name"])

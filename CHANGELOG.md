@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.6
+
+### Added
+
+- Add `apt switch` for persistent, source-isolated Debian and Ubuntu environments, with separate package prefixes, recipe catalogs, caches, installation histories and activation scripts. List saved environments with `apt switch`; return to the original store with `apt switch legacy`.
+- Default new Ubuntu environments to Ubuntu 24.04 LTS (`noble`), main and universe. Refresh base, updates and security pockets together and select the highest full Debian package version.
+- Support native source archives and named original-source components, including SQLite's separate `www` archive, mounted before quilt patches.
+- Recognize nested CMake/configure layouts and Meson builds; add OpenSSL, dependency-metapackage and Boost development-header adapters, including modular Boost source trees.
+
+### Fixed
+
+- Restore the top-level installed-package list and keep package queries, `paths` and the reserved apt environment aligned with the selected source.
+- Remove previous managed package paths and restore exported values when switching, upgrading or removing packages, while preserving user PATH additions. Refresh the Bash/Zsh hook after successful package changes and source switches.
+- Fetch repository indexes by content hash when available to avoid mirror synchronization races; retain checksum verification and detect modified cached indexes without repeatedly hashing unchanged distribution indexes on list/search.
+- Preserve full Debian revisions and epochs during dependency matching and upgrade selection, avoid downgrades, reuse validated installed recipes after catalog removal, and retain unrelated installed dependencies during ordinary installs.
+- Roll back catalog metadata when updates fail; retain the previous source selection when a switch fails and preserve configured signature keyrings when returning to an environment.
+- Accept safe internal archive links and valid source filenames while rejecting extraction escapes. Distinguish native source-build runtime requirements from the ABI minimums of distribution-built binaries.
+- Show readable update summaries and pending reasons; preserve complete paths, commands and headings in narrow SSH terminals.
+
+### Compatibility and upgrade notes
+
+- Existing user directories remain the `legacy` environment and are not moved or deleted. New source environments live under the same user directory's `apt/profiles/`; named Python environments and acceptance histories stay shared. Custom recipes and recipe-source settings belong to each package environment.
+- After upgrading, reload shell integration once with `eval "$(command jforge apt shell-init)"`, or start a new shell if that line is already in its startup file. Subsequent installs and switches activate automatically in that shell. Other already-open shells retain their environment until refreshed.
+- Run `apt update` in each environment to refresh tracked recipes and dependency metadata. Source layouts and dependency translation do not establish that every repository package builds on every HPC host; compiled Boost components, system services, bootstrap cycles and unsupported provider mappings still need explicit adapters.
+- Metadata trust remains official HTTPS plus checksums by default; pass a trusted `--keyring` to require archive-signature verification. Forge builds upstream sources and does not execute dpkg maintainer scripts or replace the host libc.
+
 ## 1.0.5
 
 ### Added

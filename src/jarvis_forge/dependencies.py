@@ -2,15 +2,28 @@
 from __future__ import annotations
 
 from packaging.version import Version
+from functools import cmp_to_key
 from debian.debian_support import Version as DebianVersion
 
 from .storage import ForgeError
 
 
-def native(text):
-    from .catalog import requirement
+def native(text, *, root=False):
+    from .catalog import requirement, DebianSpecifier
     req = requirement(text)
-    return {"name": req.name, "specifier": str(req.specifier)}
+    if isinstance(req.specifier, DebianSpecifier):
+        result = {"name": req.name, "relation": req.specifier.relation, "version": req.specifier.version}
+        if root:
+            result["root_debian"] = True
+        return result
+    result = {"name": req.name, "specifier": str(req.specifier)}
+    if getattr(req, "forge_debian_constraint", None):
+        result["official_constraint"] = list(req.forge_debian_constraint)
+        if root:
+            result["root_debian"] = True
+    if root and getattr(req, "forge_exact_version", None):
+        result["exact_version"] = req.forge_exact_version
+    return result
 
 
 def groups(recipe):
@@ -32,13 +45,32 @@ def matches(recipe, request):
     name = request["name"]
     if "specifier" in request:
         from packaging.specifiers import SpecifierSet
-        aliases = recipe.get("provenance", {}).get("binary_versions", {})
-        return (name == recipe["name"] or name in aliases) and Version(recipe["version"]) in SpecifierSet(request["specifier"])
+        provenance = recipe.get("provenance", {})
+        aliases = provenance.get("binary_versions", {})
+        if name != recipe["name"] and name not in aliases:
+            return False
+        if request.get("official_constraint") and provenance.get("kind") == "official-apt-source":
+            actual = aliases.get(name) or provenance.get("debian_version")
+            relation, version = request["official_constraint"]
+            if relation == "=" and not request.get("root_debian") and not provenance.get("allow_debian_equality", False):
+                return False
+            return actual is not None and version_matches(actual, relation, version)
+        exact = request.get("exact_version")
+        if exact and provenance.get("kind") == "official-apt-source":
+            actual = aliases.get(name) or provenance.get("debian_version")
+            if actual and version_matches(actual, "=", exact):
+                return True
+            if any(character in exact for character in ("-", ":", "~")):
+                return False
+        return Version(recipe["version"]) in SpecifierSet(request["specifier"])
     versions = recipe.get("provenance", {}).get("binary_versions", {})
-    if name not in versions:
+    if name in versions:
+        actual = versions[name]
+    elif name == recipe["name"] and recipe.get("provenance", {}).get("kind") == "official-apt-source":
+        actual = recipe["provenance"].get("debian_version")
+    else:
         return False
-    actual = versions[name]
-    if request.get("relation") == "=" and not recipe.get("provenance", {}).get("allow_debian_equality", False):
+    if request.get("relation") == "=" and not request.get("root_debian") and not recipe.get("provenance", {}).get("allow_debian_equality", False):
         return False
     return not request.get("relation") or (actual is not None and version_matches(actual, request["relation"], request["version"]))
 
@@ -46,13 +78,29 @@ def matches(recipe, request):
 def identity(recipe):
     p = recipe.get("provenance", {})
     if p.get("kind") == "official-apt-source":
-        return (p.get("origin"), p.get("suite"), p.get("component"), p.get("source_package"))
+        return (p.get("origin"), p.get("release_suite", p.get("suite")), p.get("component"), p.get("source_package"))
     return ("recipe", recipe["name"])
 
 
-def resolve(recipes, specs):
+def newer(candidate, installed):
+    """Compare full official revisions; source changes alone are not upgrades."""
+    cp, ip = candidate.get("provenance", {}), installed.get("provenance", {})
+    if cp.get("kind") == ip.get("kind") == "official-apt-source" and cp.get("debian_version") and ip.get("debian_version"):
+        return DebianVersion(cp["debian_version"]) > DebianVersion(ip["debian_version"])
+    return Version(candidate["version"]) > Version(installed["version"])
+
+
+def resolve(recipes, specs, *, preferred=(), root_requirements=()):
     """Backtrack complete groups, including alternatives and shared source providers."""
-    ordered_candidates = sorted(recipes, key=lambda r: Version(r["version"]), reverse=True)
+    def compare(left, right):
+        lp, rp = left.get("provenance", {}), right.get("provenance", {})
+        if identity(left) == identity(right) and lp.get("debian_version") and rp.get("debian_version"):
+            a, b = DebianVersion(lp["debian_version"]), DebianVersion(rp["debian_version"])
+        else:
+            a, b = Version(left["version"]), Version(right["version"])
+        return (a > b) - (a < b)
+    ordered_candidates = sorted(recipes, key=cmp_to_key(compare), reverse=True)
+    ordered_candidates.sort(key=lambda r: r not in preferred)
     failures = set()
     decisions = 0
 
@@ -97,9 +145,9 @@ def resolve(recipes, specs):
             failures.add(" -> ".join(chain + [req["name"]]))
         return None
 
-    result = solve([(None, [native(s)], []) for s in specs], {}, {})
+    result = solve([(None, [native(s, root=True)], []) for s in specs] + [(None, [r], []) for r in root_requirements], {}, {})
     if result is None:
-        raise ForgeError("Unresolved dependencies or conflicting versions: " + "; ".join(sorted(failures)[:12]),
+        raise ForgeError("No compatible recipes satisfy the request; unresolved dependencies or conflicting versions: " + "; ".join(sorted(failures)[:12]),
                          hint="Inspect recipes with jforge apt show <package>; import/update the official source or provide a compatible recipe.")
     selected, edges = result
     ordered, visiting, done = [], [], set()

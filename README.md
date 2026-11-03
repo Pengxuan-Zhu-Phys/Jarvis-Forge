@@ -48,6 +48,8 @@ jforge --home .forge-home logs <run-id> --step calculate
 jforge --home .forge-home compare <older-run-id> <newer-run-id>
 ```
 
+Text results use standalone headings and record summaries suitable for SSH terminals. Paths and commands are emitted as complete lines; the terminal may visually wrap them without inserted line breaks. `apt update` highlights pending imports and their reasons. Full structured fields remain available with `--json`.
+
 `--json`, `--home` and `--debug` work before or after the command. `--json` emits one JSON object on stdout, while progress goes to stderr. `compare --check` fails on changed, missing, corrupted or unsuccessful evidence; ordinary comparison only describes differences. Comparison uses exact artifact bytes; scientific equivalence and performance regression policies remain outside the current comparison mode.
 
 ## Automatic package environment (Bash and Zsh)
@@ -58,7 +60,7 @@ A child process cannot change its parent shell. Enable the shell integration onc
 eval "$(command jforge apt shell-init)"
 ```
 
-Add that line to your own `~/.bashrc` or `~/.zshrc` to enable it for future shells. The hook sources the current package environment on startup and refreshes it after successful installs and upgrades. It uses the selected Forge home, including an explicit `--home`. Forge does not edit your startup files. Existing shells need to enable the hook themselves. Previously exported values are not removed from a running shell on upgrades or removals; start a fresh shell to clear old values. The hook is intended for interactive use, not JSON or script automation.
+Add that line to your own `~/.bashrc` or `~/.zshrc` to enable it for future shells. The hook sources the selected package environment on startup and refreshes it after successful installs, upgrades, removals and source switches. It uses the selected Forge home, including an explicit `--home`. Forge does not edit your startup files. Existing shells need to enable the hook themselves. Source switching removes previous managed package paths and restores exported values while preserving user PATH additions. After upgrading Forge, reload this hook once in existing shells to obtain its new behavior; other already-open shells keep their current environment until refreshed. The hook is intended for interactive use, not JSON or script automation.
 
 The first `apt list` after a repository refresh builds a local derived index. Subsequent listings reuse it; complete distribution listings are printed as compact lines. `apt list --installed` only lists installed packages.
 
@@ -86,7 +88,7 @@ jforge info eigen
 jforge info eigen --package-version 3.4.0 --instance <install-id> --path
 ```
 
-`info` queries JSON installation manifests under `packages/<name>/<version>/<install-id>/manifest.json`. `jforge apt install` creates those records after installation checks pass. Multiple instances are listed explicitly; `--path` requires a unique match. `--package-version` selects installed software; `--version` remains Forge's version query.
+`info` queries JSON installation manifests under the selected package environment's `packages/<name>/<version>/<install-id>/manifest.json`. `jforge apt install` creates those records after installation checks pass. Multiple instances are listed explicitly; `--path` requires a unique match. `--package-version` selects installed software; `--version` remains Forge's version query.
 
 You select and prepare Python environments with pyenv or your existing tools. `doctor --shell` sources your trusted Bash script and reports the resulting CC/CXX/FC selections, compiler and build-tool paths and versions, Python interpreter paths and versions, virtual environment prefixes, installed Python packages, and selected module/pyenv variables. It does not choose an environment or switch to a fallback. Without `--shell`, it inspects the inherited environment. Missing tools and failed version probes are reported individually; activation errors fail the command. `--timeout` limits the complete inspection, including activation. Shell output is kept separate from JSON results. Inspection creates no Forge user state.
 
@@ -166,7 +168,7 @@ Package installation reports package and command step counts and streams build o
 
 Every successful instance gets an immutable receipt and activation script; source downloads, recipe snapshots, command logs and checks live in the operation record. Reinstall and upgrade create separate prefixes and preserve old instances. Build or check failure leaves the previous active environment selected. Valid dependencies completed before a later package fails can remain as inactive installations.
 
-The catalog combines configured recipes and the imported official source index. Missing recipes are looked up in the selected repository during install; standard CMake/configure and prefix-aware Makefile layouts receive generated build steps, and Neofetch has a Bash installation adapter. Complex layouts report the required adaptation. You can also add `recipes/*.yaml`, or register a local recipe directory/file or HTTPS YAML index:
+The catalog combines configured recipes and the imported official source index. Missing recipes are looked up in the selected repository during install; standard and nested CMake/configure, Meson and prefix-aware Makefile layouts receive generated build steps, and Neofetch has a Bash installation adapter. Complex layouts report the required adaptation. You can also add `recipes/*.yaml`, or register a local recipe directory/file or HTTPS YAML index:
 
 ```bash
 jforge apt edit-sources --add /path/to/recipes
@@ -174,6 +176,27 @@ jforge apt update
 ```
 
 Bundled recipes change with Forge releases; `update` refreshes the selected official source index, configured recipe sources and tracked official recipes. Use `update --recipes-only` or `install --no-official` for recipe-only operation. `upgrade` resolves newer compatible versions from that catalog. `full-upgrade` uses the same source-recipe resolver and retains old instances; it performs no system-wide removals. Recipe commands are trusted build instructions, not sandboxed code. See the [package manager design and recipe format](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md).
+
+### Switch Debian and Ubuntu environments
+
+```bash
+# Select Ubuntu 24.04 LTS; metadata is imported on first use:
+jforge apt switch ubuntu
+# Equivalent explicit selection:
+jforge apt switch ubuntu --suite noble --component main,universe
+jforge apt update
+jforge apt install libeigen3-dev libgsl-dev
+jforge apt switch                         # List saved environments
+jforge apt switch debian --suite bookworm
+jforge apt switch legacy                  # Return to the original store
+jforge paths
+```
+
+The selected source persists across CLI invocations and Python versions using the same Forge home. Package prefixes, recipe settings, caches, operation history and apt shell revisions are isolated under `<home>/apt/profiles/<source-id>/`. Previous installations remain available when you switch back. `apt list/search/show`, top-level `list/info`, `env show apt` and `paths` automatically follow the selection. The shared home, named Python environments and acceptance-run histories remain in place. Switching selects a package environment; install the packages you need in that environment.
+
+Ubuntu defaults to `noble` with `main,universe`; Debian defaults to `bookworm/main`. Their base, updates and security pockets are refreshed together. Existing imported components remain selected on upgrade. `apt import` refreshes metadata within an environment; use `apt switch` when changing its distribution, suite or components. An explicitly configured signature keyring is retained on later switches to that environment.
+
+With shell integration enabled, a successful switch immediately refreshes the current Bash/Zsh environment without manual path edits or per-source `source` commands. Without the hook, source `"$(jforge apt env --path)"` explicitly. Source-specific scope selection is shared on disk; switching from another SSH session does not modify an already-running shell.
 
 ### Import a complete official index
 
@@ -186,9 +209,9 @@ source "$(jforge apt env --path)"
 neofetch
 ```
 
-This imports all source/binary package names in the selected distribution component; it downloads metadata, not every source archive. `--component` defaults to `main`; for example, Ubuntu's additional packages can be selected with `--origin ubuntu --suite noble --component universe`. A repository import changes the default lookup source without removing existing tracked package imports or custom recipes. Run `apt sources` to see supported sources and `apt import debian` or `apt import ubuntu` to select one explicitly. Debian defaults to bookworm/main and Ubuntu to noble/main; use `--suite` and `--component` to choose alternatives. An existing selected source is retained across upgrades. `apt update` refreshes the full index and tracked recipes; `apt upgrade` builds newer selected versions. Search and show read the cached index without downloading. `apt edit-sources` displays the official source configuration alongside recipe sources.
+This imports the selected distribution's source and native-architecture binary package metadata, without downloading every source archive. New Ubuntu imports default to `noble/main,universe`, Debian to `bookworm/main`; `--component` accepts a comma-separated list. Use `apt sources` for available distributions and `apt switch` for isolated selections. An existing populated environment cannot be repurposed to another source family through import. `apt update` refreshes its indexes and tracked recipes; search and show use cached metadata without downloading. `apt edit-sources` displays official and custom recipe configuration.
 
-`apt install` queries the official source after you explicitly import one. Bundled and user-provided recipes remain available without an official import. It verifies source archives, selects a compatible installation adapter and saves the generated recipe and provenance. Dry-run does not fetch missing metadata: it reports the pending official lookup instead. Official index availability does not imply that every package can be built on every host; missing native tools/libraries and unsupported layouts are reported with operation logs. Debian Build-Depends is retained as information, not automatically treated as a user-prefix dependency solution.
+`apt install` queries the official source after you explicitly import one. Bundled and user-provided recipes remain available without an official import. It verifies source archives, selects a compatible installation adapter and saves the generated recipe and provenance. Dry-run does not fetch missing metadata: it reports the pending official lookup instead. Official index availability does not imply that every package can be built on every host; missing native tools/libraries and unsupported layouts are reported with operation logs. Supported Debian build and runtime dependencies are resolved before compilation; original metadata and explicit adapter decisions are retained.
 
 ### Track official Debian and Ubuntu source packages
 
@@ -203,6 +226,8 @@ jforge apt upgrade
 Import maps a binary or source package name through the official `Sources` index, records source versions and SHA-256, and preserves Debian quilt patches. This advanced per-package import can reuse an explicit reviewed template for custom options and checks. Built-in reviewed templates cover Eigen and Redis; `--template NAME` reuses a custom Forge recipe. Ubuntu sources use `--origin ubuntu --suite <codename>`.
 
 `update` refreshes these tracked imports without compiling. `upgrade` detects both upstream changes and Debian revision/patch changes, creates new instances, and keeps old ones. Identical official metadata does not force a rebuild. Per-package metadata imports without a reviewed template retain draft/pending information. During explicit installation, automatic adapters can generate supported standard layouts; unsupported layouts remain pending. Drafts themselves do not silently enter the install catalog. Automatic adapters resolve supported Debian build and runtime relationships, retain their original fields and record every upstream-build policy decision; unresolved requirements stop before compilation.
+
+Named original-source components are verified and mounted before quilt patches; native single archives are supported too. Internal source symlinks and hardlinks are allowed only within the extraction tree. Full official revisions use Debian version ordering.
 
 Default metadata trust is official HTTPS plus Release/index/archive checksums, reported as `apt_signature_verified: false`. To require archive-signature verification, supply `--keyring /path/to/trusted-archive-keyring.gpg`; this requires `gpgv` and fails if verification cannot be completed. The importer builds upstream projects with quilt patches; it does not execute `debian/rules` or reproduce the full Debian binary-package build.
 
@@ -237,6 +262,8 @@ python3 -m pytest
 ```
 
 The host integration point is `jarvis_forge.cli.main(argv, prog="Jarvis forge")`; it returns an exit code and owns the single parser. The standalone console script is operational. Jarvis-HEP forwarding is not yet integrated.
+
+The [APT comparison and scientific-library support matrix](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_COMPATIBILITY.md) describes GAMBIT/ROOT prerequisite adapters and remaining build limitations. Source-layout recognition is separate from a successful build on the target HPC.
 
 Project design and implementation scope live in [Jarvis-Books](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/tree/main/Docs/Jarvis-Forge). CLI behavior follows the [Jarvis ecosystem CLI specification](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Ecosystem/JARVIS_CLI_DESIGN.md).
 
