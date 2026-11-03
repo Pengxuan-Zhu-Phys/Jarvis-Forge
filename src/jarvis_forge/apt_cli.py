@@ -215,23 +215,33 @@ def update_sources(ctx: typer.Context,
 @app.command("import")
 def import_official(ctx: typer.Context,
                     package: Optional[str] = typer.Argument(None, help="Optional package; omit to import the whole source index.", metavar="<package>"),
-                    suite: str = typer.Option(..., "--suite", help="Distribution codename, such as bookworm or jammy.", metavar="<str>"),
-                    origin: str = typer.Option("debian", "--origin", help="Official distribution: debian or ubuntu.", metavar="<debian|ubuntu>"),
-                    component: str = typer.Option("main", "--component", help="Repository component.", metavar="<str>"),
+                    suite: Optional[str] = typer.Option(None, "--suite", help="Distribution codename; defaults to the selected source.", metavar="<str>"),
+                    origin: Optional[str] = typer.Option(None, "--origin", help="Official distribution: debian or ubuntu.", metavar="<debian|ubuntu>"),
+                    component: Optional[str] = typer.Option(None, "--component", help="Repository component; defaults to main for a new source.", metavar="<str>"),
                     name: Optional[str] = typer.Option(None, "--name", help="Forge package name.", metavar="<str>"),
                     template: Optional[str] = typer.Option(None, "--template", help="Reuse a reviewed Forge recipe's build adapter.", metavar="<str>"),
                     source_version: Optional[str] = typer.Option(None, "--source-version", help="Pin an exact Debian source version.", metavar="<str>"),
                     keyring: Optional[Path] = typer.Option(None, "--keyring", help="Require gpgv verification using this trusted archive keyring.", metavar="<path>")):
     """Import an official repository index, or track one source package."""
-    from .official import import_package, import_repository
+    from .official import default_source, import_package, import_repository
+    current = default_source(ctx.obj.home)
+    selected_origin = origin or current["origin"]
+    if selected_origin not in {"debian", "ubuntu"}:
+        raise ForgeError("--origin must be debian or ubuntu.")
+    selected_suite = suite or (current["suite"] if selected_origin == current["origin"] else
+                               {"debian": "bookworm", "ubuntu": "noble"}[selected_origin])
+    same_source = selected_origin == current["origin"] and selected_suite == current["suite"]
+    selected_component = component or (current["component"] if same_source else "main")
+    same_source = same_source and selected_component == current["component"]
+    selected_keyring = keyring if keyring is not None else (current.get("keyring") if same_source else None)
     if package is None:
         if name is not None or template is not None or source_version is not None:
             raise ForgeError("A package is required for --name, --template or --source-version.")
-        _emit(ctx, "import", **import_repository(ctx.obj.home, origin=origin, suite=suite,
-                                               component=component, keyring=keyring))
+        _emit(ctx, "import", **import_repository(ctx.obj.home, origin=selected_origin, suite=selected_suite,
+                                               component=selected_component, keyring=selected_keyring))
         return
-    result = import_package(ctx.obj.home, package, origin=origin, suite=suite, component=component,
-                            name=name, template_name=template, source_version=source_version, keyring=keyring)
+    result = import_package(ctx.obj.home, package, origin=selected_origin, suite=selected_suite, component=selected_component,
+                            name=name, template_name=template, source_version=source_version, keyring=selected_keyring)
     _emit(ctx, "import", **result)
 
 

@@ -4,7 +4,8 @@
 
 ### Added
 
-- Import a complete official source index by omitting the package name: `jforge apt import --origin debian --suite bookworm`. Refresh that index with `apt update` and query package names through `apt list/search/show`.
+- Import a complete official source index by omitting the package name: `jforge apt import`. Refresh that index with `apt update` and query package names through `apt list/search/show`.
+- Use the selected source for `apt import` without requiring repeated options; switching to Ubuntu defaults to noble/main unless specified.
 - Look up missing recipes in the configured official repository during installation, download verified source archives on demand and track generated recipes for future updates and upgrades.
 - Generate user-prefix build recipes for standard CMake, configure and prefix-aware Makefile layouts, and install Neofetch through its Bash command layout.
 - Accept Debian-style package names containing `+` or dots, including compiler and versioned Python package names.
