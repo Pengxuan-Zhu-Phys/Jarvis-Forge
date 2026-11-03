@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.0.5
+
+### Added
+
+- Resolve dependency graphs before compilation, verify installed or reused providers, and block consumers until their dependencies are ready.
+- Add recipe schema 2 with build/run dependencies, lightweight probes, consumer dependency checks and integrity checks for declared artifacts.
+- Import native Linux binary dependency metadata alongside official source indexes; retain Debian version constraints and alternative dependencies, and map related binary outputs to source providers.
+- Record dependency discovery, external provider probes, per-package readiness and blocked states in operation history.
+
+### Fixed
+
+- Skip missing documentation when building repacked Debian GSL sources and verify the installed development files.
+
+### Changed
+
+- Show package and command step progress with live build output on stderr while preserving separate stdout and stderr logs.
+
+### Compatibility and upgrade notes
+
+- Run `jforge apt update` after upgrading to refresh tracked recipes and download binary dependency metadata. Schema 1 recipes remain supported; schema 2 requires this release or newer.
+- Dependency fingerprints now include resolution and provider evidence. Existing packages may rebuild once; reused instances run their probe, or their legacy check when no probe is declared.
+- Official dependency discovery supports native Linux on amd64, arm64, ppc64el, s390x and riscv64. Cross-architecture requests, ambiguous virtual providers, source bootstrap cycles and unsupported package layouts require explicit adapters and stop before compilation.
+- Native tool probes use documented upstream-version mappings; exact Debian binary equality requires a dedicated provider. Generic library probes check installed files; consumers can declare stronger compile/link checks.
+
 ## 1.0.4
 
 ### Added

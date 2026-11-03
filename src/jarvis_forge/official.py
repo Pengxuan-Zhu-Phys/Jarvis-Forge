@@ -300,7 +300,21 @@ def _snapshot(home, profile, directory, session):
         if digest(downloaded) != expected["sha256"] or downloaded.stat().st_size != expected["size"]:
             raise ForgeError("Official source index does not match Release SHA-256/size.", code=1)
         shutil.copyfile(downloaded, target)
-    snapshot = {"repo": repo, "index": str(target), "index_sha256": expected["sha256"],
+    from .official_dependencies import architecture
+    arch = architecture()
+    binary_name = next((n for n in (f"{component}/binary-{arch}/Packages.xz", f"{component}/binary-{arch}/Packages.gz") if n in hashes), None)
+    if binary_name is None:
+        raise ForgeError(f"No binary dependency metadata is available for {arch}.")
+    binary_expected = hashes[binary_name]
+    binary_path = _inside(home, home.root / "cache/apt/official-indexes" / (binary_expected["sha256"] + Path(binary_name).suffix))
+    if not binary_path.is_file() or digest(binary_path) != binary_expected["sha256"] or binary_path.stat().st_size != binary_expected["size"]:
+        fetched = directory / Path(binary_name).name
+        fetch(f"{repo}/dists/{suite}/{binary_name}", fetched, directory / "binary-download")
+        if digest(fetched) != binary_expected["sha256"] or fetched.stat().st_size != binary_expected["size"]:
+            raise ForgeError("Binary dependency index does not match Release SHA-256/size.", code=1)
+        shutil.copyfile(fetched, binary_path)
+    snapshot = {"architecture": arch, "binary_index": str(binary_path), "binary_sha256": binary_expected["sha256"],
+                "repo": repo, "index": str(target), "index_sha256": expected["sha256"],
                 "release_sha256": digest(release), "release_date": metadata.get("Date"),
                 "valid_until": metadata.get("Valid-Until"),
                 "codename": metadata.get("Codename"), "apt_signature_verified": signature_verified,
@@ -375,6 +389,25 @@ def _automatic_recipe(profile, row, source, backend, archive):
         recipe["environment"]["prepend"].update({"PKG_CONFIG_PATH": ["${prefix}/lib/pkgconfig", "${prefix}/lib64/pkgconfig", "${prefix}/share/pkgconfig"],
                                                  "LD_LIBRARY_PATH": ["${prefix}/lib", "${prefix}/lib64"]})
         recipe["check"] = [["${python}", "-c", "from pathlib import Path; import sys; assert any(p.is_file() for p in Path(sys.argv[1]).rglob('*'))", "${prefix}"]]
+        if (row["Package"] == "gsl" and backend == "autotools" and "+dfsg" in row["Version"]
+                and _member_text(archive, source["subdir"], "doc/autoconf.rst") is None):
+            # Debian's repacked GSL source can omit documentation required by
+            # upstream's recursive all/install targets. Retain the library build.
+            skip_docs = ("from pathlib import Path\nimport re,sys\n"
+                         "p=Path(sys.argv[1])/'Makefile'\ns=p.read_text()\n"
+                         "pattern=r'(?m)^SUBDIRS[ \\t]*=[^\\n]*(?:\\\\\\n[^\\n]*)*'\n"
+                         "m=re.search(pattern,s)\n"
+                         "if not m or 'doc' not in m.group().split(): raise SystemExit('GSL SUBDIRS layout changed; cannot skip documentation safely')\n"
+                         "line=re.sub(r'(?<!\\S)doc(?!\\S)', '', m.group())\n"
+                         "p.write_text(s[:m.start()]+line+s[m.end():])\n")
+            recipe["build"].insert(1, ["${python}", "-c", skip_docs, "${source}"])
+            recipe["schema_version"] = 2
+            recipe["artifacts"] = ["include/gsl/gsl_version.h", "bin/gsl-config", "lib/pkgconfig/gsl.pc", "lib/libgsl.a"]
+            verify = ("from pathlib import Path; import sys; p=Path(sys.argv[1]); "
+                      "assert (p/'include/gsl/gsl_version.h').is_file(); "
+                      "assert any(x.is_file() for d in ('lib','lib64') for x in (p/d).glob('libgsl.*')); "
+                      "assert any((p/d/'pkgconfig/gsl.pc').is_file() for d in ('lib','lib64'))")
+            recipe["check"] = [["${python}", "-c", verify, "${prefix}"], ["${prefix}/bin/gsl-config", "--version"]]
         return recipe
     # Neofetch is an architecture-independent Bash command, not a CMake project.
     if row["Package"] == "neofetch":
@@ -462,16 +495,54 @@ def _candidate(home, profile, row, snapshot, directory):
                     "scope": "Builds the upstream project with quilt patches; does not execute debian/rules or produce .deb packages."}
 
 
+def _binary_rows(home, snapshot, session):
+    key = ("binary-rows", snapshot.get("binary_sha256"))
+    if key not in session:
+        if not snapshot.get("binary_index"):
+            raise ForgeError("The official cache predates dependency metadata.", hint="jforge apt update")
+        path = _inside(home, Path(snapshot["binary_index"]))
+        if not path.is_file() or digest(path) != snapshot["binary_sha256"]:
+            raise ForgeError("Binary dependency index is missing or modified.", hint="jforge apt update")
+        wanted = {"Package", "Version", "Source", "Depends", "Pre-Depends", "Provides", "Architecture"}
+        session[key] = [{k: v for k, v in row.items() if k in wanted} for row in _index_rows(path)]
+    return session[key]
+
+
 def _derive(home, profile, directory, session):
     snapshot = _snapshot(home, profile, directory / "repository", session)
-    row = source_row(Path(snapshot["index"]), profile["package"], profile.get("source_version"))
+    binary_rows = _binary_rows(home, snapshot, session)
+    from .official_dependencies import source_identity, parse, attach
+    requested = profile["package"]
+    binary = next((r for r in binary_rows if r["Package"] == requested), None)
+    if binary is None and profile.get("automatic"):
+        providers = [r for r in binary_rows if any(a["name"] == requested for group in parse(r.get("Provides", ""), snapshot["architecture"]) for a in group)]
+        if len(providers) == 1:
+            binary = providers[0]
+        elif len(providers) > 1:
+            raise ForgeError(f"Virtual dependency {requested} needs an explicit provider: " + ", ".join(r["Package"] for r in providers[:12]))
+    source_name, source_version = source_identity(binary) if binary else (requested, profile.get("source_version"))
+    source_key = ("source-rows", snapshot["index_sha256"])
+    if source_key not in session:
+        table = {}
+        for source_record in _index_rows(Path(snapshot["index"])):
+            table.setdefault(source_record["Package"], []).append(source_record)
+        session[source_key] = table
+    records = session[source_key].get(source_name, [])
+    selected_version = profile.get("source_version") or source_version
+    records = [r for r in records if not selected_version or r["Version"] == selected_version]
+    if len(records) != 1:
+        raise ForgeError(f"Expected one source record for {requested}; found {len(records)}.", hint="jforge apt update")
+    row = records[0]
     write_json(directory / "source-record.json", row)
     try:
         recipe, details = _candidate(home, profile, row, snapshot, directory)
+        if recipe and profile.get("automatic"):
+            recipe = attach(recipe, row, binary["Package"] if binary else requested, binary_rows, snapshot["architecture"])
+            validate_recipe(recipe, "official dependency adapter")
     except ForgeError as exc:
         if exc.code != 2:
             raise
-        recipe, details = None, {"reason": str(exc)}
+        recipe, details = None, {"reason": str(exc), "hint": exc.hint}
     report = {"schema_version": 1, "profile": {k: v for k, v in profile.items() if k != "template"},
               "snapshot": snapshot, "source_record": row, "recipe": recipe,
               "import_status": "generated" if recipe else "needs_adapter", **details}
@@ -589,50 +660,64 @@ def import_package(home, package, *, origin, suite, component="main", name=None,
 
 
 def missing_packages(home, specs):
-    names = {p["name"] for p in Catalog(home).list()}
-    return sorted({requirement(spec).name for spec in specs} - names)
+    from .dependencies import native, matches
+    recipes = Catalog(home).list()
+    return sorted({native(spec)["name"] for spec in specs if not any(matches(p, native(spec)) for p in recipes)})
 
 
 def ensure_recipes(home, specs, directory, progress=None):
-    """Called inside install's existing operation lock; no nested package lock."""
-    pending = [requirement(spec) for spec in specs]
-    visited, reports, session = set(), [], {}
+    """Discover the complete candidate closure before starting any compilation."""
+    from .dependencies import native, matches, groups
+    pending = [(native(spec), [native(spec)["name"]]) for spec in specs]
+    visited, reports, session, errors = set(), [], {}, []
     source = default_source(home)
-    if not source and missing_packages(home, specs):
-        raise ForgeError("No official source has been imported.", hint="jforge apt sources; jforge apt import debian")
-    if source and missing_packages(home, specs):
-        cached = _cached_repository(home)
-        if cached and cached.get("source") == source:
-            snapshot = cached["snapshot"]
-            expiry = snapshot.get("valid_until")
-            if not expiry or parsedate_to_datetime(expiry) > datetime.now(timezone.utc):
-                session[(source["origin"], source["suite"], source["component"], source.get("keyring"))] = snapshot
+    cached = _cached_repository(home) if source else None
+    if cached and cached["snapshot"].get("binary_index"):
+        expiry = cached["snapshot"].get("valid_until")
+        if not expiry or parsedate_to_datetime(expiry) > datetime.now(timezone.utc):
+            session[(source["origin"], source["suite"], source["component"], source.get("keyring"))] = cached["snapshot"]
     while pending:
-        req = pending.pop(0)
-        if req.name in visited:
+        req, chain = pending.pop(0)
+        marker = tuple(sorted(req.items()))
+        if marker in visited:
             continue
-        visited.add(req.name)
-        choices = [p for p in Catalog(home).list() if p["name"] == req.name]
-        if not choices:
-            previous = next((p for p in _load_profiles(home)["imports"] if p["name"] == req.name), None)
+        visited.add(marker)
+        if len(visited) > 200:
+            raise ForgeError("Official dependency discovery limit exceeded; split the request or supply dedicated recipes.")
+        choices = [p for p in Catalog(home).list() if matches(p, req)]
+        legacy = any(p.get("provenance", {}).get("automatic_adapter") and p["schema_version"] == 1 for p in choices)
+        if not choices or legacy:
+            previous = next((p for p in _load_profiles(home)["imports"] if p["name"] == req["name"]), None)
             if not source and not previous:
-                raise ForgeError(f"No recipe or imported official source for {req.name}.", hint="jforge apt import debian")
-            profile = dict(previous, automatic=True) if previous else _profile(home, req.name, **source, name=req.name, automatic=True)
+                errors.append({"chain": chain, "reason": "No compatible recipe or imported official source"})
+                continue
+            profile = dict(previous, automatic=True) if previous else _profile(home, req["name"], **source, name=req["name"], automatic=True)
             if progress:
-                progress(f"Looking up {req.name} in official {profile['origin']} {profile['suite']}/{profile['component']}")
+                progress("Resolving " + " -> ".join(chain) + f" in {profile['origin']} {profile['suite']}")
             destination = _inside(home, directory / f"official-lookup-{len(reports)}")
             destination.mkdir(mode=0o700)
-            report = _derive(home, profile, destination, session)
-            _store_import(home, profile, report, destination)
-            reports.append({"name": req.name, "source_package": report["source_record"]["Package"],
-                            "version": report["source_record"]["Version"], "import_status": report["import_status"],
-                            "report": str(destination / "import-report.json")})
-            if not report["recipe"]:
-                raise ForgeError(f"Official source found for {req.name}, but an installation adapter is required: {report['reason']}",
-                                 hint=f"Source and dependency details: {destination / 'import-report.json'}")
-            choices = [report["recipe"]]
-        matching = [p for p in choices if Version(p["version"]) in req.specifier]
-        if matching:
-            chosen = max(matching, key=lambda p: Version(p["version"]))
-            pending.extend(requirement(dep) for dep in chosen.get("depends", []))
+            try:
+                report = _derive(home, profile, destination, session)
+                _store_import(home, profile, report, destination)
+                reports.append({"name": req["name"], "import_status": report["import_status"], "report": str(destination / "import-report.json")})
+                if not report["recipe"]:
+                    errors.append({"chain": chain, "reason": report["reason"]})
+                    if progress:
+                        progress("Unavailable dependency candidate " + " -> ".join(chain) + ": " + report["reason"])
+                    continue
+                choices = [report["recipe"]] if matches(report["recipe"], req) else []
+            except ForgeError as exc:
+                if exc.code != 2:
+                    raise
+                reports.append({"name": req["name"], "import_status": "unresolved", "reason": str(exc)})
+                errors.append({"chain": chain, "reason": str(exc)})
+                if progress:
+                    progress("Unavailable dependency candidate " + " -> ".join(chain) + ": " + str(exc))
+                continue
+        # Import all viable version/alternative branches; the solver selects a
+        # globally consistent graph. Failed unused alternatives do not block it.
+        for choice in choices:
+            for group in groups(choice):
+                pending.extend((dep, chain + [dep["name"]]) for dep in group)
+    write_json(directory / "dependency-discovery.json", {"schema_version": 1, "imports": reports, "unresolved_candidates": errors})
     return reports

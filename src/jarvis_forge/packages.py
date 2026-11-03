@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import selectors
 import shlex
 import shutil
 import socket
@@ -133,13 +134,23 @@ def _context(recipes):
             "flags": {k: os.environ[k] for k in ("CC", "CXX", "FC", "CFLAGS", "CXXFLAGS", "FFLAGS", "FCFLAGS", "CPPFLAGS", "LDFLAGS") if k in os.environ}}
 
 
-def plan_install(home, specs, *, jobs=1, mode="install", operation_id="planned-operation"):
+def plan_install(home, specs, *, jobs=1, mode="install", operation_id="planned-operation", verify_external=False, external_log=None):
     if jobs < 1:
         raise ForgeError("--jobs must be at least 1.")
     previous = state(home)
     records = {key_for(r): r for r in home.packages()}
     if (set(previous["active"].values()) | set(previous["manual"])) - set(records):
         raise ForgeError("Package state references missing installation receipts.")
+    if mode in {"upgrade", "full-upgrade", "reinstall"}:
+        normalized = []
+        for spec in specs:
+            req = requirement(spec)
+            name = req.name
+            if name not in previous["active"]:
+                name = next((r["name"] for key, r in records.items()
+                             if key in previous["active"].values() and req.name in r.get("provenance", {}).get("binary_versions", {})), name)
+            normalized.append(name + str(req.specifier))
+        specs = normalized
     requested = [requirement(spec).name for spec in specs]
     roots = {name: records[key] for name, key in previous["active"].items()
              if key in previous["manual"] and key in records}
@@ -169,14 +180,20 @@ def plan_install(home, specs, *, jobs=1, mode="install", operation_id="planned-o
         selected_specs += [f"{name}=={r['version']}" for name, r in roots.items() if name not in requested]
     recipes = Catalog(home).resolve(selected_specs) if selected_specs else []
     context = _context(recipes) if recipes else {}
+    if verify_external and any(r.get("provenance", {}).get("external_dependencies") for r in recipes):
+        from .official_dependencies import check_external
+        context["external_dependencies"] = check_external(recipes, external_log)
     planned, selected = [], {}
     for recipe in recipes:
         dependencies = [selected[requirement(dep).name]["key"] for dep in recipe.get("depends", [])]
         recipe_context = {**context, "tools": {name: item for name, item in context["tools"].items()
                                              if name == "bash" or name in recipe.get("requires_tools", [])}}
+        if "external_dependencies" in recipe_context:
+            recipe_context["external_dependencies"] = [{k: evidence[k] for k in ("dependency", "argv", "version", "compared_version", "version_policy")}
+                for evidence in context["external_dependencies"] if evidence["consumer"] == recipe["name"]]
         payload = {"recipe": recipe, "context": recipe_context, "dependencies": dependencies}
         install_id = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:20]
-        if mode == "reinstall" and recipe["name"] in requested:
+        if mode == "reinstall" and (recipe["name"] in requested or set(requested) & set(recipe.get("provenance", {}).get("binary_versions", {}))):
             install_id += "-" + uuid.uuid4().hex[:8]
         package_dir = _inside(home, home.root / "packages" / recipe["name"] / recipe["version"] / install_id)
         prefix = package_dir / "prefix"
@@ -189,8 +206,15 @@ def plan_install(home, specs, *, jobs=1, mode="install", operation_id="planned-o
                     "build": str(work / "build"), "jobs": str(jobs), "python": sys.executable}
         bindings.update({f"dep:{requirement(d).name}": selected[requirement(d).name]["prefix"]
                          for d in recipe.get("depends", [])})
+        for dep in recipe.get("depends", []):
+            provider = selected[requirement(dep).name]
+            for alias in provider["recipe"].get("provenance", {}).get("binary_versions", {}):
+                key_name = f"dep:{alias}"
+                if key_name in bindings and bindings[key_name] != provider["prefix"]:
+                    raise ForgeError(f"Ambiguous dependency provider for {alias} in {recipe['name']}")
+                bindings[key_name] = provider["prefix"]
         commands = {phase: [[expand(arg, bindings) for arg in cmd] for cmd in recipe.get(phase, [])]
-                    for phase in ("build", "install", "check")}
+                    for phase in ("build", "install", "check", "probe", "dependency_check")}
         # Validate export placeholders before any download or build starts.
         for section, entries in recipe.get("environment", {}).items():
             for value in entries.values():
@@ -199,7 +223,10 @@ def plan_install(home, specs, *, jobs=1, mode="install", operation_id="planned-o
         item = {"name": recipe["name"], "version": recipe["version"], "install_id": install_id,
                 "key": key, "prefix": str(prefix), "work": str(work), "bindings": bindings,
                 "dependencies": dependencies, "recipe": recipe, "commands": commands,
-                "action": "reuse" if old else "install", "manual": recipe["name"] in requested or recipe["name"] in roots}
+                "external_verification_pending": bool(recipe.get("provenance", {}).get("external_dependencies")) and not verify_external,
+                "action": "reuse" if old else "install", "manual": recipe["name"] in requested or recipe["name"] in roots or any(
+                    spec.split("=", 1)[0] in recipe.get("provenance", {}).get("binary_versions", {})
+                    for spec in requested)}
         planned.append(item)
         selected[recipe["name"]] = item
     return {"mode": mode, "requested": requested, "specs": specs, "context": context,
@@ -251,7 +278,7 @@ def _publish(home, current, operation_id):
     return current
 
 
-def _run_command(argv, cwd, environment_script, logs, number, timeout, context):
+def _run_command(argv, cwd, environment_script, logs, number, timeout, context, progress=None):
     script = logs / f"command-{number}.sh"
     probe = logs / f"command-{number}.json"
     record = {"argv": argv, "cwd": str(cwd), "environment": str(environment_script), "started_at": now(),
@@ -261,10 +288,35 @@ def _run_command(argv, cwd, environment_script, logs, number, timeout, context):
     started = time.monotonic()
     try:
         with (logs / f"command-{number}.stdout.log").open("wb") as out, (logs / f"command-{number}.stderr.log").open("wb") as err:
+            # Separate pipes preserve the original log files; display both on stderr
+            # so the final --json result on stdout remains machine-readable.
             process = subprocess.Popen([context["tools"]["bash"]["path"], "--noprofile", "--norc", str(script), *argv],
-                                       cwd=cwd, stdout=out, stderr=err, start_new_session=True)
+                                       cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
             try:
-                code = process.wait(timeout=timeout)
+                with selectors.DefaultSelector() as selector:
+                    selector.register(process.stdout, selectors.EVENT_READ, out)
+                    selector.register(process.stderr, selectors.EVENT_READ, err)
+                    while selector.get_map():
+                        remaining = timeout - (time.monotonic() - started)
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(argv, timeout)
+                        for key, _ in selector.select(min(remaining, 1.0)):
+                            data = os.read(key.fileobj.fileno(), 65536)
+                            if not data:
+                                selector.unregister(key.fileobj)
+                                key.fileobj.close()
+                                continue
+                            key.data.write(data)
+                            key.data.flush()
+                            if progress is not None:
+                                if hasattr(sys.stderr, "buffer"):
+                                    sys.stderr.buffer.write(data)
+                                    sys.stderr.buffer.flush()
+                                else:
+                                    sys.stderr.write(data.decode("utf-8", errors="replace"))
+                                    sys.stderr.flush()
+                    remaining = timeout - (time.monotonic() - started)
+                    code = process.wait(timeout=max(0, remaining))
                 record.update(exit_code=code, status="passed" if code == 0 else "failed")
             except subprocess.TimeoutExpired as exc:
                 _stop(process)
@@ -274,6 +326,10 @@ def _run_command(argv, cwd, environment_script, logs, number, timeout, context):
                 _stop(process)
                 record.update(status="interrupted", exit_code=process.returncode)
                 raise
+            finally:
+                for pipe in (process.stdout, process.stderr):
+                    if pipe is not None:
+                        pipe.close()
         if code:
             raise ForgeError(f"Package command failed with exit {code}: {shlex.join(argv)}; logs: {logs}", code=1)
     except OSError as exc:
@@ -289,21 +345,56 @@ def install(home, specs, *, jobs=1, timeout=3600, mode="install", progress=None,
         raise ForgeError("--timeout must be finite and positive.")
     with locked(home), operation(home, mode, {"specs": specs, "jobs": jobs, "timeout_seconds": timeout,
                                              "official_lookup": official}) as (op, result):
-        if official and mode in {"install", "reinstall"}:
+        if official:
             from .official import ensure_recipes
-            result["official_imports"] = ensure_recipes(home, specs, op, progress)
-        plan = plan_install(home, specs, jobs=jobs, mode=mode, operation_id=op.name)
+            previous = state(home)
+            installed_records = {key_for(r): r for r in home.packages()}
+            roots = [name for name, key in previous["active"].items() if key in previous["manual"] and key in installed_records]
+            lookup_specs = list(specs) + [name for name in roots if name not in {requirement(s).name for s in specs}]
+            result["official_imports"] = ensure_recipes(home, lookup_specs, op, progress)
+        plan = plan_install(home, specs, jobs=jobs, mode=mode, operation_id=op.name, verify_external=True, external_log=op / "external-dependencies.json")
         write_json(op / "plan.json", plan)
+        write_json(op / "external-dependencies.json", {"providers": plan["context"].get("external_dependencies", [])})
         current = dict(plan["state_before"], active=dict(plan["state_before"]["active"]), manual=list(plan["state_before"]["manual"]))
         records = {key_for(r): r for r in home.packages()}
         completed = []
         result["packages"] = completed
-        for item in plan["packages"]:
+        readiness = {item["name"]: {"status": "planned", "dependencies": list(item["dependencies"])} for item in plan["packages"]}
+        def save_readiness():
+            write_json(op / "dependency-status.json", {"schema_version": 1, "packages": readiness})
+        save_readiness()
+        ready_keys = set()
+        if progress:
+            progress("Dependency order: " + ", ".join(item["name"] for item in plan["packages"]))
+        for index, item in enumerate(plan["packages"], 1):
             if progress:
-                progress(f"{item['action']} {item['name']}={item['version']}")
-            if item["action"] == "install":
-                record = _install_one(home, item, plan["context"], op, timeout, records)
-                records[item["key"]] = record
+                progress(f"Package {index}/{len(plan['packages'])}: {item['action']} {item['name']}={item['version']}")
+            try:
+                if not set(item["dependencies"]) <= ready_keys:
+                    raise ForgeError(f"Dependencies are not ready for {item['name']}.", code=1)
+                readiness[item["name"]]["status"] = "installing" if item["action"] == "install" else "verifying"
+                save_readiness()
+                if item["action"] == "install":
+                    record = _install_one(home, item, plan["context"], op, timeout, records, progress)
+                    records[item["key"]] = record
+                else:
+                    _verify_existing(home, item, plan["context"], op, timeout, records, progress)
+                ready_keys.add(item["key"])
+                readiness[item["name"]]["status"] = "ready"
+                save_readiness()
+                if progress:
+                    progress(f"{item['name']}: verified and ready")
+            except BaseException as exc:
+                readiness[item["name"]].update(status="failed", error=str(exc))
+                for entry in readiness.values():
+                    if entry["status"] == "planned":
+                        entry.update(status="blocked", reason=f"Transaction stopped at {item['name']}")
+                save_readiness()
+                raise
+            aliases = item["recipe"].get("provenance", {}).get("binary_versions", {})
+            for old_name in list(current["active"]):
+                if old_name != item["name"] and old_name in aliases:
+                    del current["active"][old_name]
             current["active"][item["name"]] = item["key"]
             if item["manual"] and item["key"] not in current["manual"]:
                 current["manual"].append(item["key"])
@@ -315,13 +406,41 @@ def install(home, specs, *, jobs=1, timeout=3600, mode="install", progress=None,
         return result
 
 
-def _install_one(home, item, context, op, timeout, records):
+def _verify_existing(home, item, context, op, timeout, records, progress):
+    """Revalidate reused instances in this operation, without modifying their history."""
+    logs = op / item["name"]
+    logs.mkdir(mode=0o700)
+    record = records[item["key"]]
+    for field, digest_field in (("environment_file", "environment_sha256"), ("activation", "activation_sha256")):
+        path = _inside(home, Path(record[field]))
+        if not path.is_file() or (record.get(digest_field) and digest(path) != record[digest_field]):
+            raise ForgeError(f"Installed environment is missing or modified: {path}", code=1,
+                             hint=f"jforge apt reinstall {item['name']}")
+    for name, expected in record.get("key_files", {}).items():
+        path = _inside(home, Path(record["prefix"]) / name)
+        if not path.is_file() or digest(path) != expected:
+            raise ForgeError(f"Installed artifact is missing or modified: {path}", code=1,
+                             hint=f"jforge apt reinstall {item['name']}")
+    activation = logs / "dependency-environment.sh"
+    activation.write_text(_activation(home, [item["key"]], records), encoding="utf-8")
+    commands = item["commands"]["probe"] or item["commands"]["check"]
+    if progress:
+        progress(f"{item['name']}: verifying existing prefix {item['prefix']}")
+    for index, argv in enumerate(commands, 1):
+        _run_command(argv, Path(item["prefix"]), activation, logs, f"{index:03d}-reuse-probe", timeout, context, progress)
+    write_json(logs / "readiness.json", {"status": "ready", "prefix": item["prefix"], "install_id": item["install_id"],
+               "verification": "probe" if item["commands"]["probe"] else "legacy-check", "verified_at": now()})
+
+
+def _install_one(home, item, context, op, timeout, records, progress=None):
     recipe, package_dir = item["recipe"], Path(item["prefix"]).parent
     logs = op / item["name"]
     logs.mkdir(mode=0o700)
     write_json(logs / "recipe.json", recipe)
     work = Path(item["work"])
     _inside(home, work).mkdir(parents=True, exist_ok=False, mode=0o700)
+    if progress:
+        progress(f"{item['name']}: fetching and unpacking source")
     archive = verified_archive(home, recipe["source"], logs / "download")
     unpack(archive, work / "source")
     source = Path(item["bindings"]["source"])
@@ -349,16 +468,33 @@ def _install_one(home, item, context, op, timeout, records):
         activation = package_dir / "activate.sh"
         activation.write_text(_activation(home, [item["key"]], {**records, item["key"]: record}), encoding="utf-8")
         number = 0
+        total = len(patches) + sum(len(item["commands"][phase]) for phase in ("dependency_check", "build", "install", "check", "probe"))
         for patch_path, strip in patches:
             number += 1
+            if progress:
+                progress(f"{item['name']}: step {number}/{total} (patch): {patch_path.name}")
             _run_command([context["tools"]["patch"]["path"], "-t", "-N", f"-p{strip}", "-i", str(patch_path)], source, activation,
-                         logs, f"{number:03d}-patch", timeout, context)
-        for phase in ("build", "install", "check"):
+                         logs, f"{number:03d}-patch", timeout, context, progress)
+        for phase in ("dependency_check", "build", "install", "check", "probe"):
             for argv in item["commands"][phase]:
                 number += 1
-                _run_command(argv, source, activation, logs, f"{number:03d}-{phase}", timeout, context)
+                if progress:
+                    shown = shlex.join(argv[:2]) + " <script>" if len(argv) > 2 and argv[1] == "-c" else shlex.join(argv)
+                    progress(f"{item['name']}: step {number}/{total} ({phase}): {shown}")
+                _run_command(argv, source, activation, logs, f"{number:03d}-{phase}", timeout, context, progress)
         if not any(prefix.iterdir()):
             raise ForgeError(f"Install produced an empty prefix: {prefix}", code=1)
+        record["environment_sha256"] = digest(env_file)
+        record["activation_sha256"] = digest(activation)
+        key_files = {}
+        for relative in recipe.get("artifacts", []):
+            path = _inside(home, prefix / relative)
+            if not path.is_relative_to(prefix) or not path.is_file():
+                raise ForgeError(f"Required installed artifact is missing: {path}", code=1)
+            key_files[relative] = digest(path)
+        record["key_files"] = key_files
+        record["probe"] = item["commands"]["probe"]
+        write_json(logs / "readiness.json", {"status": "ready", "prefix": str(prefix), "verified_at": now()})
         write_json(package_dir / "manifest.json", record)
         return record
     except BaseException:

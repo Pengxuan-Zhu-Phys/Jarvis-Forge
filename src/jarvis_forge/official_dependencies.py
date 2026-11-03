@@ -1,0 +1,245 @@
+"""Translate repository relationships into explicit source-build requirements.
+
+Unsupported Debian semantics fail closed instead of disappearing from a recipe.
+"""
+from __future__ import annotations
+
+import os
+import platform
+import re
+import shlex
+import shutil
+import subprocess
+from pathlib import Path
+
+from debian.deb822 import PkgRelation
+
+from .dependencies import version_matches
+from .storage import ForgeError, now, write_json
+
+
+TOOLS = {"cmake": "cmake", "make": "make", "gcc": "cc", "g++": "c++", "gfortran": "gfortran",
+         "pkg-config": "pkg-config", "pkgconf": "pkgconf", "bash": "bash", "python3": "python3",
+         "autoconf": "autoconf", "automake": "automake", "m4": "m4", "texinfo": "makeinfo",
+         "gettext": "gettext", "patch": "patch", "bison": "bison", "flex": "flex",
+         "gawk": "gawk", "awk": "awk", "binutils": "ld"}
+# These drive debian/rules, which the upstream CMake/configure adapters do not execute.
+PACKAGING = {"debhelper", "debhelper-compat", "dh-autoreconf", "dh-strip-nondeterminism", "dpkg-dev"}
+
+
+def architecture():
+    if platform.system() != "Linux":
+        raise ForgeError("Automatic Debian dependency resolution currently requires a native Linux target.",
+                         hint="Use an explicit Forge recipe for this platform.")
+    arch = {"x86_64": "amd64", "aarch64": "arm64", "ppc64le": "ppc64el", "s390x": "s390x", "riscv64": "riscv64"}.get(platform.machine())
+    if not arch:
+        raise ForgeError(f"Unsupported native dependency architecture: {platform.machine()}")
+    return arch
+
+
+def _arch_match(value, arch):
+    if value in {"any", "linux-any", f"any-{arch}", f"linux-{arch}", arch}:
+        return True
+    if "any" in value:
+        raise ForgeError(f"Unsupported architecture wildcard: {value}")
+    return False
+
+
+def parse(text, arch):
+    if not text.strip():
+        return []
+    result = []
+    for group in PkgRelation.parse_relations(text):
+        alternatives = []
+        for item in group:
+            name = item["name"]
+            if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", name):
+                raise ForgeError(f"Unresolved dependency expression: {text}")
+            qualifiers = item.get("archqual")
+            if qualifiers not in {None, "any", "native", arch}:
+                raise ForgeError(f"Cross-architecture dependency is unsupported: {name}:{qualifiers}")
+            restrictions = item.get("arch") or []
+            positive = [r.arch for r in restrictions if r.enabled]
+            negative = [r.arch for r in restrictions if not r.enabled]
+            if positive and negative:
+                raise ForgeError(f"Mixed architecture restrictions in dependency: {name}")
+            if positive and not any(_arch_match(a, arch) for a in positive):
+                continue
+            if any(_arch_match(a, arch) for a in negative):
+                continue
+            profiles = item.get("restrictions") or []
+            # No implicit nocheck/nodoc/cross profile: upstream adapters must
+            # actually disable the corresponding work before enabling a profile.
+            if profiles and not any(all(not term.enabled for term in formula) for formula in profiles):
+                continue
+            atom = {"name": name}
+            if item.get("version"):
+                relation, version = item["version"]
+                if relation not in {"<<", "<=", "=", ">=", ">>"}:
+                    raise ForgeError(f"Unsupported dependency comparison: {relation}")
+                atom.update(relation=relation, version=version)
+            alternatives.append(atom)
+        if alternatives:
+            result.append(alternatives)
+    return result
+
+
+def source_identity(row):
+    source = row.get("Source", row["Package"])
+    match = re.fullmatch(r"([^\s]+)(?:\s+\(([^)]+)\))?", source)
+    if not match:
+        raise ForgeError(f"Invalid binary Source field: {source}")
+    return match[1], match[2] or row["Version"]
+
+
+def attach(recipe, row, requested, binary_rows, arch):
+    if requested.endswith(("-dbg", "-dbgsym", "-doc", "-data", "-common")):
+        raise ForgeError(f"The binary output {requested} needs a dedicated artifact adapter.")
+    own = {p["Package"]: p for p in binary_rows if source_identity(p) == (row["Package"], row["Version"])}
+    versions = {name: p["Version"] for name, p in own.items()}
+    for p in own.values():
+        for group in parse(p.get("Provides", ""), arch):
+            for atom in group:
+                if atom.get("relation") not in {None, "="}:
+                    raise ForgeError("Invalid versioned Provides in repository metadata.")
+                versions.setdefault(atom["name"], atom.get("version"))
+    if requested not in own:
+        # A source name can describe several incompatible output configurations.
+        # Ask for a concrete output rather than guessing its runtime closure.
+        raise ForgeError(f"No binary output {requested!r} matches source {row['Package']}={row['Version']}.",
+                         hint="Install one of these binary package names: " + ", ".join(sorted(own)[:12]))
+    relationships = []
+    for field in ("Build-Depends", "Build-Depends-Arch", "Build-Depends-Indep"):
+        relationships.extend(("build", group) for group in parse(row.get(field, ""), arch))
+    # Follow all internal output edges before discarding self edges at source level.
+    seen, pending = set(), [requested]
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for field in ("Pre-Depends", "Depends"):
+            for group in parse(own[name].get(field, ""), arch):
+                internal = [a for a in group if a["name"] in versions and
+                            (not a.get("relation") or (versions[a["name"]] is not None and version_matches(versions[a["name"]], a["relation"], a["version"])))]
+                if internal:
+                    pending.extend(a["name"] for a in internal if a["name"] in own)
+                else:
+                    relationships.append(("run", group))
+    provided = {name: own[name]["Version"] for name in seen}
+    for name in seen:
+        for group in parse(own[name].get("Provides", ""), arch):
+            for atom in group:
+                provided.setdefault(atom["name"], atom.get("version"))
+    mapped, external, decisions = [], [], []
+    for kind, group in relationships:
+        if kind == "build" and any(a["name"] in PACKAGING for a in group):
+            decisions.append({"alternatives": group, "disposition": "not-required-by-upstream-adapter",
+                              "reason": "The selected adapter does not execute debian/rules or produce Debian packages."})
+            continue
+        if kind == "build" and any(a["name"] == "build-essential" for a in group):
+            external.append({**next(a for a in group if a["name"] == "build-essential"), "kind": "build"})
+            continue
+        tool = next((a for a in group if a["name"] in TOOLS and shutil.which(TOOLS[a["name"]])), None)
+        system = next((a for a in group if a["name"] in {"libc6", "libc6-dev", "libgcc-s1", "libstdc++6"}), None)
+        chosen = tool or system
+        if chosen:
+            external.append({**chosen, "kind": kind})
+            continue
+        if any(a["name"] in versions for a in group):
+            # A genuine build dependency on its own source requires bootstrap support.
+            raise ForgeError(f"Source bootstrap dependency requires an adapter: {row['Package']} -> {group}")
+        mapped.append({"kind": kind, "alternatives": group})
+    recipe["schema_version"] = 2
+    recipe["debian_dependencies"] = mapped
+    recipe.setdefault("probe", list(recipe["check"]))
+    for atom in external:
+        if atom["name"] in TOOLS:
+            recipe["requires_tools"] = list(dict.fromkeys(recipe.get("requires_tools", []) + [TOOLS[atom["name"]]]))
+    if requested.startswith("lib"):
+        if requested.endswith("-dev"):
+            command = "from pathlib import Path; import sys; p=Path(sys.argv[1]); assert any(x.is_file() for x in (p/'include').rglob('*')), 'No development headers installed'"
+        else:
+            command = "from pathlib import Path; import sys; p=Path(sys.argv[1]); assert any(x.is_file() and ('.so' in x.name or x.suffix in ('.a','.dylib')) for d in ('lib','lib64') for x in (p/d).rglob('*')), 'No library installed'"
+        recipe["probe"] = list(recipe["probe"]) + [["${python}", "-c", command, "${prefix}"]]
+    recipe["provenance"].update(binary_versions=provided, binary_package=requested,
+                                 external_dependencies=external, dependency_decisions=decisions,
+                                 dependency_policy="repository relationships with explicit upstream adapter decisions",
+                                 dependency_architecture=arch)
+    return recipe
+
+
+def check_external(recipes, evidence_path=None):
+    """Probe selected external providers before any source compilation begins."""
+    evidence = []
+    for recipe in recipes:
+        for atom in recipe.get("provenance", {}).get("external_dependencies", []):
+            entry = {"consumer": recipe["name"], "dependency": atom, "status": "not-ready", "commands": []}
+            evidence.append(entry)
+            def save():
+                if evidence_path is not None:
+                    write_json(evidence_path, {"providers": evidence})
+            def run(argv, **kwargs):
+                command_record = {"argv": argv, "cwd": os.getcwd(), "started_at": now()}
+                entry["commands"].append(command_record)
+                save()
+                try:
+                    result = subprocess.run(argv, **kwargs)
+                    command_record.update(stdout=result.stdout, stderr=result.stderr, exit_code=result.returncode, finished_at=now())
+                    save()
+                    return result
+                except BaseException as exc:
+                    command_record.update(error=str(exc), finished_at=now())
+                    save()
+                    raise
+            name = atom["name"]
+            tool = TOOLS.get(name)
+            variable = {"cc": "CC", "c++": "CXX", "gfortran": "FC"}.get(tool)
+            if tool:
+                argv = shlex.split(os.environ.get(variable, tool) if variable else tool) + (["-W", "version"] if name == "awk" else ["--version"])
+                result = run(argv, capture_output=True, text=True, timeout=15)
+                output = result.stdout + result.stderr
+                found = re.search(r"\d+(?:\.\d+)+", output)
+                version = found[0] if found else None
+                if result.returncode:
+                    raise ForgeError(f"External tool probe failed for {recipe['name']} -> {name}: {output[-1000:]}")
+            elif name == "build-essential" or name == "libc6-dev":
+                # Check real compiler/header availability rather than pretending
+                # the Debian build-essential metapackage is installed on an HPC.
+                if atom.get("relation"):
+                    raise ForgeError(f"A versioned external development metapackage needs an adapter: {name}")
+                argv = shlex.split(os.environ.get("CC", "cc")) + ["-x", "c", "-fsyntax-only", "-"]
+                result = run(argv, input="#include <stdlib.h>\nint main(void){return 0;}\n", capture_output=True, text=True, timeout=15)
+                version = None
+                if result.returncode or (name == "build-essential" and not shutil.which(shlex.split(os.environ.get("CXX", "c++"))[0])):
+                    raise ForgeError(f"Native development environment is unavailable for {recipe['name']}: {result.stderr[-1000:]}")
+            elif name == "libc6":
+                value = os.confstr("CS_GNU_LIBC_VERSION")
+                version = value.split()[-1] if value else None
+                argv = ["platform", "glibc"]
+            else:
+                compiler = "CXX" if name == "libstdc++6" else "CC"
+                default = "c++" if compiler == "CXX" else "cc"
+                command = shlex.split(os.environ.get(compiler, default))
+                argv = command + ["-dumpfullversion", "-dumpversion"]
+                result = run(argv, capture_output=True, text=True, timeout=15)
+                version = result.stdout.strip() if result.returncode == 0 else None
+                library = "libstdc++.so.6" if compiler == "CXX" else "libgcc_s.so.1"
+                path = run(command + ["-print-file-name=" + library], capture_output=True, text=True, timeout=15)
+                if path.returncode or not Path(path.stdout.strip()).is_file():
+                    raise ForgeError(f"Compiler runtime cannot be located: {recipe['name']} -> {name}")
+            compared = version
+            # Explicit native-tool adapter: compare upstream version semantics,
+            # retaining an epoch where Debian uses one for this tool family.
+            # Exact binary package equality cannot be proven by a native tool.
+            if version and atom.get("relation"):
+                if atom["relation"] == "=":
+                    raise ForgeError(f"Exact Debian package equality needs an explicit provider: {recipe['name']} -> {atom}")
+                if ":" in atom["version"]:
+                    compared = atom["version"].split(":", 1)[0] + ":" + version
+            if atom.get("relation") and (not compared or not version_matches(compared, atom["relation"], atom["version"])):
+                raise ForgeError(f"External dependency version is not satisfied: {recipe['name']} -> {atom}; found {version}",
+                                 hint="Load a compatible user-selected environment or supply a dedicated build adapter.")
+            entry.update(argv=argv, version=version, compared_version=compared, version_policy="native-provider-upstream-version", status="ready")
+            save()
+    return evidence

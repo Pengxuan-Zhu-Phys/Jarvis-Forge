@@ -116,6 +116,21 @@ Scripts are copied, not relocated together with their dependencies: use stable a
 
 ## User-local package manager
 
+Dependency installation resolves the complete graph first, installs dependencies before their consumers, and verifies reused instances on every operation. A dependency must be ready before a consumer can build. Failures leave the previous active environment selected; completed dependencies can remain as inactive installations for later reuse.
+
+Recipe schema 2 adds `build_depends`, `run_depends`, `probe`, `dependency_check` and `artifacts`. Existing schema 1 `depends` recipes remain supported. A `dependency_check` runs after source preparation and before the consumer build in the same selected dependency environment. `probe` is a lightweight post-install and reuse check; legacy recipes fall back to `check`. Declared artifact and environment-script hashes detect changes to the recorded files.
+
+Official dependency discovery uses both Sources and native-architecture Packages metadata, preserves Debian version comparisons and alternatives, and maps binary aliases to source providers. It currently targets native Linux amd64, arm64, ppc64el, s390x and riscv64. Ambiguous virtual providers, cross builds, source bootstrap cycles, exact binary equality without an explicit mapping, and unsupported build layouts stop with a diagnostic. System/compiler requirements are probed in your selected environment. Generic library probes establish file availability; use a recipe's consumer checks to verify a particular CMake, pkg-config or link interface.
+
+After upgrading, refresh the imported source:
+
+```bash
+jforge apt update
+jforge apt install libgsl-dev
+```
+
+Dependency discovery, external probes and readiness records are saved under the printed operation directory. New dependency fingerprints can cause a one-time rebuild. Full design and recipe examples: [dependency installation](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_DEPENDENCIES.md).
+
 `jforge apt` follows familiar apt command names and operates on Forge recipes and user prefixes. It does not invoke system apt, request sudo, or edit shell startup files. Import an entire official source index with `apt import` without a package name; source archives are fetched on demand during installation.
 
 ```bash
@@ -146,6 +161,8 @@ jforge apt remove eigen=3.4.0 --dry-run
 jforge apt remove eigen=3.4.0 --yes
 jforge apt autoremove --dry-run
 ```
+
+Package installation reports package and command step counts and streams build output to stderr as it runs; exact command stdout and stderr are also saved separately in the operation record. Counts describe discrete steps, not elapsed-time percentages. JSON results remain on stdout.
 
 Every successful instance gets an immutable receipt and activation script; source downloads, recipe snapshots, command logs and checks live in the operation record. Reinstall and upgrade create separate prefixes and preserve old instances. Build or check failure leaves the previous active environment selected. Valid dependencies completed before a later package fails can remain as inactive installations.
 
@@ -185,7 +202,7 @@ jforge apt upgrade
 
 Import maps a binary or source package name through the official `Sources` index, records source versions and SHA-256, and preserves Debian quilt patches. This advanced per-package import can reuse an explicit reviewed template for custom options and checks. Built-in reviewed templates cover Eigen and Redis; `--template NAME` reuses a custom Forge recipe. Ubuntu sources use `--origin ubuntu --suite <codename>`.
 
-`update` refreshes these tracked imports without compiling. `upgrade` detects both upstream changes and Debian revision/patch changes, creates new instances, and keeps old ones. Identical official metadata does not force a rebuild. Per-package metadata imports without a reviewed template retain draft/pending information. During explicit installation, automatic adapters can generate supported standard layouts; unsupported layouts remain pending. Drafts themselves do not silently enter the install catalog. Debian Build-Depends fields are retained in the report; they are not blindly translated into Forge dependencies.
+`update` refreshes these tracked imports without compiling. `upgrade` detects both upstream changes and Debian revision/patch changes, creates new instances, and keeps old ones. Identical official metadata does not force a rebuild. Per-package metadata imports without a reviewed template retain draft/pending information. During explicit installation, automatic adapters can generate supported standard layouts; unsupported layouts remain pending. Drafts themselves do not silently enter the install catalog. Automatic adapters resolve supported Debian build and runtime relationships, retain their original fields and record every upstream-build policy decision; unresolved requirements stop before compilation.
 
 Default metadata trust is official HTTPS plus Release/index/archive checksums, reported as `apt_signature_verified: false`. To require archive-signature verification, supply `--keyring /path/to/trusted-archive-keyring.gpg`; this requires `gpgv` and fails if verification cannot be completed. The importer builds upstream projects with quilt patches; it does not execute `debian/rules` or reproduce the full Debian binary-package build.
 

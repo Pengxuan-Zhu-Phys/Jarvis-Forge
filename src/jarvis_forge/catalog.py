@@ -54,11 +54,16 @@ def validate_recipe(recipe: dict, origin: str) -> dict:
         Version(recipe["version"])
     except InvalidVersion as exc:
         raise ForgeError(f"Invalid package version in {origin}: {recipe['version']}") from exc
+    for artifact in recipe.get("artifacts", []):
+        path = Path(artifact)
+        if path.is_absolute() or ".." in path.parts or artifact == ".":
+            raise ForgeError(f"Invalid installed artifact path in {origin}: {artifact}")
     subdir = Path(recipe["source"]["subdir"])
     if subdir.is_absolute() or ".." in subdir.parts:
         raise ForgeError(f"Invalid source subdirectory in {origin}.")
-    for dep in recipe.get("depends", []):
-        requirement(dep)
+    for field in ("depends", "build_depends", "run_depends"):
+        for dep in recipe.get(field, []):
+            requirement(dep)
     return recipe
 
 
@@ -111,44 +116,8 @@ class Catalog:
                 if query.lower() in (item["recipe"]["name"] + " " + item["recipe"]["description"]).lower()]
 
     def resolve(self, specs: list[str]) -> list[dict]:
-        def solve(pending, selected, constraints):
-            if not pending:
-                return selected
-            req, *rest = pending
-            limits = {key: list(value) for key, value in constraints.items()}
-            limits.setdefault(req.name, []).append(req.specifier)
-            matches = lambda v: all(v in spec for spec in limits[req.name])
-            if req.name in selected:
-                return solve(rest, selected, limits) if matches(Version(selected[req.name]["version"])) else None
-            choices = [item["recipe"] for (name, _), item in self.items.items()
-                       if name == req.name and matches(Version(item["recipe"]["version"]))]
-            for choice in sorted(choices, key=lambda r: Version(r["version"]), reverse=True):
-                found = solve([requirement(dep) for dep in choice.get("depends", [])] + rest,
-                              {**selected, req.name: choice}, limits)
-                if found is not None:
-                    return found
-            return None
-
-        selected = solve([requirement(s) for s in specs], {}, {})
-        if selected is None:
-            raise ForgeError(f"No compatible recipes satisfy: {', '.join(specs)}", hint="jforge apt search <name>")
-        ordered, visiting, done = [], set(), set()
-
-        def visit(name):
-            if name in visiting:
-                raise ForgeError(f"Recipe dependency cycle involving {name}.")
-            if name in done:
-                return
-            visiting.add(name)
-            for spec in selected[name].get("depends", []):
-                visit(requirement(spec).name)
-            visiting.remove(name)
-            done.add(name)
-            ordered.append(selected[name])
-
-        for name in selected:
-            visit(name)
-        return ordered
+        from .dependencies import resolve
+        return resolve([item["recipe"] for item in self.items.values()], specs)
 
 
 def source_config(home: ForgeHome) -> dict:

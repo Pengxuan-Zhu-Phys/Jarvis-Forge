@@ -19,7 +19,7 @@ def test_help(command, capsys):
 @pytest.mark.parametrize("args", [["--version"], ["-v"], ["-V"]])
 def test_version(args, capsys):
     assert main(args) == 0
-    assert capsys.readouterr().out == "Jarvis-Forge 1.0.4\n"
+    assert capsys.readouterr().out == "Jarvis-Forge 1.0.5\n"
 
 
 @pytest.mark.parametrize("args", [["--json", "--version"], ["--version", "--json"]])
