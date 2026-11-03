@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.1
 
 ### Added
 
@@ -10,7 +10,7 @@
 ### Compatibility and upgrade notes
 
 - Home selection now follows `--home`, `JFORGE_HOME`, the remembered default, then `~/.jarvis-forge`, in that order. An explicit `init` saves its successfully initialized directory; other commands do not change the remembered default.
-- Default-location preferences are stored in the user configuration directory, independently of the selected data directory. Existing data is not moved.
+- Default-location preferences are stored in the user configuration directory, independently of the selected data directory. Existing data is not moved. After upgrading from 1.0.0, run `jforge init --home /path/to/existing-store` once to remember your chosen store.
 
 ## 1.0.0
 
