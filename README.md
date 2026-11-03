@@ -108,6 +108,8 @@ Scripts are copied, not relocated together with their dependencies: use stable a
 
 ```bash
 jforge apt --help
+jforge apt sources
+jforge apt import debian
 jforge apt update
 jforge apt search neofetch
 jforge apt install neofetch
@@ -147,7 +149,7 @@ Bundled recipes change with Forge releases; `update` refreshes the selected offi
 ### Import a complete official index
 
 ```bash
-jforge apt import
+jforge apt import debian
 jforge apt search neofetch
 jforge apt show neofetch
 jforge apt install neofetch
@@ -155,9 +157,9 @@ source "$(jforge apt env --path)"
 neofetch
 ```
 
-This imports all source/binary package names in the selected distribution component; it downloads metadata, not every source archive. `--component` defaults to `main`; for example, Ubuntu's additional packages can be selected with `--origin ubuntu --suite noble --component universe`. A repository import changes the default lookup source without removing existing tracked package imports or custom recipes. The initial default is Debian bookworm/main. With no options, `apt import` reuses the selected source; `apt import --origin ubuntu` selects Ubuntu noble/main unless a suite is specified. `apt update` refreshes the full index and tracked recipes; `apt upgrade` builds newer selected versions. Search and show read the cached index without downloading. `apt edit-sources` displays the official source configuration alongside recipe sources.
+This imports all source/binary package names in the selected distribution component; it downloads metadata, not every source archive. `--component` defaults to `main`; for example, Ubuntu's additional packages can be selected with `--origin ubuntu --suite noble --component universe`. A repository import changes the default lookup source without removing existing tracked package imports or custom recipes. Run `apt sources` to see supported sources and `apt import debian` or `apt import ubuntu` to select one explicitly. Debian defaults to bookworm/main and Ubuntu to noble/main; use `--suite` and `--component` to choose alternatives. An existing selected source is retained across upgrades. `apt update` refreshes the full index and tracked recipes; `apt upgrade` builds newer selected versions. Search and show read the cached index without downloading. `apt edit-sources` displays the official source configuration alongside recipe sources.
 
-`apt install` can query the official source even without a prior repository import. It verifies source archives, selects a compatible installation adapter and saves the generated recipe and provenance. Dry-run does not fetch missing metadata: it reports the pending official lookup instead. Official index availability does not imply that every package can be built on every host; missing native tools/libraries and unsupported layouts are reported with operation logs. Debian Build-Depends is retained as information, not automatically treated as a user-prefix dependency solution.
+`apt install` queries the official source after you explicitly import one. Bundled and user-provided recipes remain available without an official import. It verifies source archives, selects a compatible installation adapter and saves the generated recipe and provenance. Dry-run does not fetch missing metadata: it reports the pending official lookup instead. Official index availability does not imply that every package can be built on every host; missing native tools/libraries and unsupported layouts are reported with operation logs. Debian Build-Depends is retained as information, not automatically treated as a user-prefix dependency solution.
 
 ### Track official Debian and Ubuntu source packages
 

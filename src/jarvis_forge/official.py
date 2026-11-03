@@ -46,7 +46,7 @@ def default_source(home):
         source = {key: config["imports"][0].get(key) for key in DEFAULT_SOURCE}
     if source is not None and not isinstance(source, dict):
         raise ForgeError("Invalid official source configuration.")
-    return _selector({key: (source or {}).get(key, value) for key, value in DEFAULT_SOURCE.items()})
+    return _selector({key: source.get(key, value) for key, value in DEFAULT_SOURCE.items()}) if source else None
 
 
 def _index_rows(path):
@@ -449,7 +449,7 @@ def refresh_official(home, operation_dir, *, refresh_repository=True):
     by_name = {entry["recipe"]["name"]: entry for entry in current["packages"]}
     pending, summaries, session = [], [], {}
     source = default_source(home)
-    snapshot = _snapshot(home, source, operation_dir / "official-repository", session) if refresh_repository else None
+    snapshot = _snapshot(home, source, operation_dir / "official-repository", session) if refresh_repository and source else None
     for index, profile in enumerate(profiles):
         directory = _inside(home, operation_dir / f"official-{index}")
         directory.mkdir(mode=0o700)
@@ -545,7 +545,9 @@ def ensure_recipes(home, specs, directory, progress=None):
     pending = [requirement(spec) for spec in specs]
     visited, reports, session = set(), [], {}
     source = default_source(home)
-    if missing_packages(home, specs):
+    if not source and missing_packages(home, specs):
+        raise ForgeError("No official source has been imported.", hint="jforge apt sources; jforge apt import debian")
+    if source and missing_packages(home, specs):
         cached = _cached_repository(home)
         if cached and cached.get("source") == source:
             snapshot = cached["snapshot"]
@@ -560,6 +562,8 @@ def ensure_recipes(home, specs, directory, progress=None):
         choices = [p for p in Catalog(home).list() if p["name"] == req.name]
         if not choices:
             previous = next((p for p in _load_profiles(home)["imports"] if p["name"] == req.name), None)
+            if not source and not previous:
+                raise ForgeError(f"No recipe or imported official source for {req.name}.", hint="jforge apt import debian")
             profile = dict(previous, automatic=True) if previous else _profile(home, req.name, **source, name=req.name, automatic=True)
             if progress:
                 progress(f"Looking up {req.name} in official {profile['origin']} {profile['suite']}/{profile['component']}")

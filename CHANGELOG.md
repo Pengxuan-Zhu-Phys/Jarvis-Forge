@@ -4,8 +4,8 @@
 
 ### Added
 
-- Import a complete official source index by omitting the package name: `jforge apt import`. Refresh that index with `apt update` and query package names through `apt list/search/show`.
-- Use the selected source for `apt import` without requiring repeated options; switching to Ubuntu defaults to noble/main unless specified.
+- Import a complete official source index with `jforge apt sources` and `jforge apt import debian`. Refresh that index with `apt update` and query package names through `apt list/search/show`.
+- List supported Debian and Ubuntu sources with `apt sources`; import the chosen source explicitly before using its index.
 - Look up missing recipes in the configured official repository during installation, download verified source archives on demand and track generated recipes for future updates and upgrades.
 - Generate user-prefix build recipes for standard CMake, configure and prefix-aware Makefile layouts, and install Neofetch through its Bash command layout.
 - Accept Debian-style package names containing `+` or dots, including compiler and versioned Python package names.
@@ -13,7 +13,7 @@
 
 ### Compatibility and upgrade notes
 
-- The default official source is Debian bookworm/main until a repository or first package import selects another origin, suite and component. Repository import downloads metadata; it does not install every package or fetch every source archive.
+- Official repositories require explicit import. Debian defaults to bookworm/main and Ubuntu to noble/main; existing imported configurations are retained. Repository import downloads metadata; it does not install every package or fetch every source archive.
 - Official index availability does not guarantee that every package has a supported source layout or satisfied build dependencies. Unsupported packages retain their metadata and adapter report; Debian Build-Depends is recorded without blindly installing system packages.
 
 

@@ -103,6 +103,8 @@ def _install(ctx, packages, jobs, timeout, dry_run, mode, official=True):
         from .official import missing_packages, default_source
         missing = missing_packages(ctx.obj.home, packages or []) if official and mode in {"install", "reinstall"} else []
         if missing:
+            if not default_source(ctx.obj.home):
+                raise ForgeError("No official source has been imported.", hint="jforge apt import debian")
             _emit(ctx, mode, dry_run=True, plan={"requires_official_lookup": True,
                   "official_source": default_source(ctx.obj.home), "requested_packages": packages,
                   "packages": [{"name": name, "action": "official-lookup"} for name in missing],
@@ -212,6 +214,21 @@ def update_sources(ctx: typer.Context,
     _emit(ctx, "update", **update(ctx.obj.home, official=not recipes_only))
 
 
+@app.command("sources")
+def list_official_sources(ctx: typer.Context):
+    """List supported official sources and the currently imported source."""
+    from .official import REPOSITORIES, default_source
+    current = default_source(ctx.obj.home)
+    defaults = {"debian": ("bookworm", "main"), "ubuntu": ("noble", "main")}
+    sources = [{"name": name, "url": url, "suite": defaults[name][0], "component": defaults[name][1],
+                "active": bool(current and current["origin"] == name),
+                "selected_suite": current["suite"] if current and current["origin"] == name else None,
+                "selected_component": current["component"] if current and current["origin"] == name else None,
+                "description": f"{defaults[name][0]}/{defaults[name][1]} — {url}"}
+               for name, url in REPOSITORIES.items()]
+    _emit(ctx, "sources", sources=sources, selected=current)
+
+
 @app.command("import")
 def import_official(ctx: typer.Context,
                     package: Optional[str] = typer.Argument(None, help="Optional package; omit to import the whole source index.", metavar="<package>"),
@@ -223,8 +240,10 @@ def import_official(ctx: typer.Context,
                     source_version: Optional[str] = typer.Option(None, "--source-version", help="Pin an exact Debian source version.", metavar="<str>"),
                     keyring: Optional[Path] = typer.Option(None, "--keyring", help="Require gpgv verification using this trusted archive keyring.", metavar="<path>")):
     """Import an official repository index, or track one source package."""
-    from .official import default_source, import_package, import_repository
-    current = default_source(ctx.obj.home)
+    from .official import DEFAULT_SOURCE, REPOSITORIES, default_source, import_package, import_repository
+    current = default_source(ctx.obj.home) or DEFAULT_SOURCE
+    if package in REPOSITORIES and origin is None and name is None and template is None and source_version is None:
+        origin, package = package, None
     selected_origin = origin or current["origin"]
     if selected_origin not in {"debian", "ubuntu"}:
         raise ForgeError("--origin must be debian or ubuntu.")
