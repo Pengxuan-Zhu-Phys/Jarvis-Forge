@@ -10,3 +10,12 @@ dist/
 .env.*
 .forge-home/
 
+
+# Maintainer-local publishing entry point and credentials
+/jfrel
+.pypirc
+.pypirc.*
+.twinerc
+.pypi-token*
+release.env
+twine.env

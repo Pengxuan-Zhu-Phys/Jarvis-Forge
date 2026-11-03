@@ -78,7 +78,7 @@ class ForgeHome:
 
     def paths(self) -> dict:
         names = ("recipes", "packages", "environments", "suites", "operations",
-                 "runs", "comparisons", "services", "cache", "work", "locks")
+                 "runs", "comparisons", "services", "apt", "cache", "work", "locks")
         return {"home": str(self.root), **{n: str(self.root / n) for n in names}}
 
     def initialize(self) -> dict:

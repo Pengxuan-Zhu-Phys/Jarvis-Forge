@@ -22,6 +22,8 @@ import typer
 
 from . import __version__
 from .comparison import compare
+from .environment import inspect_environment
+from .environment_registry import show as registered_environment
 from .runner import execute
 from .storage import ForgeError, ForgeHome, identifier, read_json
 from .suite import load_suite, make_plan
@@ -56,7 +58,7 @@ def emit(ctx: typer.Context, command: str, *, ok=True, **values):
         for key, value in values.items():
             if isinstance(value, list) and value and isinstance(value[0], dict):
                 columns = [k for k in ("name", "version", "install_id", "prefix", "run_id", "suite_id",
-                                      "status", "id", "before", "after", "command_changed")
+                                      "status", "active", "automatic", "action", "id", "before", "after", "command_changed", "revision", "python", "python_version", "path", "description")
                            if k in value[0]]
                 if columns:
                     table = Table(title=key.replace("_", " ").title(), box=None)
@@ -105,11 +107,45 @@ def paths(ctx: typer.Context):
 
 
 @app.command()
-def doctor(ctx: typer.Context):
-    """Report the host and tool paths without installing software."""
-    tools = {name: shutil.which(name) for name in ("bash", "curl", "wget", "tar", "make", "cmake", "git", "redis-server", "sbatch")}
-    emit(ctx, "doctor", system=platform.system(), machine=platform.machine(),
-         python=sys.executable, python_version=platform.python_version(), tools=tools)
+def doctor(ctx: typer.Context,
+           env: Optional[str] = typer.Option(None, "--env", help="Inspect this registered environment.", metavar="<name>"),
+           shell: Optional[Path] = typer.Option(None, "--shell", help="Source this user-selected environment script.", metavar="<path>"),
+           timeout: float = typer.Option(60, "--timeout", min=0.1, help="Limit activation and inspection time.", metavar="<seconds>")):
+    """Report the user's active compilers and Python without selecting an environment."""
+    if shell is not None and env is not None:
+        raise ForgeError("--shell and --env are mutually exclusive.")
+    profile = registered_environment(ctx.obj.home, env, strict=True) if env else None
+    if profile:
+        shell = Path(profile["activation"])
+    environment = inspect_environment(shell, timeout)
+    if profile:
+        environment["environment_profile"] = profile
+    if ctx.obj.as_json:
+        emit(ctx, "doctor", system=platform.system(), machine=platform.machine(),
+             python=sys.executable, python_version=platform.python_version(),
+             tools=environment["tools"], environment=environment)
+        return
+    console = _console()
+    console.print(f"Controller Python: {sys.executable} ({platform.python_version()})", markup=False)
+    console.print(f"Environment script: {environment['environment_shell']['path'] if shell else '(inherited environment)'}", markup=False)
+    table = Table("Tool", "Path", "Version / status", box=None)
+    for name, tool in {**environment["compilers"], **environment["tool_details"]}.items():
+        table.add_row(name, tool.get("path") or "—", tool.get("version") or tool["status"])
+    console.print(table)
+    for name, target in environment["pythons"].items():
+        if target["status"] == "found":
+            console.print(f"{name}: {target['executable']} ({target['version']}); prefix={target['prefix']}", markup=False)
+            packages = {item["name"].lower(): item["version"] for item in target["packages"]}
+            console.print("  " + "; ".join(f"{key}={packages.get(key, 'missing')}" for key in ("pyyaml", "pybind11")), markup=False)
+        else:
+            console.print(f"{name}: {target['status']}", markup=False)
+    for key in ("PYENV_ROOT", "PYENV_VERSION", "VIRTUAL_ENV", "LOADEDMODULES"):
+        console.print(f"{key}: {environment['variables'].get(key, '(unset)')}", markup=False)
+    if environment["pyenv"].get("selection"):
+        console.print(f"pyenv selection: {environment['pyenv']['selection']}", markup=False)
+    for stream, content in environment["activation_output"].items():
+        if content:
+            _console(stderr=True).print(f"Activation {stream}:\n{content}", markup=False)
 
 
 @app.command("list")
@@ -155,23 +191,26 @@ def example(ctx: typer.Context,
 
 @app.command()
 def validate(ctx: typer.Context,
-             suite: Path = typer.Argument(..., help="Acceptance YAML file.", metavar="<suite_yaml>")):
+             suite: Path = typer.Argument(..., help="Acceptance YAML file.", metavar="<suite_yaml>"),
+             env: Optional[str] = typer.Option(None, "--env", help="Explicitly select a registered environment.", metavar="<name>")):
     """Validate schema, dependencies, input paths and placeholders."""
     loaded = load_suite(suite)
-    plan = make_plan(loaded, ctx.obj.home.root / "runs" / "planned-run")
+    plan = make_plan(loaded, ctx.obj.home.root / "runs" / "planned-run", ctx.obj.home, env)
     emit(ctx, "validate", suite_id=plan["suite_id"], steps=len(plan["steps"]), path=loaded["path"])
 
 
 @app.command()
 def plan(ctx: typer.Context,
-         suite: Path = typer.Argument(..., help="Acceptance YAML file.", metavar="<suite_yaml>")):
+         suite: Path = typer.Argument(..., help="Acceptance YAML file.", metavar="<suite_yaml>"),
+        env: Optional[str] = typer.Option(None, "--env", help="Explicitly select a registered environment.", metavar="<name>")):
     """Show a plan without executing commands or creating user state."""
-    emit(ctx, "plan", **make_plan(load_suite(suite), ctx.obj.home.root / "runs" / "planned-run"))
+    emit(ctx, "plan", **make_plan(load_suite(suite), ctx.obj.home.root / "runs" / "planned-run", ctx.obj.home, env))
 
 
 @app.command()
 def run(ctx: typer.Context,
-        suite: Path = typer.Argument(..., help="Acceptance YAML file.", metavar="<suite_yaml>")):
+        suite: Path = typer.Argument(..., help="Acceptance YAML file.", metavar="<suite_yaml>"),
+        env: Optional[str] = typer.Option(None, "--env", help="Explicitly select a registered environment.", metavar="<name>")):
     """Execute every configured step and preserve a new run record."""
     def progress(event):
         suffix = f" {event['step_id']}" if "step_id" in event else ""
@@ -179,7 +218,7 @@ def run(ctx: typer.Context,
             suffix += f" {event['status']}"
         _console(stderr=True).print(f"[{event['run_id']}] {event['event']}{suffix}", markup=False)
 
-    result = execute(ctx.obj.home, suite, progress=progress)
+    result = execute(ctx.obj.home, suite, progress=progress, environment_name=env)
     emit(ctx, "run", ok=result["status"] == "passed", **result)
     raise typer.Exit(0 if result["status"] == "passed" else 130 if result["status"] == "interrupted" else 1)
 
@@ -247,6 +286,15 @@ def compare_runs(ctx: typer.Context,
     emit(ctx, "compare", ok=ok, **result)
     if not ok:
         raise typer.Exit(1)
+
+
+from .apt_cli import app as apt_app
+
+app.add_typer(apt_app, name="apt")
+
+from .env_cli import app as env_app
+
+app.add_typer(env_app, name="env")
 
 
 def _globals(argv: list[str]) -> list[str]:

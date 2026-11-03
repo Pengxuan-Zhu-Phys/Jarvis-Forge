@@ -13,7 +13,8 @@ import sys
 from jsonschema import Draft202012Validator
 import yaml
 
-from .storage import ForgeError, digest
+from .storage import ForgeError, ForgeHome, digest
+from .environment_registry import show as registered_environment
 
 
 class UniqueLoader(yaml.SafeLoader):
@@ -84,7 +85,7 @@ def expand(text: str, bindings: dict[str, str]) -> str:
     return re.sub(r"\$\{([^}]+)\}", replace, text)
 
 
-def make_plan(suite: dict, run_dir: Path) -> dict:
+def make_plan(suite: dict, run_dir: Path, home: ForgeHome | None = None, environment_name: str | None = None) -> dict:
     source = Path(suite["path"]).parent
     config = suite["config"]
     bindings = {"python": sys.executable, "suite_dir": str(source),
@@ -99,7 +100,13 @@ def make_plan(suite: dict, run_dir: Path) -> dict:
         bindings[f"input:{key}"] = inputs[key]["snapshot"]
     environment = config.get("environment", {})
     shell = None
-    if environment.get("shell"):
+    profile = None
+    selected = environment_name or environment.get("name")
+    if selected:
+        revision = environment.get("revision") if environment_name is None else None
+        profile = registered_environment(home or ForgeHome.resolve(), selected, revision, strict=True)
+        shell = {"path": profile["activation"], "sha256": profile["files"]["activate.sh"]}
+    elif environment.get("shell"):
         path = (source / Path(environment["shell"]).expanduser()).resolve()
         if not path.is_file():
             raise ForgeError(f"Environment script is not a file: {path}")
@@ -131,5 +138,7 @@ def make_plan(suite: dict, run_dir: Path) -> dict:
         steps.append(item)
     return {"schema_version": 1, "suite_id": config["id"], "suite_path": suite["path"],
             "suite_sha256": suite["sha256"], "bash": bash,
-            "environment_shell": shell, "inputs": inputs, "steps": steps}
+            "environment_shell": shell, "environment_profile": profile,
+            "environment_selection_source": "cli" if environment_name else "suite",
+            "inputs": inputs, "steps": steps}
 

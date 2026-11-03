@@ -15,7 +15,9 @@ import sys
 import time
 
 from . import __version__
-from .storage import ForgeError, ForgeHome, digest, new_id, now, write_json
+from .environment import VARIABLES, probe_command
+from .environment_registry import verify as verify_environment
+from .storage import ForgeError, ForgeHome, digest, new_id, now, read_json, write_json
 from .suite import load_suite, make_plan
 
 
@@ -49,14 +51,14 @@ def _artifact(source: Path, cwd: Path, destination: Path) -> dict:
             "sha256": before, "bytes": destination.stat().st_size}
 
 
-def execute(home: ForgeHome, suite_path: Path, progress=None) -> dict:
+def execute(home: ForgeHome, suite_path: Path, progress=None, *, environment_name: str | None = None) -> dict:
     if os.name != "posix":
         raise ForgeError("The local runner currently supports POSIX systems; use WSL on Windows.")
     config = home.require_initialized()
     suite = load_suite(suite_path)
     run_id = new_id("run")
     run_dir = home.root / "runs" / run_id
-    plan = make_plan(suite, run_dir)
+    plan = make_plan(suite, run_dir, home, environment_name)
     run_dir.mkdir(parents=True, mode=0o700)
     request = {"schema_version": 1, "run_id": run_id, "suite_id": plan["suite_id"],
                "host_id": config["host_id"], "hostname": socket.gethostname(),
@@ -81,6 +83,16 @@ def execute(home: ForgeHome, suite_path: Path, progress=None) -> dict:
             shutil.copyfile(shell["path"], snapshot)
             if digest(snapshot) != shell["sha256"]:
                 raise ForgeError("Environment script changed while preparing the run.", code=1)
+        profile = plan["environment_profile"]
+        if profile:
+            verify_environment(profile)
+            for relative, expected in profile["files"].items():
+                target = run_dir / "environment-profile" / relative
+                target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                shutil.copyfile(Path(profile["path"]) / relative, target)
+                if digest(target) != expected:
+                    raise ForgeError("Managed environment changed while archiving.", code=1)
+            write_json(run_dir / "environment-profile/manifest.json", profile)
         for item in plan["inputs"].values():
             target = Path(item["snapshot"])
             target.parent.mkdir(parents=True, mode=0o700)
@@ -92,9 +104,9 @@ def execute(home: ForgeHome, suite_path: Path, progress=None) -> dict:
             "system": platform.system(), "release": platform.release(),
             "machine": platform.machine(), "python": sys.version,
             "python_executable": sys.executable, "cpu_count": os.cpu_count(),
-            "environment_shell": shell,
+            "environment_shell": shell, "environment_profile": profile,
             "recorded_variables": {key: os.environ[key] for key in
-                                   ("PATH", "CC", "CXX", "CMAKE_PREFIX_PATH", "LOADEDMODULES")
+                                   VARIABLES
                                    if key in os.environ},
             "scope": "Controller interpreter and selected inherited variables; shell text is snapshotted.",
         })
@@ -133,6 +145,8 @@ def execute(home: ForgeHome, suite_path: Path, progress=None) -> dict:
 
 
 def _execute_step(step, plan, run_dir, step_dir, record, event):
+    if plan["environment_profile"]:
+        verify_environment(plan["environment_profile"])
     shell = plan["environment_shell"]
     if shell and digest(Path(shell["path"])) != shell["sha256"]:
         raise ForgeError("Environment script changed after planning.", code=1)
@@ -142,15 +156,7 @@ def _execute_step(step, plan, run_dir, step_dir, record, event):
     lines = ["#!/usr/bin/env bash", "set -e", "set -o pipefail"]
     if shell:
         lines.append("source " + shlex.quote(shell["path"]))
-    probe = (
-        "import json,os,shutil,sys; "
-        "from pathlib import Path; "
-        "keys=['PATH','CC','CXX','CMAKE_PREFIX_PATH','LOADEDMODULES']; "
-        "data={'schema_version':1,'variables':{k:os.environ[k] for k in keys if k in os.environ},"
-        "'tools':{k:shutil.which(k) for k in ['python','python3','cmake','make','cc','c++']}}; "
-        "Path(sys.argv[1]).write_text(json.dumps(data,indent=2)+'\\n')"
-    )
-    lines.append(shlex.join([sys.executable, "-c", probe, str(step_dir / "activation.json")]))
+    lines.append(probe_command(step_dir / "activation.json"))
     # Record resolution inside the activated shell, not the controller's PATH.
     if "argv" in step:
         lines.append('command -v -- "$1" > ' + shlex.quote(str(step_dir / "executable.txt")))
@@ -168,7 +174,8 @@ def _execute_step(step, plan, run_dir, step_dir, record, event):
     with (step_dir / "stdout.log").open("wb") as stdout, (step_dir / "stderr.log").open("wb") as stderr:
         try:
             process = subprocess.Popen(command, cwd=cwd, stdout=stdout, stderr=stderr,
-                                       env={**os.environ, **step["variables"]}, start_new_session=True)
+                                       env={**os.environ, **step["variables"]}, stdin=subprocess.DEVNULL,
+                                       start_new_session=True)
         except OSError as exc:
             record.update(status="failed", reason=str(exc))
             return
@@ -183,6 +190,9 @@ def _execute_step(step, plan, run_dir, step_dir, record, event):
             raise
         finally:
             record["elapsed_seconds"] = time.monotonic() - started
+            activation = step_dir / "activation.json"
+            if activation.is_file():
+                record["environment"] = read_json(activation)
     if record["status"] == "passed":
         try:
             for name in step["artifacts"]:

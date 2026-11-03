@@ -1,0 +1,16 @@
+include CHANGELOG.md
+recursive-include tests *.py
+
+# Git ignores do not control source distributions.
+exclude jfrel
+prune .github
+prune .agents
+prune .codex
+prune .claude
+prune .venv
+prune .pytest_cache
+prune .aws
+prune .ssh
+prune .pypi
+prune .twine
+global-exclude .DS_Store *.py[cod] .env .env.* .envrc .pypirc .pypirc.* .twinerc .pypi-token* release.env twine.env

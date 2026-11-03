@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "name", "version", "description", "source", "install", "check"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"},
+    "version": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}$"},
+    "description": {"type": "string"},
+    "homepage": {"type": "string"},
+    "provenance": {"type": "object"},
+    "depends": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "requires_tools": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z0-9_+.-]+$"}, "uniqueItems": true},
+    "source": {
+      "type": "object", "additionalProperties": false, "required": ["url", "sha256", "subdir"],
+      "properties": {
+        "url": {"type": "string", "pattern": "^(https|file)://"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "subdir": {"type": "string", "minLength": 1},
+        "patch_archive": {
+          "type": "object", "additionalProperties": false, "required": ["url", "sha256"],
+          "properties": {
+            "url": {"type": "string", "pattern": "^(https|file)://"},
+            "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+          }
+        }
+      }
+    },
+    "build": {"$ref": "#/$defs/commands"},
+    "install": {"$ref": "#/$defs/commands"},
+    "check": {"$ref": "#/$defs/commands"},
+    "environment": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "set": {"type": "object", "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}, "additionalProperties": {"type": "string"}},
+        "prepend": {"type": "object", "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}, "additionalProperties": {"type": "array", "items": {"type": "string", "minLength": 1}}}
+      }
+    }
+  },
+  "$defs": {
+    "commands": {
+      "type": "array", "minItems": 1,
+      "items": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+    }
+  }
+}
