@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.4
+
+### Added
+
+- Add an opt-in Bash/Zsh hook to activate the package environment after installation.
+
+### Changed
+
+- Cache parsed official source metadata and print large package lists compactly.
+
 ## 1.0.3
 
 ### Fixed

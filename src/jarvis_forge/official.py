@@ -75,19 +75,67 @@ def _cached_repository(home):
     return saved
 
 
+def _index_list_rows(path):
+    """Read only fields needed for listing; ignore large checksum and file lists."""
+    opener = lzma.open if path.name.endswith(".xz") else gzip.open
+    wanted = {"Package", "Binary", "Version", "Description"}
+    row, field = {}, None
+    try:
+        with opener(path, "rt", encoding="utf-8") as stream:
+            for raw in stream:
+                line = raw.rstrip("\r\n")
+                if not line:
+                    if row:
+                        yield row
+                    row, field = {}, None
+                elif line.startswith((" ", "\t")):
+                    if field in wanted:
+                        row[field] += "\n" + line[1:]
+                else:
+                    key, sep, value = line.partition(":")
+                    if not sep:
+                        raise ForgeError("Malformed Debian control field.")
+                    field = key
+                    if key in wanted:
+                        if key in row:
+                            raise ForgeError(f"Duplicate Debian control field: {key}")
+                        row[key] = value.lstrip()
+            if row:
+                yield row
+    except (lzma.LZMAError, gzip.BadGzipFile, UnicodeError, EOFError) as exc:
+        raise ForgeError(f"Cannot read official source index: {exc}", code=1) from exc
+
+
 def cached_packages(home, query="", *, exact=False, details=False):
     saved = _cached_repository(home)
     if saved is None:
         return []
+    index = Path(saved["snapshot"]["index"])
+    cache = _inside(home, home.root / "cache/apt/official-list.json")
+    rows = None
+    if not details and cache.is_file():
+        try:
+            data = read_json(cache)
+            if data.get("schema_version") == 1 and data.get("index_sha256") == saved["snapshot"]["index_sha256"] and isinstance(data.get("rows"), list):
+                rows = data["rows"]
+        except ForgeError:
+            pass  # Rebuild an incomplete or damaged derived cache.
+    if rows is None:
+        rows = list(_index_rows(index)) if details else list(_index_list_rows(index))
+        if not details:
+            try:
+                write_json(cache, {"schema_version": 1, "index_sha256": saved["snapshot"]["index_sha256"], "rows": rows})
+            except OSError:
+                pass  # A read-only cache must not prevent listing packages.
     result = []
-    for row in _index_rows(Path(saved["snapshot"]["index"])):
+    for row in rows:
         names = {row["Package"], *(n.strip() for n in row.get("Binary", "").replace("\n", " ").split(",") if n.strip())}
         for name in sorted(names):
             if (name == query if exact else query.lower() in (name + " " + row.get("Description", "")).lower()):
                 entry = {"name": name, "version": row["Version"], "source_package": row["Package"],
-                               "description": row.get("Description", f"Official source package {row['Package']}"),
-                               "origin": f"official:{saved['source']['origin']}:{saved['source']['suite']}",
-                               "status": "official-index"}
+                         "description": row.get("Description", f"Official source package {row['Package']}"),
+                         "origin": f"official:{saved['source']['origin']}:{saved['source']['suite']}",
+                         "status": "official-index"}
                 if details:
                     entry["source_record"] = row
                 result.append(entry)

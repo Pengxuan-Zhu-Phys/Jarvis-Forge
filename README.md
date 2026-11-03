@@ -50,6 +50,18 @@ jforge --home .forge-home compare <older-run-id> <newer-run-id>
 
 `--json`, `--home` and `--debug` work before or after the command. `--json` emits one JSON object on stdout, while progress goes to stderr. `compare --check` fails on changed, missing, corrupted or unsuccessful evidence; ordinary comparison only describes differences. Comparison uses exact artifact bytes; scientific equivalence and performance regression policies remain outside the current comparison mode.
 
+## Automatic package environment (Bash and Zsh)
+
+A child process cannot change its parent shell. Enable the shell integration once in each interactive session:
+
+```bash
+eval "$(command jforge apt shell-init)"
+```
+
+Add that line to your own `~/.bashrc` or `~/.zshrc` to enable it for future shells. The hook sources the current package environment on startup and refreshes it after successful installs and upgrades. It uses the selected Forge home, including an explicit `--home`. Forge does not edit your startup files. Existing shells need to enable the hook themselves. Previously exported values are not removed from a running shell on upgrades or removals; start a fresh shell to clear old values. The hook is intended for interactive use, not JSON or script automation.
+
+The first `apt list` after a repository refresh builds a local derived index. Subsequent listings reuse it; complete distribution listings are printed as compact lines. `apt list --installed` only lists installed packages.
+
 ## User directories and package queries
 
 Forge uses `~/.jarvis-forge` until you choose a default with `init`. `jforge init --home /data/my-forge` initializes that directory and remembers it for later commands, including commands started in other terminals and Python environments. Home selection follows `--home`, `JFORGE_HOME`, the remembered default, then `~/.jarvis-forge`, in that order. Using `--home` with another command only overrides that invocation.

@@ -63,7 +63,14 @@ def list_packages(ctx: typer.Context,
         known = {p["name"] for p in packages}
         packages.extend(p for p in cached_packages(ctx.obj.home) if p["name"] not in known
                         and fnmatch.fnmatchcase(p["name"], pattern))
-    _emit(ctx, "list", packages=[p for p in packages if fnmatch.fnmatchcase(p["name"], pattern)])
+    packages = [p for p in packages if fnmatch.fnmatchcase(p["name"], pattern)]
+    # Rich tables calculate widths over every cell, which is costly for a whole distribution.
+    if not ctx.obj.as_json and len(packages) > 1000:
+        import sys
+        for item in packages:
+            sys.stdout.write(f"{item['name']} {item['version']} [{item['status']}]\n")
+    else:
+        _emit(ctx, "list", packages=packages)
 
 
 @app.command()
@@ -296,3 +303,40 @@ def env(ctx: typer.Context,
         print(activation)
     else:
         _emit(ctx, "env", activation=activation, source_command="source " + shlex.quote(activation))
+
+
+@app.command("shell-init")
+def shell_init(ctx: typer.Context):
+    """Print a Bash/Zsh hook for automatic activation after package changes."""
+    if ctx.obj.as_json:
+        raise ForgeError("shell-init cannot be used with --json.")
+    print(r'''# Add eval "$(command jforge apt shell-init)" to your shell startup file.
+jforge() {
+    local _jf_arg _jf_next=0 _jf_home='' _jf_apt=0 _jf_change=0 _jf_path
+    for _jf_arg in "$@"; do
+        if [ "$_jf_next" = 1 ]; then _jf_home=$_jf_arg; _jf_next=0; continue; fi
+        case "$_jf_arg" in
+            --) break ;;
+            --home) _jf_next=1 ;;
+            --home=*) _jf_home=${_jf_arg#--home=} ;;
+            apt) _jf_apt=1 ;;
+            install|reinstall|upgrade|full-upgrade|satisfy) [ "$_jf_apt" = 1 ] && _jf_change=1 ;;
+        esac
+    done
+    if command jforge "$@"; then
+        if [ "$_jf_change" = 1 ]; then
+            if [ -n "$_jf_home" ]; then
+                _jf_path=$(command jforge --home "$_jf_home" apt env --path 2>/dev/null) || _jf_path=''
+            else
+                _jf_path=$(command jforge apt env --path 2>/dev/null) || _jf_path=''
+            fi
+            [ -z "$_jf_path" ] || source "$_jf_path"
+        fi
+    else
+        return $?
+    fi
+}
+_jforge_apt_initial=$(command jforge apt env --path 2>/dev/null) || _jforge_apt_initial=''
+if [ -n "$_jforge_apt_initial" ]; then source "$_jforge_apt_initial"; fi
+unset _jforge_apt_initial
+''')
