@@ -493,7 +493,8 @@ def _candidate(home, op, roots, previous):
 def _snapshot(home, envdir, op, label="snapshot"):
     bridge = Path(__file__).with_name("spack_bridge.py")
     return _json(
-        run(home, ["python", str(bridge), "snapshot"], op, label, envdir=envdir), label
+        run(home, ["python", str(bridge), "installed" if label == "installed" else "snapshot"],
+            op, label, envdir=envdir), label
     )
 
 

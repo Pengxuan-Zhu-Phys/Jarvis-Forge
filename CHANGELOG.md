@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.11
+
+- Activate successfully installed binary packages by verifying the requested roots and their transitive link and run dependencies. Build-only tools remain in the full plan and lockfile.
+
 ## 1.0.10
 
 ### Fixed

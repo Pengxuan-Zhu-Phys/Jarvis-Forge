@@ -12,8 +12,9 @@ import re
 import sys
 
 
-def snapshot():
+def snapshot(runtime_only=False):
     import spack.environment as ev
+    import spack.traverse
     import spack.store
     import spack.user_environment as uenv
 
@@ -23,7 +24,10 @@ def snapshot():
     roots = list(environment.concrete_roots())
     root_hashes = {s.dag_hash() for s in roots}
     packages = []
-    for spec in environment.all_specs():
+    # A binary installation may omit tools used only to build the archive.
+    specs = (spack.traverse.traverse_nodes(roots, deptype=("link", "run"))
+             if runtime_only else environment.all_specs())
+    for spec in specs:
         installed = bool(spec.external or spack.store.STORE.db.query_one(spec))
         packages.append(
             {
@@ -96,8 +100,8 @@ def render(path):
 
 
 if __name__ == "__main__":
-    if sys.argv[1] == "snapshot":
-        snapshot()
+    if sys.argv[1] in {"snapshot", "installed"}:
+        snapshot(runtime_only=sys.argv[1] == "installed")
     elif sys.argv[1] == "render":
         render(sys.argv[2])
     else:
