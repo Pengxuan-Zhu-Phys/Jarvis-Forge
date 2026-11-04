@@ -118,7 +118,7 @@ Scripts are copied, not relocated together with their dependencies: use stable a
 
 ## User-local packages with Spack
 
-All package operations use Spack. Existing source installations are retained as read-only history; the first package write prepares the default Spack profile:
+All package operations use Spack. A bundled native Spack repository adds neofetch 7.1.0 and is registered automatically for existing profiles. Existing source installations are retained as read-only history; the first package write prepares the default Spack profile:
 
 ```bash
 jforge apt import spack

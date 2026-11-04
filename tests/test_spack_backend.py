@@ -309,3 +309,35 @@ def test_activation_cleans_inherited_spack_store_paths(managed, tmp_path):
         check=True,
     )
     assert result.stdout == "/usr/bin:/bin"
+
+
+def test_extension_repository_is_frozen_and_survives_policy_refresh(
+    managed, tmp_path, monkeypatch
+):
+    import shutil
+
+    home, calls = managed
+    source = Path(b.__file__).with_name("spack_repo")
+    fake_module = tmp_path / "controller" / "spack_backend.py"
+    fake_module.parent.mkdir()
+    shutil.copytree(source, fake_module.with_name("spack_repo"))
+    monkeypatch.setattr(b, "__file__", str(fake_module))
+    first = b._extension_repository(home)
+    recipe = first / "packages/neofetch/package.py"
+    original = recipe.read_bytes()
+    assert 'depends_on("bash' in original.decode()
+    # An updated controller gets a new snapshot; old environment paths remain valid.
+    editable = (
+        fake_module.with_name("spack_repo") / "jforge/packages/neofetch/package.py"
+    )
+    editable.write_text(editable.read_text() + "\n# next recipe revision\n")
+    second = b._extension_repository(home)
+    assert second != first
+    assert recipe.read_bytes() == original
+    (b.root(home) / "config/repos.yaml").write_text(
+        "repos: {builtin: /pinned/upstream}\n"
+    )
+    assert b._extension_repository(home) == second
+    config = yaml.safe_load((b.root(home) / "config/repos.yaml").read_text())["repos"]
+    assert config["jforge"] == str(second)
+    assert config["builtin"] == "/pinned/upstream"

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.12
+
+- Add a bundled native Spack repository providing neofetch 7.1.0 with a checksum-pinned upstream archive and a Bash runtime dependency. Register immutable repository snapshots for existing and new profiles, including recipe updates and dependency plans.
+
 ## 1.0.11
 
 - Activate successfully installed binary packages by verifying the requested roots and their transitive link and run dependencies. Build-only tools remain in the full plan and lockfile.

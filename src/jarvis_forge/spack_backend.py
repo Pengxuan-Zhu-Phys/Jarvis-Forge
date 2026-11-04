@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import fnmatch
 import json
 import math
@@ -436,7 +437,42 @@ def bootstrap(home, *, python=None, progress=None):
         return result
 
 
+def _extension_repository(home):
+    """Register a frozen native Spack repository in the managed policy."""
+    source = Path(__file__).with_name("spack_repo") / "jforge"
+    files = sorted(p for p in source.rglob("*") if p.suffix in {".py", ".yaml"})
+    fingerprint = hashlib.sha256()
+    for file in files:
+        fingerprint.update(str(file.relative_to(source)).encode())
+        fingerprint.update(file.read_bytes())
+    destination = (
+        root(home)
+        / "repositories"
+        / ("jforge-" + fingerprint.hexdigest())
+        / "spack_repo/jforge"
+    )
+    if not destination.exists():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name("jforge-" + uuid.uuid4().hex)
+        try:
+            shutil.copytree(
+                source, temporary, ignore=shutil.ignore_patterns("__pycache__")
+            )
+            temporary.rename(destination)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+    config = root(home) / "config/repos.yaml"
+    repositories = yaml.safe_load(config.read_text())["repos"]
+    repositories.pop("jforge", None)
+    config.write_text(
+        yaml.safe_dump({"repos": {"jforge": str(destination), **repositories}})
+    )
+    return destination
+
+
 def _refresh_catalog(home, op):
+    _extension_repository(home)
     output = run(home, ["list", "--format", "name_only"], op, "catalog", progress=None)
     names = sorted(
         {
@@ -457,6 +493,12 @@ def _refresh_catalog(home, op):
 def catalog(home, pattern="*", query=None):
     cache = root(home) / "catalog.json"
     names = read_json(cache)["packages"] if cache.exists() else []
+    if configured(home):
+        extensions = Path(__file__).with_name("spack_repo") / "jforge/packages"
+        names = sorted(
+            set(names)
+            | {p.parent.name.replace("_", "-") for p in extensions.glob("*/package.py")}
+        )
     active = {p["name"]: p for p in current(home)["packages"]}
     return [
         {
@@ -470,6 +512,7 @@ def catalog(home, pattern="*", query=None):
 
 
 def _candidate(home, op, roots, previous):
+    _extension_repository(home)
     directory = root(home) / "environments" / op.name
     directory.mkdir(parents=True)
     (directory / "spack.yaml").write_text(
@@ -493,8 +536,18 @@ def _candidate(home, op, roots, previous):
 def _snapshot(home, envdir, op, label="snapshot"):
     bridge = Path(__file__).with_name("spack_bridge.py")
     return _json(
-        run(home, ["python", str(bridge), "installed" if label == "installed" else "snapshot"],
-            op, label, envdir=envdir), label
+        run(
+            home,
+            [
+                "python",
+                str(bridge),
+                "installed" if label == "installed" else "snapshot",
+            ],
+            op,
+            label,
+            envdir=envdir,
+        ),
+        label,
     )
 
 
@@ -800,6 +853,7 @@ def details(home, spec):
             "hint": "jforge apt import spack",
         }
     with locked(home), operation(home, "spack-show", {"spec": spec}) as (op, result):
+        _extension_repository(home)
         rows = _json(
             run(home, ["list", "--format", "version_json", name], op, "details"),
             "package details",
