@@ -27,6 +27,7 @@ from .storage import ForgeError, digest, now, package_name, read_json, write_jso
 
 REPOSITORIES = {"debian": "https://deb.debian.org/debian", "ubuntu": "https://archive.ubuntu.com/ubuntu"}
 ADAPTERS = {"eigen3": "eigen", "redis": "redis"}
+AUTOMATIC_ADAPTER_REVISION = 2
 DEFAULT_SOURCE = {"origin": "debian", "suite": "bookworm", "component": "main", "keyring": None}
 
 
@@ -504,6 +505,10 @@ def _member_text(archive, root, name):
 
 
 def _automatic_recipe(profile, row, source, backend, archive):
+    from .upstream_adapters import recipe as native_recipe
+    native = native_recipe(profile, row, source, backend, archive, version=_upstream_version(row["Version"]))
+    if native is not None:
+        return native
     # Metadata-only packages are dependency nodes, not empty native builds.
     if row["Package"] in {"boost-defaults", "libjpeg8-empty", "mpi-defaults", "blas-defaults"}:
         return {"schema_version": 2, "name": profile["name"], "version": _upstream_version(row["Version"]),
@@ -679,6 +684,7 @@ def _candidate(home, profile, row, snapshot, directory):
         recipe["provenance"]["build_adapter"] = "eigen-headers"
     if profile.get("automatic"):
         recipe["provenance"]["automatic_adapter"] = True
+        recipe["provenance"]["automatic_adapter_revision"] = AUTOMATIC_ADAPTER_REVISION
     validate_recipe(recipe, "official source import")
     return recipe, {"detected_backend": backend, "patches": patch_names, "components": source.get("components", []),
                     "debian_build_dependencies": {k: v for k, v in row.items() if k.startswith("Build-Depends")},
@@ -902,7 +908,7 @@ def ensure_recipes(home, specs, directory, progress=None):
             session[_source_key(source)] = cached["snapshot"]
     while pending:
         req, chain = pending.pop(0)
-        marker = tuple(sorted(req.items()))
+        marker = json.dumps(req, sort_keys=True)
         if marker in visited:
             continue
         visited.add(marker)
@@ -916,7 +922,9 @@ def ensure_recipes(home, specs, directory, progress=None):
                     snapshot_recipe = installed_recipe(home, record)
                     if snapshot_recipe and matches(snapshot_recipe, req):
                         choices.append(snapshot_recipe)
-        legacy = any(p.get("provenance", {}).get("automatic_adapter") and p["schema_version"] == 1 for p in choices)
+        legacy = any(p.get("provenance", {}).get("automatic_adapter") and
+                     (p["schema_version"] == 1 or p.get("provenance", {}).get("automatic_adapter_revision", 0) < AUTOMATIC_ADAPTER_REVISION)
+                     for p in choices)
         if not choices or legacy:
             previous = next((p for p in _load_profiles(home)["imports"] if p["name"] == req["name"]), None)
             if not source and not previous:

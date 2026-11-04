@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.7
+
+### Fixed
+
+- Read unified-diff structure without decoding patch bodies as UTF-8. Preserve original patch bytes, including legacy translations, and retain path-escape checks. Invalid quilt-series filenames produce a contextual error.
+- Give SQLite and its Readline, ncurses, Tcl 8.6 and zlib prerequisites explicit native build contracts. Keep actual library and source-generation dependencies while excluding distribution-only documentation, packaging and multilib steps; retain SQLite CLI Readline support.
+- Build narrow and wide ncurses libraries, install Tcl's bundled timezone data, and check SQLite with a real SQL command after installation. Record every dependency adaptation; unknown prerequisites remain required.
+- Regenerate cached automatic recipes after adapter-policy changes, including existing schema 2 recipes. Accept structured official version constraints during dependency discovery and tolerate non-UTF-8 tool-version output.
+
+### Compatibility and upgrade notes
+
+- Run `jforge apt update` after upgrading, then retry `jforge apt install sqlite3`. Existing installation history and source environments remain available. Automatic adapter changes can cause affected packages to rebuild.
+- Native contracts build user-prefix upstream outputs. They do not reproduce Debian packaging, documentation, extra architectures or SQLite's Tcl extension; Tcl remains a required source-generation tool. Availability on a particular HPC still depends on its selected compiler and build tools.
+
 ## 1.0.6
 
 ### Added

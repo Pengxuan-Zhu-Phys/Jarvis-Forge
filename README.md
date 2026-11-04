@@ -131,6 +131,8 @@ jforge apt update
 jforge apt install libgsl-dev
 ```
 
+SQLite uses explicit native build contracts for its Tcl source generator, Readline, ncurses and zlib dependencies. Distribution-only documentation, package configuration and multilib steps are excluded with recorded reasons; required libraries and unknown prerequisites remain in the graph. The CLI keeps Readline support; Tcl extension bindings are disabled while the Tcl interpreter remains available for source generation. ncurses installs narrow/wide libraries and Tcl installs its bundled timezone database. Patch contents retain their original bytes, including non-UTF-8 translations.
+
 Dependency discovery, external probes and readiness records are saved under the printed operation directory. New dependency fingerprints can cause a one-time rebuild. Full design and recipe examples: [dependency installation](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_DEPENDENCIES.md).
 
 `jforge apt` follows familiar apt command names and operates on Forge recipes and user prefixes. It does not invoke system apt, request sudo, or edit shell startup files. Import an entire official source index with `apt import` without a package name; source archives are fetched on demand during installation.

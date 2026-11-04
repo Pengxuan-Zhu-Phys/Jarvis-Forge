@@ -125,7 +125,7 @@ def _context(recipes):
     probes = {}
     for name, path in tools.items():
         try:
-            probe = subprocess.run([*commands[name], "--version"], capture_output=True, text=True, timeout=10)
+            probe = subprocess.run([*commands[name], "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         except subprocess.TimeoutExpired as exc:
             raise ForgeError(f"Build-tool probe timed out: {path}") from exc
         probes[name] = {"path": path, "argv": [*commands[name], "--version"],
@@ -623,7 +623,11 @@ def quilt_patches(packaging):
             raise ForgeError(f"Patch series has a missing target: {series}")
         return []
     result = []
-    for line in series.read_text(encoding="utf-8").splitlines():
+    try:
+        entries = series.read_text(encoding="utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise ForgeError(f"Quilt series filenames must be UTF-8: {series}") from exc
+    for line in entries:
         fields = shlex.split(line, comments=True)
         if not fields:
             continue
@@ -634,14 +638,17 @@ def quilt_patches(packaging):
             raise ForgeError(f"Unsafe or missing quilt patch: {fields[0]}")
         strip = int(fields[1][-1]) if len(fields) == 2 else 1
         headers = 0
-        for text in path.read_text(encoding="utf-8").splitlines():
-            if text.startswith(("--- ", "+++ ")):
+        # Diff bodies and comments may be Latin-1 or contain binary bytes.
+        # Inspect structural headers as bytes; pass the original file unchanged
+        # to patch. Filesystem decoding preserves non-UTF-8 filename bytes.
+        for text in path.read_bytes().splitlines():
+            if text.startswith((b"--- ", b"+++ ")):
                 headers += 1
-                name = text[4:].split("\t", 1)[0].split(" ", 1)[0]
+                name = os.fsdecode(text[4:].split(b"\t", 1)[0].split(b" ", 1)[0])
                 if name == "/dev/null":
                     continue
                 parts = Path(name).parts
-                if Path(name).is_absolute() or ".." in parts or len(parts) <= strip or name.startswith(('"', "'")):
+                if Path(name).is_absolute() or ".." in parts or len(parts) <= strip or "\x00" in name or name.startswith(('"', "'")):
                     raise ForgeError(f"Unsafe patch target: {name}")
         if headers < 2:
             raise ForgeError(f"Only unified-diff quilt patches are supported: {path.name}")

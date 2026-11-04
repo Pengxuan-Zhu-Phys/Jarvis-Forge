@@ -1,4 +1,4 @@
 """Independent command orchestration and acceptance evidence for Jarvis."""
 
-__version__ = "1.0.6"
+__version__ = "1.0.7"
 

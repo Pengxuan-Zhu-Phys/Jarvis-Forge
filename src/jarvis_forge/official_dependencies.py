@@ -53,7 +53,7 @@ def _arch_match(value, arch):
     return all(want == "any" or want == actual for want, actual in zip(pattern, target))
 
 
-def parse(text, arch):
+def parse(text, arch, *, active_profiles=()):
     if not text.strip():
         return []
     result = []
@@ -76,9 +76,9 @@ def parse(text, arch):
             if any(_arch_match(a, arch) for a in negative):
                 continue
             profiles = item.get("restrictions") or []
-            # No implicit nocheck/nodoc/cross profile: upstream adapters must
-            # actually disable the corresponding work before enabling a profile.
-            if profiles and not any(all(not term.enabled for term in formula) for formula in profiles):
+            # Only an explicit native adapter may enable nobiarch. Other Debian
+            # test/documentation profiles remain inactive.
+            if profiles and not any(all(term.enabled == (term.profile in active_profiles) for term in formula) for formula in profiles):
                 continue
             atom = {"name": name}
             if item.get("version"):
@@ -124,9 +124,21 @@ def attach(recipe, row, requested, binary_rows, arch):
         # Ask for a concrete output rather than guessing its runtime closure.
         raise ForgeError(f"No binary output {requested!r} matches source {row['Package']}={row['Version']}.",
                          hint="Install one of these binary package names: " + ", ".join(sorted(own)[:12]))
-    relationships = []
+    from .upstream_adapters import ADAPTERS, dependency as adapt_dependency
+    adapter = recipe["provenance"].get("build_adapter")
+    active_profiles = ("nobiarch",) if adapter in ADAPTERS.values() else ()
+    relationships, decisions = [], []
+    def relationship(kind, group):
+        changed, reason = adapt_dependency(adapter, kind, group)
+        if reason:
+            decisions.append({"kind": kind, "alternatives": group,
+                              "disposition": "native-build-contract", "replacement": changed, "reason": reason})
+        return changed
     for field in ("Build-Depends", "Build-Depends-Arch", "Build-Depends-Indep"):
-        relationships.extend(("build", group) for group in parse(row.get(field, ""), arch))
+        for group in parse(row.get(field, ""), arch, active_profiles=active_profiles):
+            changed = relationship("build", group)
+            if changed:
+                relationships.append(("build", changed))
     # Follow all internal output edges before discarding self edges at source level.
     seen, pending = set(), [requested]
     while pending:
@@ -136,6 +148,9 @@ def attach(recipe, row, requested, binary_rows, arch):
         seen.add(name)
         for field in ("Pre-Depends", "Depends"):
             for group in parse(own[name].get(field, ""), arch):
+                group = relationship("run", group)
+                if not group:
+                    continue
                 internal = [a for a in group if a["name"] in versions and
                             (not a.get("relation") or (versions[a["name"]] is not None and version_matches(versions[a["name"]], a["relation"], a["version"])))]
                 if internal:
@@ -147,7 +162,7 @@ def attach(recipe, row, requested, binary_rows, arch):
         for group in parse(own[name].get("Provides", ""), arch):
             for atom in group:
                 provided.setdefault(atom["name"], atom.get("version"))
-    mapped, external, decisions = [], [], []
+    mapped, external = [], []
     for kind, group in relationships:
         adapter = recipe.get("provenance", {}).get("build_adapter")
         if kind == "build" and (adapter in {"metapackage", "boost-headers"} or (adapter == "eigen-headers" and not any(a["name"] == "cmake" for a in group))):
@@ -165,7 +180,7 @@ def attach(recipe, row, requested, binary_rows, arch):
             external.append({**next(a for a in group if a["name"] == "build-essential"), "kind": "build"})
             continue
         tool = next((a for a in group if a["name"] in TOOLS and shutil.which(TOOLS[a["name"]])), None)
-        system = next((a for a in group if a["name"] in {"libc6", "libc6-dev", "libgcc-s1", "libstdc++6"}), None)
+        system = next((a for a in group if a["name"] in {"libc6", "libc6-dev", "libc-dev", "libgcc-s1", "libstdc++6"}), None)
         chosen = tool or system
         if chosen:
             if kind == "run" and chosen["name"] in {"libc6", "libgcc-s1", "libstdc++6"}:
@@ -197,7 +212,7 @@ def attach(recipe, row, requested, binary_rows, arch):
     recipe["provenance"].update(binary_versions=provided, binary_package=requested,
                                  external_dependencies=external, dependency_decisions=decisions,
                                  dependency_policy="repository relationships with explicit upstream adapter decisions",
-                                 dependency_architecture=arch)
+                                 dependency_architecture=arch, dependency_build_profiles=list(active_profiles))
     return recipe
 
 
@@ -216,6 +231,9 @@ def check_external(recipes, evidence_path=None):
                 entry["commands"].append(command_record)
                 save()
                 try:
+                    if kwargs.get("text"):
+                        kwargs.setdefault("encoding", "utf-8")
+                        kwargs.setdefault("errors", "replace")
                     result = subprocess.run(argv, **kwargs)
                     command_record.update(stdout=result.stdout, stderr=result.stderr, exit_code=result.returncode, finished_at=now())
                     save()
@@ -235,7 +253,7 @@ def check_external(recipes, evidence_path=None):
                 version = found[0] if found else None
                 if result.returncode:
                     raise ForgeError(f"External tool probe failed for {recipe['name']} -> {name}: {output[-1000:]}")
-            elif name == "build-essential" or name == "libc6-dev":
+            elif name in {"build-essential", "libc6-dev", "libc-dev"}:
                 # Check real compiler/header availability rather than pretending
                 # the Debian build-essential metapackage is installed on an HPC.
                 if atom.get("relation"):

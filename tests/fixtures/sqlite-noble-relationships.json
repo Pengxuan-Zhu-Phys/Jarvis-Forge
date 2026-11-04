@@ -1,0 +1,330 @@
+{
+  "origin": "ubuntu",
+  "suite": "noble",
+  "components": [
+    "main",
+    "universe"
+  ],
+  "source": "Official Ubuntu noble Sources and Packages, including updates/security; relationships only",
+  "sources": [
+    {
+      "Package": "ncurses",
+      "Binary": "ncurses-base, ncurses-term, libtinfo6, libtinfo6-udeb, libncurses6, libncurses-dev, libncursesw6, libncursesw6-udeb, lib64tinfo6, lib64ncurses6, lib64ncursesw6, lib64ncurses-dev, lib32tinfo6, lib32ncurses6, lib32ncursesw6, lib32ncurses-dev, ncurses-bin, ncurses-examples, ncurses-doc",
+      "Version": "6.4+20240113-1ubuntu2.2",
+      "Build-Depends": "debhelper-compat (= 13), libgpm-dev [linux-any], pkgconf, autoconf-dickey (>= 2.52+20210509)",
+      "Build-Depends-Arch": "g++-multilib [amd64 i386 powerpc ppc64 s390 sparc] <!nobiarch>"
+    },
+    {
+      "Package": "readline",
+      "Binary": "libreadline8t64, libreadline8-udeb, lib64readline8, readline-common, readline-common-udeb, libreadline-dev, lib64readline-dev, rlfe, lib32readline8, lib32readline-dev, readline-doc",
+      "Version": "8.2-4build1",
+      "Build-Depends": "dpkg-dev (>= 1.22.5), debhelper (>= 13), libncurses-dev, lib32ncurses-dev [amd64 ppc64] <!nobiarch>, lib64ncurses-dev [i386 powerpc sparc s390] <!nobiarch>, mawk | awk, texinfo, gcc-multilib [amd64 i386 kfreebsd-amd64 powerpc ppc64 s390 sparc] <!nobiarch>"
+    },
+    {
+      "Package": "sqlite3",
+      "Binary": "lemon, sqlite3, sqlite3-doc, libsqlite3-0, libsqlite3-dev, libsqlite3-tcl, sqlite3-tools",
+      "Version": "3.45.1-1ubuntu2.8",
+      "Build-Depends": "debhelper-compat (= 13), autoconf (>= 2.59), libtool (>= 1.5.2), automake, chrpath, lynx, libreadline-dev, tcl8.6-dev"
+    },
+    {
+      "Package": "tcl8.6",
+      "Binary": "tcl8.6, libtcl8.6, tcl8.6-dev, tcl8.6-doc",
+      "Version": "8.6.14+dfsg-1build1",
+      "Build-Depends": "debhelper-compat (= 13), dpkg-dev (>= 1.16.1~), zlib1g-dev"
+    },
+    {
+      "Package": "zlib",
+      "Binary": "zlib1g, zlib1g-dev, zlib1g-udeb, lib64z1, lib64z1-dev, lib32z1, lib32z1-dev, libn32z1, libn32z1-dev, libx32z1, libx32z1-dev, minizip, libminizip1t64, libminizip-dev",
+      "Version": "1:1.3.dfsg-3.1ubuntu2.3",
+      "Build-Depends": "dpkg-dev (>= 1.22.5), debhelper (>= 13), gcc-multilib [amd64 i386 kfreebsd-amd64 mips mipsel powerpc ppc64 s390 sparc s390x mipsn32 mipsn32el mipsr6 mipsr6el mipsn32r6 mipsn32r6el mips64 mips64el mips64r6 mips64r6el x32] <!nobiarch>, autoconf"
+    }
+  ],
+  "binaries": [
+    {
+      "Package": "lib32readline-dev",
+      "Architecture": "amd64",
+      "Version": "8.2-4build1",
+      "Source": "readline",
+      "Provides": "lib32readline6-dev",
+      "Depends": "lib32readline8 (= 8.2-4build1), lib32ncurses-dev, libc6-dev-i386"
+    },
+    {
+      "Package": "lib32readline8",
+      "Architecture": "amd64",
+      "Version": "8.2-4build1",
+      "Source": "readline",
+      "Depends": "readline-common, lib32tinfo6 (>= 6), libc6-i386 (>= 2.38)"
+    },
+    {
+      "Package": "libreadline-dev",
+      "Architecture": "amd64",
+      "Version": "8.2-4build1",
+      "Source": "readline",
+      "Provides": "libreadline6-dev",
+      "Depends": "libreadline8t64 (= 8.2-4build1), libncurses-dev"
+    },
+    {
+      "Package": "libreadline8t64",
+      "Architecture": "amd64",
+      "Version": "8.2-4build1",
+      "Source": "readline",
+      "Provides": "libreadline8 (= 8.2-4build1)",
+      "Depends": "readline-common, libc6 (>= 2.38), libtinfo6 (>= 6)"
+    },
+    {
+      "Package": "libtcl8.6",
+      "Architecture": "amd64",
+      "Version": "8.6.14+dfsg-1build1",
+      "Source": "tcl8.6",
+      "Provides": "libtcl",
+      "Depends": "tzdata, libc6 (>= 2.38), zlib1g (>= 1:1.2.2)"
+    },
+    {
+      "Package": "readline-common",
+      "Architecture": "all",
+      "Version": "8.2-4build1",
+      "Source": "readline"
+    },
+    {
+      "Package": "readline-doc",
+      "Architecture": "all",
+      "Version": "8.2-4build1",
+      "Source": "readline"
+    },
+    {
+      "Package": "tcl8.6",
+      "Architecture": "amd64",
+      "Version": "8.6.14+dfsg-1build1",
+      "Depends": "libc6 (>= 2.34), libtcl8.6 (>= 8.6.0)"
+    },
+    {
+      "Package": "tcl8.6-dev",
+      "Architecture": "amd64",
+      "Version": "8.6.14+dfsg-1build1",
+      "Source": "tcl8.6",
+      "Depends": "dpkg-dev (>= 1.16.1~), zlib1g-dev, libtcl8.6 (= 8.6.14+dfsg-1build1), tcl8.6"
+    },
+    {
+      "Package": "tcl8.6-doc",
+      "Architecture": "all",
+      "Version": "8.6.14+dfsg-1build1",
+      "Source": "tcl8.6",
+      "Provides": "tcldoc"
+    },
+    {
+      "Package": "rlfe",
+      "Architecture": "amd64",
+      "Version": "8.2-4build1",
+      "Source": "readline",
+      "Provides": "readline-editor",
+      "Depends": "libc6 (>= 2.38), libreadline8t64"
+    },
+    {
+      "Package": "lib32ncurses-dev",
+      "Source": "ncurses",
+      "Architecture": "amd64",
+      "Version": "6.4+20240113-1ubuntu2.2",
+      "Depends": "lib32ncurses6 (= 6.4+20240113-1ubuntu2.2), lib32ncursesw6 (= 6.4+20240113-1ubuntu2.2), lib32tinfo6 (= 6.4+20240113-1ubuntu2.2), libncurses-dev (= 6.4+20240113-1ubuntu2.2), lib32c-dev"
+    },
+    {
+      "Package": "lib32ncurses6",
+      "Source": "ncurses",
+      "Architecture": "amd64",
+      "Version": "6.4+20240113-1ubuntu2.2",
+      "Depends": "lib32tinfo6 (= 6.4+20240113-1ubuntu2.2), libc6-i386 (>= 2.7)"
+    },
+    {
+      "Package": "lib32ncursesw6",
+      "Source": "ncurses",
+      "Architecture": "amd64",
+      "Version": "6.4+20240113-1ubuntu2.2",
+      "Depends": "lib32tinfo6 (= 6.4+20240113-1ubuntu2.2), libc6-i386 (>= 2.7)"
+    },
+    {
+      "Package": "lib32tinfo6",
+      "Source": "ncurses",
+      "Architecture": "amd64",
+      "Version": "6.4+20240113-1ubuntu2.2",
+      "Depends": "libc6-i386 (>= 2.34)"
+    },
+    {
+      "Package": "lib32z1",
+      "Source": "zlib",
+      "Architecture": "amd64",
+      "Version": "1:1.3.dfsg-3.1ubuntu2.3",
+      "Depends": "libc6-i386 (>= 2.4)"
+    },
+    {
+      "Package": "lib32z1-dev",
+      "Source": "zlib",
+      "Architecture": "amd64",
+      "Version": "1:1.3.dfsg-3.1ubuntu2.3",
+      "Provides": "lib32z-dev",
+      "Depends": "lib32z1 (= 1:1.3.dfsg-3.1ubuntu2.3), zlib1g-dev (= 1:1.3.dfsg-3.1ubuntu2.3), lib32c-dev"
+    },
+    {
+      "Package": "libncurses-dev",
+      "Source": "ncurses",
+      "Architecture": "amd64",
+      "Version": "6.4+20240113-1ubuntu2.2",
+      "Provides": "libncurses5-dev (= 6.4+20240113-1ubuntu2.2), libncursesw5-dev (= 6.4+20240113-1ubuntu2.2), libtinfo-dev (= 6.4+20240113-1ubuntu2.2), ncurses-dev",
+      "Depends": "libtinfo6 (= 6.4+20240113-1ubuntu2.2), libncurses6 (= 6.4+20240113-1ubuntu2.2), libncursesw6 (= 6.4+20240113-1ubuntu2.2), libc6-dev | libc-dev"
+    },
+    {
+      "Package": "libncurses6",
+      "Source": "ncurses",
+      "Architecture": "amd64",
+      "Version": "6.4+20240113-1ubuntu2.2",
+      "Depends": "libtinfo6 (= 6.4+20240113-1ubuntu2.2), libc6 (>= 2.34)"
+    },
+    {
+      "Package": "libncursesw6",
+      "Source": "ncurses",
+      "Architecture": "amd64",
+      "Version": "6.4+20240113-1ubuntu2.2",
+      "Depends": "libtinfo6 (= 6.4+20240113-1ubuntu2.2), libc6 (>= 2.34)"
+    },
+    {
+      "Package": "libsqlite3-0",
+      "Source": "sqlite3",
+      "Architecture": "amd64",
+      "Version": "3.45.1-1ubuntu2.8",
+      "Depends": "libc6 (>= 2.38)"
+    },
+    {
+      "Package": "libsqlite3-dev",
+      "Source": "sqlite3",
+      "Architecture": "amd64",
+      "Version": "3.45.1-1ubuntu2.8",
+      "Depends": "libsqlite3-0 (= 3.45.1-1ubuntu2.8), libc-dev"
+    },
+    {
+      "Package": "libtinfo6",
+      "Source": "ncurses",
+      "Architecture": "amd64",
+      "Version": "6.4+20240113-1ubuntu2.2",
+      "Depends": "libc6 (>= 2.34)"
+    },
+    {
+      "Package": "libx32z1",
+      "Source": "zlib",
+      "Architecture": "amd64",
+      "Version": "1:1.3.dfsg-3.1ubuntu2.3",
+      "Depends": "libc6-x32 (>= 2.16)"
+    },
+    {
+      "Package": "libx32z1-dev",
+      "Source": "zlib",
+      "Architecture": "amd64",
+      "Version": "1:1.3.dfsg-3.1ubuntu2.3",
+      "Provides": "libx32z-dev",
+      "Depends": "libx32z1 (= 1:1.3.dfsg-3.1ubuntu2.3), zlib1g-dev (= 1:1.3.dfsg-3.1ubuntu2.3), libc6-dev-x32"
+    },
+    {
+      "Package": "ncurses-base",
+      "Source": "ncurses",
+      "Architecture": "all",
+      "Version": "6.4+20240113-1ubuntu2.2",
+      "Provides": "ncurses-runtime"
+    },
+    {
+      "Package": "ncurses-bin",
+      "Source": "ncurses",
+      "Architecture": "amd64",
+      "Version": "6.4+20240113-1ubuntu2.2",
+      "Pre-Depends": "libc6 (>= 2.34), libtinfo6 (>= 6.4+20230603)"
+    },
+    {
+      "Package": "ncurses-doc",
+      "Source": "ncurses",
+      "Architecture": "all",
+      "Version": "6.4+20240113-1ubuntu2.2"
+    },
+    {
+      "Package": "ncurses-examples",
+      "Source": "ncurses",
+      "Architecture": "amd64",
+      "Version": "6.4+20240113-1ubuntu2.2",
+      "Depends": "libc6 (>= 2.34), libncursesw6 (>= 6.1+20180203), libtinfo6 (>= 6.4+20230603), libtinfo6 (<< 6.5~)"
+    },
+    {
+      "Package": "ncurses-term",
+      "Source": "ncurses",
+      "Architecture": "all",
+      "Version": "6.4+20240113-1ubuntu2.2",
+      "Provides": "foot-terminfo (= 6.4+20240113-1ubuntu2.2)",
+      "Depends": "ncurses-base (= 6.4+20240113-1ubuntu2.2)"
+    },
+    {
+      "Package": "sqlite3",
+      "Architecture": "amd64",
+      "Version": "3.45.1-1ubuntu2.8",
+      "Depends": "libc6 (>= 2.34), libreadline8t64 (>= 6.0), libsqlite3-0 (= 3.45.1-1ubuntu2.8), zlib1g (>= 1:1.2.0)"
+    },
+    {
+      "Package": "sqlite3-doc",
+      "Source": "sqlite3",
+      "Architecture": "all",
+      "Version": "3.45.1-1ubuntu2.8"
+    },
+    {
+      "Package": "zlib1g",
+      "Source": "zlib",
+      "Architecture": "amd64",
+      "Version": "1:1.3.dfsg-3.1ubuntu2.3",
+      "Provides": "libz1",
+      "Depends": "libc6 (>= 2.14)"
+    },
+    {
+      "Package": "zlib1g-dev",
+      "Source": "zlib",
+      "Architecture": "amd64",
+      "Version": "1:1.3.dfsg-3.1ubuntu2.3",
+      "Provides": "libz-dev",
+      "Depends": "zlib1g (= 1:1.3.dfsg-3.1ubuntu2.3), libc6-dev | libc-dev"
+    },
+    {
+      "Package": "lemon",
+      "Source": "sqlite3",
+      "Architecture": "amd64",
+      "Version": "3.45.1-1ubuntu2.8",
+      "Depends": "libc6 (>= 2.34)"
+    },
+    {
+      "Package": "libminizip-dev",
+      "Source": "zlib",
+      "Architecture": "amd64",
+      "Version": "1:1.3.dfsg-3.1ubuntu2.3",
+      "Depends": "libminizip1t64 (= 1:1.3.dfsg-3.1ubuntu2.3)"
+    },
+    {
+      "Package": "libminizip1t64",
+      "Source": "zlib",
+      "Architecture": "amd64",
+      "Version": "1:1.3.dfsg-3.1ubuntu2.3",
+      "Provides": "libminizip1 (= 1:1.3.dfsg-3.1ubuntu2.3)",
+      "Depends": "libc6 (>= 2.14), zlib1g (>= 1:1.1.4)"
+    },
+    {
+      "Package": "libsqlite3-tcl",
+      "Source": "sqlite3",
+      "Architecture": "amd64",
+      "Version": "3.45.1-1ubuntu2.8",
+      "Depends": "libc6 (>= 2.14), libsqlite3-0 (>= 3.38.0)"
+    },
+    {
+      "Package": "minizip",
+      "Source": "zlib",
+      "Architecture": "amd64",
+      "Version": "1:1.3.dfsg-3.1ubuntu2.3",
+      "Depends": "libc6 (>= 2.34), libminizip1t64, zlib1g (>= 1:1.2.11)"
+    },
+    {
+      "Package": "sqlite3-tools",
+      "Source": "sqlite3",
+      "Architecture": "amd64",
+      "Version": "3.45.1-1ubuntu2.8",
+      "Depends": "libc6 (>= 2.38), libtcl8.6 (>= 8.6.0)"
+    }
+  ]
+}
