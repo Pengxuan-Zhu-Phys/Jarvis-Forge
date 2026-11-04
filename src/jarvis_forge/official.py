@@ -27,7 +27,7 @@ from .storage import ForgeError, digest, now, package_name, read_json, write_jso
 
 REPOSITORIES = {"debian": "https://deb.debian.org/debian", "ubuntu": "https://archive.ubuntu.com/ubuntu"}
 ADAPTERS = {"eigen3": "eigen", "redis": "redis"}
-AUTOMATIC_ADAPTER_REVISION = 2
+AUTOMATIC_ADAPTER_REVISION = 3
 DEFAULT_SOURCE = {"origin": "debian", "suite": "bookworm", "component": "main", "keyring": None}
 
 
@@ -790,8 +790,53 @@ def _cached(home):
     return read_json(path) if path.exists() else {"schema_version": 1, "packages": [], "pending": []}
 
 
+def _retire_unused_automatic_imports(home, config, by_name):
+    """Keep obsolete discovery branches as reversible, inactive metadata.
+
+    Only retire candidates when the complete set of known user roots resolves.
+    Explicit imports and installed software are preserved; no prefixes or logs
+    are deleted. A later explicit request reactivates its saved profile.
+    """
+    from .dependencies import resolve
+    from .packages import state
+    roots = set(config.get("requested_packages", []))
+    roots.update(p["name"] for p in config["imports"] if not p.get("automatic"))
+    current = state(home)
+    roots.update(name for name, key in current["active"].items() if key in current["manual"])
+    try:
+        for path in (home.root / "operations").glob("*/request.json"):
+            record = read_json(path)
+            if record.get("action") in {"install", "reinstall", "upgrade", "full-upgrade"}:
+                for spec in record.get("request", {}).get("specs", []):
+                    try:
+                        roots.add(requirement(spec).name)
+                    except ForgeError:
+                        continue  # Invalid user input never introduced a profile.
+    except (ForgeError, OSError, TypeError):
+        return config, []  # Incomplete history cannot justify retiring candidates.
+    if not roots:
+        return config, []
+    candidates = [item["recipe"] for item in Catalog(home).items.values()
+                  if not item["origin"].startswith("official:")]
+    candidates += [item["recipe"] for item in by_name.values()]
+    try:
+        selected = resolve(candidates, sorted(roots))
+    except ForgeError:
+        return config, []  # Preserve legitimate unresolved roots and their reports.
+    needed = {r["name"] for r in selected}
+    retained, retired = [], []
+    for profile in config["imports"]:
+        (retired if profile.get("automatic") and profile["name"] not in needed else retained).append(profile)
+    if not retired:
+        return config, []
+    inactive = {p["name"]: p for p in config.get("inactive_imports", [])}
+    inactive.update({p["name"]: p for p in retired})
+    return dict(config, imports=retained, inactive_imports=list(inactive.values()), requested_packages=sorted(roots)), retired
+
+
 def refresh_official(home, operation_dir, *, refresh_repository=True):
-    profiles = _load_profiles(home)["imports"]
+    tracking = _load_profiles(home)
+    profiles = tracking["imports"]
     current = _cached(home)
     by_name = {entry["recipe"]["name"]: entry for entry in current["packages"]}
     pending, summaries, session = [], [], {}
@@ -807,14 +852,27 @@ def refresh_official(home, operation_dir, *, refresh_repository=True):
         if report["recipe"]:
             by_name[profile["name"]] = {"recipe": report["recipe"], "origin": f"official:{profile['origin']}:{profile['suite']}"}
         else:
+            previous_entry = by_name.get(profile["name"], {})
+            if previous_entry.get("recipe", {}).get("provenance", {}).get("automatic_adapter"):
+                # A refreshed automatic contract can reject a formerly guessed
+                # output. Do not keep the rejected recipe as an available provider.
+                by_name.pop(profile["name"], None)
             pending.append({"name": profile["name"], "reason": report["reason"],
                             "report": str(directory / "import-report.json")})
         summaries.append({"name": profile["name"], "debian_version": report["source_record"]["Version"],
                           "import_status": report["import_status"], "report": str(directory / "import-report.json"),
                           "apt_signature_verified": report["snapshot"]["apt_signature_verified"]})
+    tracking, retired = _retire_unused_automatic_imports(home, tracking, by_name)
+    if retired:
+        active_names = {p["name"] for p in tracking["imports"]}
+        pending = [p for p in pending if p["name"] in active_names]
+        summaries = [p for p in summaries if p["name"] in active_names]
+        write_json(_inside(home, home.root / "apt/official.json"), tracking)
     write_json(_inside(home, home.root / "cache/apt/official.json"), {
         "schema_version": 1, "packages": list(by_name.values()), "pending": pending, "updated_at": now()})
     result = {"official_imports": summaries, "pending_imports": pending}
+    if retired:
+        result["inactive_imports"] = [{"name": p["name"], "reason": "Not required by the resolved tracked root packages; retained for reactivation"} for p in retired]
     if snapshot:
         repository = _save_repository(home, source, snapshot)
         result.update(official_source=source, source_packages=repository["source_packages"], index=snapshot["index"])
@@ -854,6 +912,8 @@ def _store_import(home, profile, report, directory):
     target = profile["name"]
     profiles = _load_profiles(home)
     profiles["imports"] = [p for p in profiles["imports"] if p["name"] != target] + [profile]
+    if "inactive_imports" in profiles:
+        profiles["inactive_imports"] = [p for p in profiles["inactive_imports"] if p["name"] != target]
     if "source" not in profiles:
         profiles["source"] = source_selection(profile)
     current = _cached(home)
@@ -922,15 +982,18 @@ def ensure_recipes(home, specs, directory, progress=None):
                     snapshot_recipe = installed_recipe(home, record)
                     if snapshot_recipe and matches(snapshot_recipe, req):
                         choices.append(snapshot_recipe)
-        legacy = any(p.get("provenance", {}).get("automatic_adapter") and
+        inactive = _load_profiles(home).get("inactive_imports", [])
+        legacy = any(p["name"] == req["name"] for p in inactive) or any(p.get("provenance", {}).get("automatic_adapter") and
                      (p["schema_version"] == 1 or p.get("provenance", {}).get("automatic_adapter_revision", 0) < AUTOMATIC_ADAPTER_REVISION)
                      for p in choices)
         if not choices or legacy:
-            previous = next((p for p in _load_profiles(home)["imports"] if p["name"] == req["name"]), None)
+            previous = next((p for p in [*_load_profiles(home)["imports"], *inactive] if p["name"] == req["name"]), None)
             if not source and not previous:
                 errors.append({"chain": chain, "reason": "No compatible recipe or imported official source"})
                 continue
             profile = dict(previous, automatic=True) if previous else _profile(home, req["name"], **source, name=req["name"], automatic=True)
+            if source and source_family(profile) == source_family(source):
+                profile = {**profile, **source_selection(source)}
             if progress:
                 progress("Resolving " + " -> ".join(chain) + f" in {profile['origin']} {profile['suite']}")
             destination = _inside(home, directory / f"official-lookup-{len(reports)}")

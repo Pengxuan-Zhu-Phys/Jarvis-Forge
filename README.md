@@ -131,7 +131,7 @@ jforge apt update
 jforge apt install libgsl-dev
 ```
 
-SQLite uses explicit native build contracts for its Tcl source generator, Readline, ncurses and zlib dependencies. Distribution-only documentation, package configuration and multilib steps are excluded with recorded reasons; required libraries and unknown prerequisites remain in the graph. The CLI keeps Readline support; Tcl extension bindings are disabled while the Tcl interpreter remains available for source generation. ncurses installs narrow/wide libraries and Tcl installs its bundled timezone database. Patch contents retain their original bytes, including non-UTF-8 translations.
+SQLite uses explicit native build contracts for its Tcl source generator, Readline, ncurses and zlib dependencies. Distribution-only documentation, package configuration and multilib steps are excluded with recorded reasons; required libraries and unknown prerequisites remain in the graph. The CLI keeps Readline support; Tcl extension bindings are disabled while the Tcl interpreter remains available for source generation. ncurses installs narrow/wide libraries and Tcl installs its bundled timezone database. Patch contents retain their original bytes, including non-UTF-8 translations. Dedicated native contracts expose only their documented installed output aliases, so an existing Tcl development provider can satisfy SQLite's source-generator requirement. Forge stores its version metadata independently of third-party parser objects.
 
 Dependency discovery, external probes and readiness records are saved under the printed operation directory. New dependency fingerprints can cause a one-time rebuild. Full design and recipe examples: [dependency installation](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_DEPENDENCIES.md).
 
@@ -176,6 +176,8 @@ The catalog combines configured recipes and the imported official source index. 
 jforge apt edit-sources --add /path/to/recipes
 jforge apt update
 ```
+
+When every known requested root resolves, update retains obsolete automatic discovery branches as inactive metadata, including unrelated candidates from earlier failed dependency expansion. Explicit imports, requested roots, installed prefixes and logs remain available; an explicit install reactivates a saved branch. Rejected automatic recipes are removed from available candidates. Incomplete history or unresolved roots preserve tracking conservatively.
 
 Bundled recipes change with Forge releases; `update` refreshes the selected official source index, configured recipe sources and tracked official recipes. Use `update --recipes-only` or `install --no-official` for recipe-only operation. `upgrade` resolves newer compatible versions from that catalog. `full-upgrade` uses the same source-recipe resolver and retains old instances; it performs no system-wide removals. Recipe commands are trusted build instructions, not sandboxed code. See the [package manager design and recipe format](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md).
 

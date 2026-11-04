@@ -10,6 +10,7 @@ import re
 
 from jsonschema import Draft202012Validator
 from packaging.requirements import InvalidRequirement, Requirement
+from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion, Version
 import yaml
 
@@ -32,12 +33,16 @@ class DebianSpecifier:
         return version_matches(str(value), self.relation, self.version)
 
 
-@dataclass
-class DebianRequirement:
+@dataclass(frozen=True)
+class PackageRequirement:
+    """Forge-owned identity and version metadata; never mutate parser objects."""
     name: str
-    specifier: DebianSpecifier
+    specifier: SpecifierSet | DebianSpecifier
+    forge_debian_constraint: tuple[str, str] | None = None
+    forge_exact_version: str | None = None
 
-def requirement(text: str) -> Requirement:
+
+def requirement(text: str) -> PackageRequirement:
     value = re.sub(r"\s*\(([^()]+)\)\s*$", r"\1", text.strip())
     match = re.fullmatch(r"([a-z0-9][a-z0-9+._-]{0,127})(.*)", value)
     if not match:
@@ -53,7 +58,6 @@ def requirement(text: str) -> Requirement:
         # Reuse its version/marker parser with a placeholder, then retain the
         # validated Forge/Debian package identity for dependency resolution.
         req = Requirement("forge-package" + constraint)
-        req.name = package_name(name)
     except InvalidRequirement as exc:
         debian = re.fullmatch(r"(<<|<=|==|=|>=|>>|<|>)\s*([0-9][A-Za-z0-9.+:~\-]*)", constraint)
         if debian:
@@ -63,16 +67,18 @@ def requirement(text: str) -> Requirement:
                 DebianVersion(debian[2])
             except ValueError:
                 raise ForgeError(f"Invalid Debian version in package constraint: {text!r}") from exc
-            return DebianRequirement(package_name(name), DebianSpecifier(relation, debian[2]))
+            return PackageRequirement(package_name(name), DebianSpecifier(relation, debian[2]))
         raise ForgeError(f"Invalid package constraint: {text!r}") from exc
     if req.extras or req.marker or req.url:
         raise ForgeError(f"Unsupported package constraint: {text!r}")
+    debian_constraint = None
+    exact_version = None
     native_version = re.fullmatch(r"(<<|<=|==|=|>=|>>|<|>)\s*([0-9][A-Za-z0-9.+:~\-]*)", constraint)
     if native_version and any(c in native_version[2] for c in "-:~"):
-        req.forge_debian_constraint = ({"==": "=", "<": "<<", ">": ">>"}.get(native_version[1], native_version[1]), native_version[2])
+        debian_constraint = ({"==": "=", "<": "<<", ">": ">>"}.get(native_version[1], native_version[1]), native_version[2])
     if constraint.startswith("==") and "*" not in constraint:
-        req.forge_exact_version = constraint[2:].strip()
-    return req
+        exact_version = constraint[2:].strip()
+    return PackageRequirement(package_name(name), req.specifier, debian_constraint, exact_version)
 
 
 def validate_recipe(recipe: dict, origin: str) -> dict:

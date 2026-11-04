@@ -124,7 +124,7 @@ def attach(recipe, row, requested, binary_rows, arch):
         # Ask for a concrete output rather than guessing its runtime closure.
         raise ForgeError(f"No binary output {requested!r} matches source {row['Package']}={row['Version']}.",
                          hint="Install one of these binary package names: " + ", ".join(sorted(own)[:12]))
-    from .upstream_adapters import ADAPTERS, dependency as adapt_dependency
+    from .upstream_adapters import ADAPTERS, OUTPUTS, dependency as adapt_dependency
     adapter = recipe["provenance"].get("build_adapter")
     active_profiles = ("nobiarch",) if adapter in ADAPTERS.values() else ()
     relationships, decisions = [], []
@@ -140,7 +140,10 @@ def attach(recipe, row, requested, binary_rows, arch):
             if changed:
                 relationships.append(("build", changed))
     # Follow all internal output edges before discarding self edges at source level.
-    seen, pending = set(), [requested]
+    # A dedicated native contract installs these documented outputs together.
+    # Generic adapters still advertise only the requested/internal outputs.
+    native_outputs = sorted(set(own) & OUTPUTS.get(row["Package"], set())) if adapter == ADAPTERS.get(row["Package"]) else []
+    seen, pending = set(), [requested, *native_outputs]
     while pending:
         name = pending.pop()
         if name in seen:

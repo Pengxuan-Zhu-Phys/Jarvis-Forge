@@ -34,6 +34,20 @@ def _configure(directory, executable, *options):
     return ["${python}", "-c", CONFIGURE, directory, executable, "--prefix=${prefix}", *options]
 
 
+def _tcl_check(binary, *, timezone=False):
+    program = "puts [info patchlevel]\n"
+    if timezone:
+        program += "puts [clock format 0 -timezone UTC -format %Y]\n"
+    # repr inserts exactly one level of Python escaping into the generated
+    # command. The Tcl process must receive line breaks, not literal '\\n'.
+    script = ("import subprocess,sys; r=subprocess.run([sys.argv[1]],input=" + repr(program) +
+              ",capture_output=True,text=True); lines=r.stdout.splitlines(); "
+              "assert r.returncode==0 and lines and lines[0].startswith('8.6.'), r.stdout+r.stderr")
+    if timezone:
+        script += "; assert len(lines)>1 and lines[1]=='1970', r.stdout+r.stderr"
+    return ["${python}", "-c", script, binary]
+
+
 def recipe(profile, row, source, backend, archive, *, version):
     project = row["Package"]
     adapter = ADAPTERS.get(project)
@@ -57,7 +71,7 @@ def recipe(profile, row, source, backend, archive, *, version):
         result.update(build=[["${source}/configure", "--prefix=${prefix}", "--disable-tcl", "--enable-readline", "--disable-editline", "TCLSH_CMD=" + tcl],
                              ["make", "-j${jobs}", "TCLSH_CMD=" + tcl]],
                       install=[["make", "install", "TCLSH_CMD=" + tcl]],
-                      dependency_check=[["${python}", "-c", "import subprocess,sys; r=subprocess.run([sys.argv[1]],input='puts [info patchlevel]\\n',capture_output=True,text=True); assert r.returncode==0 and r.stdout.strip().startswith('8.6.'), r.stdout+r.stderr", tcl]],
+                      dependency_check=[_tcl_check(tcl)],
                       artifacts=["bin/sqlite3", "include/sqlite3.h", "lib/libsqlite3.a", "lib/pkgconfig/sqlite3.pc"],
                       check=[["${python}", "-c", "import subprocess,sys; r=subprocess.run([sys.argv[1],':memory:','select 6*7;'],capture_output=True,text=True); assert r.returncode==0 and r.stdout.strip()=='42',r.stdout+r.stderr", "${prefix}/bin/sqlite3"]])
     elif project == "readline":
@@ -85,7 +99,7 @@ def recipe(profile, row, source, backend, archive, *, version):
         result.update(build=[_configure("${build}", "${source}/unix/configure", "--enable-threads", "--with-tzdata=yes"), ["make", "-C", "${build}", "-j${jobs}"]],
                       install=[["make", "-C", "${build}", "install"]],
                       artifacts=["bin/tclsh8.6", "include/tcl.h", "lib/tcl8.6/tzdata/UTC"],
-                      check=[["${python}", "-c", "import subprocess,sys; r=subprocess.run([sys.argv[1]],input='puts [info patchlevel]\\nputs [clock format 0 -timezone UTC -format %Y]\\n',capture_output=True,text=True); assert r.returncode==0 and r.stdout.splitlines()[0].startswith('8.6.') and r.stdout.splitlines()[1]=='1970', r.stdout+r.stderr", "${prefix}/bin/tclsh8.6"]])
+                      check=[_tcl_check("${prefix}/bin/tclsh8.6", timezone=True)])
     else:  # zlib: CMake builds only the selected native architecture, no multilib.
         result["requires_tools"] = ["cmake", "cc"]
         result.update(build=[["cmake", "-S", "${source}", "-B", "${build}", "-DCMAKE_INSTALL_PREFIX=${prefix}", "-DCMAKE_INSTALL_LIBDIR=lib", "-DCMAKE_BUILD_TYPE=Release"], ["cmake", "--build", "${build}", "--parallel", "${jobs}"]],

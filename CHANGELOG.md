@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.8
+
+### Fixed
+
+- Keep Forge package names, exact versions and Debian constraints in a Forge-owned requirement record. Parse Python constraints through public packaging APIs without adding or changing attributes on third-party Requirement objects.
+- Send real line breaks to Tcl during generated source-tool and timezone checks; avoid double-escaped input that prevents valid Tcl installations from passing verification.
+- Let explicit native contracts provide their documented CLI, library and header aliases together. Reuse an existing Tcl development provider for SQLite's Tcl interpreter requirement without claiming unsupported library ABIs.
+- Remove rejected automatic recipes from available candidates when metadata refresh determines that their output needs an adapter.
+- Retain obsolete automatic discovery branches as inactive metadata once all known user roots resolve. Preserve explicit requests, installed packages and history; reactivate a saved branch on later explicit installation using the current source keyring.
+
+### Compatibility and upgrade notes
+
+- Existing Ubuntu source selections and user directories remain active. After upgrading, run `jforge apt update`, then retry `jforge apt install sqlite3`.
+- Automatic adapter revisions refresh cached schema 2 recipes and can rebuild affected packages. Historical unrelated pending entries can become inactive once the complete root graph resolves; unresolved explicit requests remain reported.
+
 ## 1.0.7
 
 ### Fixed

@@ -132,6 +132,12 @@ def apt_update(console, values):
     if pending:
         line(console)
         field(console, "pending_imports", pending)
+    inactive = values.get("inactive_imports", [])
+    if inactive:
+        line(console)
+        line(console, f"Inactive automatic imports ({len(inactive)}):", style="bold")
+        line(console, "  " + ", ".join(item["name"] for item in inactive))
+        line(console, "  Unused by resolved root packages; saved for later reactivation.")
     line(console)
     if "operation_id" in values:
         field(console, "operation_id", values["operation_id"])
@@ -139,7 +145,7 @@ def apt_update(console, values):
         field(console, "logs", values["path"])
     if "index" in values:
         field(console, "index", values["index"])
-    consumed = {"official_source", "available", "source_packages", "updated_at", "official_imports", "pending_imports", "operation_id", "path", "index", "status"}
+    consumed = {"official_source", "available", "source_packages", "updated_at", "official_imports", "pending_imports", "inactive_imports", "operation_id", "path", "index", "status"}
     for key, value in values.items():
         if key not in consumed:
             field(console, key, value, compact=True)

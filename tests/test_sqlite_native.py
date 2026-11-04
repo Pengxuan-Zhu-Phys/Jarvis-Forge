@@ -132,3 +132,45 @@ def test_native_contract_does_not_claim_incompatible_distribution_outputs(projec
     from jarvis_forge.upstream_adapters import recipe
     with pytest.raises(ForgeError,match='dedicated adapter'):
         recipe({'name':requested,'package':requested},{'Package':project},{},'autotools',None,version='1.0')
+
+
+def test_native_aliases_cover_installed_outputs_without_claiming_other_abis(tmp_path):
+    recipes={r['provenance']['source_package']:r for r in native_recipes(tmp_path)}
+    assert {'tcl8.6','tcl8.6-dev','libtcl8.6'}<=recipes['tcl8.6']['provenance']['binary_versions'].keys()
+    assert {'sqlite3','libsqlite3-dev','libsqlite3-0'}<=recipes['sqlite3']['provenance']['binary_versions'].keys()
+    assert 'libncurses5' not in recipes['ncurses']['provenance']['binary_versions']
+
+
+def test_ubuntu_legacy_pending_cache_updates_and_plans_sqlite_with_tcl_dev_provider(tmp_path,monkeypatch):
+    from jarvis_forge import packages
+    from jarvis_forge.storage import write_json,read_json
+    home=ForgeHome(tmp_path/'home');home.initialize()
+    recipes=native_recipes(tmp_path)
+    by_name={}
+    source=official._selector({'origin':'ubuntu','suite':'noble','component':'main,universe','keyring':None})
+    for r in recipes:
+        if r['name']=='tcl8.6':r['name']='tcl8.6-dev' # Existing user cache/provider name.
+        r['provenance']['automatic_adapter']=True
+        by_name[r['name']]=r
+    obsolete=['lib32ncurses-dev','chrpath','gcc-multilib','dpkg-dev','tzdata','python3-setuptools','docbook-xml','ca-certificates']
+    def prof(name):return {**source,'name':name,'package':name,'automatic':True,'template':None}
+    config={'schema_version':1,'source':source,'imports':[prof(name) for name in [*by_name,*obsolete]]}
+    write_json(home.root/'apt/official.json',config)
+    write_json(home.root/'cache/apt/official.json',{'schema_version':1,'packages':[{'recipe':r,'origin':'official:ubuntu:noble'} for r in recipes],'pending':[{'name':n,'reason':'Old dependency branch'} for n in obsolete]})
+    request=home.root/'operations/failed-install/request.json';request.parent.mkdir()
+    write_json(request,{'schema_version':1,'action':'install','request':{'specs':['sqlite3']}})
+    def derive(home,profile,directory,session):
+        r=by_name.get(profile['name'])
+        return {'recipe':r,'reason':'Needs a dedicated adapter','source_record':{'Version':'1.0-1'},'snapshot':{'apt_signature_verified':False},'import_status':'generated' if r else 'needs_adapter'}
+    monkeypatch.setattr(official,'_derive',derive)
+    op=home.root/'operations/update';op.mkdir()
+    result=official.refresh_official(home,op,refresh_repository=False)
+    assert result['pending_imports']==[]
+    assert {r['name'] for r in result['inactive_imports']}==set(obsolete)
+    assert read_json(home.root/'apt/official.json')['source']==source
+    monkeypatch.setattr(packages,'_context',lambda recipes:{'tools':{}})
+    plan=packages.plan_install(home,['sqlite3'])
+    assert len(plan['packages'])==5
+    tcl=next(p for p in plan['packages'] if p['name']=='tcl8.6-dev')
+    sqlite=next(p for p in plan['packages'] if p['name']=='sqlite3')
+    assert 'TCLSH_CMD='+tcl['prefix']+'/bin/tclsh8.6' in sqlite['commands']['build'][0]
