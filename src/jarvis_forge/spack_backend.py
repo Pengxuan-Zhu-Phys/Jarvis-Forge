@@ -524,6 +524,22 @@ def _publish(home, op, envdir, roots, snapshot):
     from .shell_activation import activation
     from .package_operations import key_for
 
+    # Header-only consumers may inspect these legacy hints before find_package.
+    snapshot = {**snapshot, "modifications": list(snapshot["modifications"])}
+    for package in snapshot["packages"]:
+        if package["name"] == "eigen":
+            prefix = Path(package["prefix"])
+            for include in [prefix / "include/eigen3", prefix / "include"]:
+                if (include / "Eigen/Core").is_file():
+                    for name, value in [
+                        ("EIGEN3_INCLUDE_DIR", include),
+                        ("EIGEN3_ROOT", prefix),
+                    ]:
+                        snapshot["modifications"].append(
+                            {"type": "SetEnv", "name": name, "value": str(value)}
+                        )
+                    break
+
     revision = home.root / "environments/apt/revisions" / op.name
     revision.mkdir(parents=True, exist_ok=True)
     bridge = revision / "spack_bridge.py"

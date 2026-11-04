@@ -2,6 +2,8 @@
 
 ## 1.0.12
 
+- Export EIGEN3_INCLUDE_DIR and EIGEN3_ROOT from the selected Eigen installation during activation, allowing existing header probes to locate user-prefix Eigen.
+
 - Download native Spack extension recipes from a dedicated GitHub Release, independently of the Python package. Verify archive SHA-256 and engine compatibility, retain immutable snapshots and refresh recipes with apt update. The initial recipe release provides neofetch 7.1.0.
 - Move extension recipe sources outside the Python distribution and provide a standalone asset builder. Existing private recipe snapshots remain usable offline after upgrading the client.
 

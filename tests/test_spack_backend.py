@@ -355,3 +355,18 @@ def test_recipe_update_rolls_back_policy_and_catalog_on_native_failure(
     with pytest.raises(ForgeError, match="native recipe load failed"):
         b.update(home)
     assert all(p.read_bytes() == content for p, content in before.items())
+
+
+def test_eigen_activation_exports_legacy_header_hints(managed):
+    home, calls = managed
+    include = b.root(home) / 'store/eigen/include/eigen3'
+    (include / 'Eigen').mkdir(parents=True)
+    (include / 'Eigen/Core').write_text('// fixture header\n')
+    result = b.transact(home, 'install', ['eigen'], cache='never')
+    snapshot = read_json(Path(result['activation']).parent / 'snapshot.json')
+    hints = {m['name']:m.get('value') for m in snapshot['modifications']}
+    assert hints['EIGEN3_INCLUDE_DIR'] == str(include)
+    assert hints['EIGEN3_ROOT'] == str(include.parent.parent)
+    text = Path(result['activation']).read_text()
+    assert '_JFORGE_APT_HAD_EIGEN3_INCLUDE_DIR' in text
+    assert '_JFORGE_APT_HAD_EIGEN3_ROOT' in text
