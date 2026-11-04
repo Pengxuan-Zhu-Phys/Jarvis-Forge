@@ -35,10 +35,9 @@ version = {attr = "jarvis_forge.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-exclude = ["jarvis_forge.spack_repo*"]
 
 [tool.setuptools.package-data]
-jarvis_forge = ["schemas/*.json", "examples/*.yaml", "spack_repo/jforge/repo.yaml", "spack_repo/jforge/packages/*/package.py"]
+jarvis_forge = ["schemas/*.json", "examples/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

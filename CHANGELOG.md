@@ -2,7 +2,8 @@
 
 ## 1.0.12
 
-- Add a bundled native Spack repository providing neofetch 7.1.0 with a checksum-pinned upstream archive and a Bash runtime dependency. Register immutable repository snapshots for existing and new profiles, including recipe updates and dependency plans.
+- Download native Spack extension recipes from a dedicated GitHub Release, independently of the Python package. Verify archive SHA-256 and engine compatibility, retain immutable snapshots and refresh recipes with apt update. The initial recipe release provides neofetch 7.1.0.
+- Move extension recipe sources outside the Python distribution and provide a standalone asset builder. Existing private recipe snapshots remain usable offline after upgrading the client.
 
 ## 1.0.11
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import fnmatch
 import json
 import math
@@ -422,6 +421,9 @@ def bootstrap(home, *, python=None, progress=None):
         result["compilers"] = run(
             home, ["compiler", "list"], op, "compilers", progress=None
         ).strip()
+        from .recipe_releases import ensure
+
+        ensure(home, op)
         _refresh_catalog(home, op)
         if not current(home)["environment"]:
             envdir = _candidate(home, op, [], previous=None)
@@ -438,41 +440,12 @@ def bootstrap(home, *, python=None, progress=None):
 
 
 def _extension_repository(home):
-    """Register a frozen native Spack repository in the managed policy."""
-    source = Path(__file__).with_name("spack_repo") / "jforge"
-    files = sorted(p for p in source.rglob("*") if p.suffix in {".py", ".yaml"})
-    fingerprint = hashlib.sha256()
-    for file in files:
-        fingerprint.update(str(file.relative_to(source)).encode())
-        fingerprint.update(file.read_bytes())
-    destination = (
-        root(home)
-        / "repositories"
-        / ("jforge-" + fingerprint.hexdigest())
-        / "spack_repo/jforge"
-    )
-    if not destination.exists():
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name("jforge-" + uuid.uuid4().hex)
-        try:
-            shutil.copytree(
-                source, temporary, ignore=shutil.ignore_patterns("__pycache__")
-            )
-            temporary.rename(destination)
-        finally:
-            if temporary.exists():
-                shutil.rmtree(temporary)
-    config = root(home) / "config/repos.yaml"
-    repositories = yaml.safe_load(config.read_text())["repos"]
-    repositories.pop("jforge", None)
-    config.write_text(
-        yaml.safe_dump({"repos": {"jforge": str(destination), **repositories}})
-    )
-    return destination
+    from .recipe_releases import register
+
+    return register(home)
 
 
 def _refresh_catalog(home, op):
-    _extension_repository(home)
     output = run(home, ["list", "--format", "name_only"], op, "catalog", progress=None)
     names = sorted(
         {
@@ -493,12 +466,6 @@ def _refresh_catalog(home, op):
 def catalog(home, pattern="*", query=None):
     cache = root(home) / "catalog.json"
     names = read_json(cache)["packages"] if cache.exists() else []
-    if configured(home):
-        extensions = Path(__file__).with_name("spack_repo") / "jforge/packages"
-        names = sorted(
-            set(names)
-            | {p.parent.name.replace("_", "-") for p in extensions.glob("*/package.py")}
-        )
     active = {p["name"]: p for p in current(home)["packages"]}
     return [
         {
@@ -512,7 +479,9 @@ def catalog(home, pattern="*", query=None):
 
 
 def _candidate(home, op, roots, previous):
-    _extension_repository(home)
+    from .recipe_releases import ensure
+
+    ensure(home, op)
     directory = root(home) / "environments" / op.name
     directory.mkdir(parents=True)
     (directory / "spack.yaml").write_text(
@@ -931,16 +900,27 @@ def update(home, *, progress=None):
         destination = root(home) / "repositories" / head
         _unpack(home, pin, destination, op, "repository-verified-download")
         value = settings(home)
+        from . import recipe_releases
+
+        extension = recipe_releases.prepare(home, op)
         old_repo = (root(home) / "config/repos.yaml").read_bytes()
+        catalog_file = root(home) / "catalog.json"
+        old_catalog = catalog_file.read_bytes() if catalog_file.exists() else None
         repo = destination / "repos/spack_repo/builtin"
         (root(home) / "config/repos.yaml").write_text(
             yaml.safe_dump({"repos": {"builtin": str(repo)}})
         )
         try:
+            recipe_releases.register(home, extension)
             rows = _refresh_catalog(home, op)
         except BaseException:
             (root(home) / "config/repos.yaml").write_bytes(old_repo)
+            if old_catalog is None:
+                catalog_file.unlink(missing_ok=True)
+            else:
+                catalog_file.write_bytes(old_catalog)
             raise
+        write_json(home.root / "apt/recipe-release.json", extension)
         value.update(
             repository=str(repo), repository_commit=head, repository_archive=pin
         )
@@ -948,6 +928,7 @@ def update(home, *, progress=None):
         result.update(
             backend="spack",
             available=len(rows),
+            recipe_release=extension["version"],
             repository_commit=head,
             updated_at=now(),
             note="Recipe metadata refreshed; installed environments retain their lockfiles.",

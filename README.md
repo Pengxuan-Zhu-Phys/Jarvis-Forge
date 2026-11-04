@@ -118,7 +118,7 @@ Scripts are copied, not relocated together with their dependencies: use stable a
 
 ## User-local packages with Spack
 
-All package operations use Spack. A bundled native Spack repository adds neofetch 7.1.0 and is registered automatically for existing profiles. Existing source installations are retained as read-only history; the first package write prepares the default Spack profile:
+All package operations use Spack. Native Spack extension recipes are downloaded from a dedicated recipe Release and refreshed with apt update, independently of Python package releases. Existing source installations are retained as read-only history; the first package write prepares the default Spack profile:
 
 ```bash
 jforge apt import spack
@@ -212,3 +212,5 @@ The [APT comparison and scientific-library support matrix](https://github.com/Pe
 
 Project design and implementation scope live in [Jarvis-Books](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/tree/main/Docs/Jarvis-Forge). CLI behavior follows the [Jarvis ecosystem CLI specification](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Ecosystem/JARVIS_CLI_DESIGN.md).
 
+
+Recipe sources live in recipes/, separately from the Python distribution. Maintainers build versioned assets with tools/build_recipe_assets.py and publish them to the dedicated recipes Release. See the recipe publishing workflow in Jarvis-Books/Docs/Jarvis-Forge/RELEASING.md.

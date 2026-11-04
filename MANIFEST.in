@@ -15,3 +15,6 @@ prune .ssh
 prune .pypi
 prune .twine
 global-exclude .DS_Store *.py[cod] .env .env.* .envrc .pypirc .pypirc.* .twinerc .pypi-token* release.env twine.env
+
+prune recipes
+include tools/build_recipe_assets.py

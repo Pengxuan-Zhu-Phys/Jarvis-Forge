@@ -86,7 +86,11 @@ def managed(tmp_path, monkeypatch):
     )
     config = b.root(home) / "config"
     config.mkdir()
-    (config / "repos.yaml").write_text("repos: {}\n")
+    repo = b.root(home) / "repositories/previous/spack_repo/jforge"
+    repo.mkdir(parents=True)
+    (repo / "repo.yaml").write_text("repo: {namespace: jforge, api: v2.2}\n")
+    write_json(home.root / "apt/recipe-release.json", {"repository": str(repo)})
+    (config / "repos.yaml").write_text(yaml.safe_dump({"repos": {"jforge": str(repo)}}))
     (config / "mirrors.yaml").write_text("mirrors: {}\n")
     calls = []
 
@@ -311,33 +315,43 @@ def test_activation_cleans_inherited_spack_store_paths(managed, tmp_path):
     assert result.stdout == "/usr/bin:/bin"
 
 
-def test_extension_repository_is_frozen_and_survives_policy_refresh(
-    managed, tmp_path, monkeypatch
+def test_recipe_update_rolls_back_policy_and_catalog_on_native_failure(
+    managed, monkeypatch
 ):
-    import shutil
+    from jarvis_forge import recipe_releases, downloads
 
     home, calls = managed
-    source = Path(b.__file__).with_name("spack_repo")
-    fake_module = tmp_path / "controller" / "spack_backend.py"
-    fake_module.parent.mkdir()
-    shutil.copytree(source, fake_module.with_name("spack_repo"))
-    monkeypatch.setattr(b, "__file__", str(fake_module))
-    first = b._extension_repository(home)
-    recipe = first / "packages/neofetch/package.py"
-    original = recipe.read_bytes()
-    assert 'depends_on("bash' in original.decode()
-    # An updated controller gets a new snapshot; old environment paths remain valid.
-    editable = (
-        fake_module.with_name("spack_repo") / "jforge/packages/neofetch/package.py"
+    write_json(b.root(home) / "catalog.json", {"packages": ["working"]})
+    paths = [
+        b.root(home) / "config/repos.yaml",
+        b.root(home) / "catalog.json",
+        home.root / "apt/recipe-release.json",
+    ]
+    before = {p: p.read_bytes() for p in paths}
+    staged = b.root(home) / "repositories/staged/spack_repo/jforge"
+    staged.mkdir(parents=True)
+    (staged / "repo.yaml").write_text("repo: {namespace: jforge, api: v2.2}\n")
+    monkeypatch.setattr(
+        recipe_releases,
+        "prepare",
+        lambda *a: {"version": "next", "repository": str(staged)},
     )
-    editable.write_text(editable.read_text() + "\n# next recipe revision\n")
-    second = b._extension_repository(home)
-    assert second != first
-    assert recipe.read_bytes() == original
-    (b.root(home) / "config/repos.yaml").write_text(
-        "repos: {builtin: /pinned/upstream}\n"
-    )
-    assert b._extension_repository(home) == second
-    config = yaml.safe_load((b.root(home) / "config/repos.yaml").read_text())["repos"]
-    assert config["jforge"] == str(second)
-    assert config["builtin"] == "/pinned/upstream"
+
+    def fetch(url, target, logs):
+        target.write_bytes(
+            b'{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+            if "api.github.com" in url
+            else b"archive"
+        )
+
+    monkeypatch.setattr(downloads, "fetch", fetch)
+    monkeypatch.setattr(b, "_unpack", lambda *a: None)
+
+    def refresh(*args):
+        write_json(b.root(home) / "catalog.json", {"packages": ["broken"]})
+        raise ForgeError("native recipe load failed")
+
+    monkeypatch.setattr(b, "_refresh_catalog", refresh)
+    with pytest.raises(ForgeError, match="native recipe load failed"):
+        b.update(home)
+    assert all(p.read_bytes() == content for p, content in before.items())
