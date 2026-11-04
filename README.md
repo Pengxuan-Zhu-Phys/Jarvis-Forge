@@ -2,7 +2,7 @@
 
 Jarvis-Forge is an independent Python package for user-space software environments and command-based acceptance workflows on scientific workstations and HPC systems. Its CLI is `jforge`.
 
-Forge runs local command suites and preserves their evidence. Its `jforge apt` command downloads, verifies and builds recipe-defined software into private user prefixes. Named environments keep private, versioned shell copies and explicit target Python selections in one shared user directory. Managed services, Slurm submission, scientific comparison policies, and the `Jarvis forge` forwarding command are planned extensions.
+Forge runs local command suites and preserves their evidence. Its `jforge apt` command delegates package recipes, dependency resolution, binary-cache reuse and builds to a pinned, user-local Spack installation. Existing Forge source environments remain available for compatibility. Named environments keep private, versioned shell copies and explicit target Python selections in one shared user directory. Managed services, Slurm submission, scientific comparison policies, and the `Jarvis forge` forwarding command are planned extensions.
 
 ## Install
 
@@ -48,7 +48,7 @@ jforge --home .forge-home logs <run-id> --step calculate
 jforge --home .forge-home compare <older-run-id> <newer-run-id>
 ```
 
-Text results use standalone headings and record summaries suitable for SSH terminals. Paths and commands are emitted as complete lines; the terminal may visually wrap them without inserted line breaks. `apt update` highlights pending imports and their reasons. Full structured fields remain available with `--json`.
+Text results use standalone headings and record summaries suitable for SSH terminals. Paths and commands are emitted as complete lines; the terminal may visually wrap them without inserted line breaks. `apt update` refreshes the selected backend's recipe metadata. Full structured fields remain available with `--json`.
 
 `--json`, `--home` and `--debug` work before or after the command. `--json` emits one JSON object on stdout, while progress goes to stderr. `compare --check` fails on changed, missing, corrupted or unsuccessful evidence; ordinary comparison only describes differences. Comparison uses exact artifact bytes; scientific equivalence and performance regression policies remain outside the current comparison mode.
 
@@ -62,7 +62,7 @@ eval "$(command jforge apt shell-init)"
 
 Add that line to your own `~/.bashrc` or `~/.zshrc` to enable it for future shells. The hook sources the selected package environment on startup and refreshes it after successful installs, upgrades, removals and source switches. It uses the selected Forge home, including an explicit `--home`. Forge does not edit your startup files. Existing shells need to enable the hook themselves. Source switching removes previous managed package paths and restores exported values while preserving user PATH additions. After upgrading Forge, reload this hook once in existing shells to obtain its new behavior; other already-open shells keep their current environment until refreshed. The hook is intended for interactive use, not JSON or script automation.
 
-The first `apt list` after a repository refresh builds a local derived index. Subsequent listings reuse it; complete distribution listings are printed as compact lines. `apt list --installed` only lists installed packages.
+Spack package names are cached during import/update. Listings read that local cache without starting Spack or accessing the network; complete distribution listings are printed as compact lines. `apt list --installed` only lists installed packages.
 
 ## User directories and package queries
 
@@ -116,124 +116,54 @@ Every `env add ... --replace` or `set-python` saves a new revision and preserves
 
 Scripts are copied, not relocated together with their dependencies: use stable absolute paths for external files. If the original script changes, register the update with `env add cbs --shell /path/to/cbs-env.sh --replace`. For reproducibility, files in published revisions are not intended for direct editing. Full usage and storage details are in [the environment guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/ENVIRONMENTS.md).
 
-## User-local package manager
+## User-local packages with Spack
 
-Dependency installation resolves the complete graph first, installs dependencies before their consumers, and verifies reused instances on every operation. A dependency must be ready before a consumer can build. Failures leave the previous active environment selected; completed dependencies can remain as inactive installations for later reuse.
-
-Recipe schema 2 adds `build_depends`, `run_depends`, `probe`, `dependency_check` and `artifacts`. Existing schema 1 `depends` recipes remain supported. A `dependency_check` runs after source preparation and before the consumer build in the same selected dependency environment. `probe` is a lightweight post-install and reuse check; legacy recipes fall back to `check`. Declared artifact and environment-script hashes detect changes to the recorded files.
-
-Official dependency discovery uses both Sources and native-architecture Packages metadata, preserves Debian version comparisons and alternatives, and maps binary aliases to source providers. It currently targets native Linux amd64, arm64, ppc64el, s390x and riscv64. Ambiguous virtual providers, cross builds, source bootstrap cycles, exact binary equality without an explicit mapping, and unsupported build layouts stop with a diagnostic. System/compiler requirements are probed in your selected environment. Generic library probes establish file availability; use a recipe's consumer checks to verify a particular CMake, pkg-config or link interface.
-
-After upgrading, refresh the imported source:
+Fresh Forge homes use Spack. Existing source installations keep their backend until you explicitly switch:
 
 ```bash
-jforge apt update
-jforge apt install libgsl-dev
-```
-
-SQLite uses explicit native build contracts for its Tcl source generator, Readline, ncurses and zlib dependencies. Distribution-only documentation, package configuration and multilib steps are excluded with recorded reasons; required libraries and unknown prerequisites remain in the graph. The CLI keeps Readline support; Tcl extension bindings are disabled while the Tcl interpreter remains available for source generation. ncurses installs narrow/wide libraries and Tcl installs its bundled timezone database. Patch contents retain their original bytes, including non-UTF-8 translations. Dedicated native contracts expose only their documented installed output aliases, so an existing Tcl development provider can satisfy SQLite's source-generator requirement. Forge stores its version metadata independently of third-party parser objects.
-
-Dependency discovery, external probes and readiness records are saved under the printed operation directory. New dependency fingerprints can cause a one-time rebuild. Full design and recipe examples: [dependency installation](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_DEPENDENCIES.md).
-
-`jforge apt` follows familiar apt command names and operates on Forge recipes and user prefixes. It does not invoke system apt, request sudo, or edit shell startup files. Import an entire official source index with `apt import` without a package name; source archives are fetched on demand during installation.
-
-```bash
-jforge apt --help
-jforge apt sources
-jforge apt import debian
-jforge apt update
-jforge apt search neofetch
-jforge apt install neofetch
+jforge apt import spack
+# Or prepare and select a named package environment:
+jforge apt switch spack --name gambit --python "$(pyenv which python)"
+jforge apt compilers
+jforge apt compilers --find
+jforge apt list
 jforge apt search eigen
-jforge apt show eigen
-jforge apt install eigen redis --jobs 2
+jforge apt show libgsl-dev
+jforge apt check sqlite3 libgsl-dev libeigen3-dev
+jforge apt install sqlite3 libgsl-dev libeigen3-dev --jobs 4
 jforge apt list --installed
-jforge info eigen
-source "$(jforge apt env --path)"
-redis-server --version
+jforge info libgsl-dev --path
 ```
 
-Bundled recipes pin Eigen 3.4.0 and Redis 7.2.17 to official source archives and SHA-256 checksums. Eigen needs CMake and C/C++ compilers; Redis needs make and a C compiler. Use your site's existing modules for build tools. Installs do not start a Redis server.
+`import spack` selects `spack-default`. `switch spack --name NAME` selects a separate store, configuration and saved environments under the shared Forge home. Re-selecting an existing environment retains its configuration and installations. `--python` registers an existing interpreter, including pyenv Python, as an external dependency; Forge does not install or switch Python. The interpreter running Forge controls Spack itself. Select compilers/variants explicitly with native quoted specs when needed:
 
 ```bash
-jforge apt install eigen=3.4.0 --dry-run
-jforge apt satisfy 'eigen>=3.4' --dry-run
-jforge apt reinstall eigen
-jforge apt upgrade --dry-run
-jforge apt full-upgrade --dry-run
-jforge apt remove eigen=3.4.0 --dry-run
-jforge apt remove eigen=3.4.0 --yes
-jforge apt autoremove --dry-run
-```
-
-Package installation reports package and command step counts and streams build output to stderr as it runs; exact command stdout and stderr are also saved separately in the operation record. Counts describe discrete steps, not elapsed-time percentages. JSON results remain on stdout.
-
-Every successful instance gets an immutable receipt and activation script; source downloads, recipe snapshots, command logs and checks live in the operation record. Reinstall and upgrade create separate prefixes and preserve old instances. Build or check failure leaves the previous active environment selected. Valid dependencies completed before a later package fails can remain as inactive installations.
-
-The catalog combines configured recipes and the imported official source index. Missing recipes are looked up in the selected repository during install; standard and nested CMake/configure, Meson and prefix-aware Makefile layouts receive generated build steps, and Neofetch has a Bash installation adapter. Complex layouts report the required adaptation. You can also add `recipes/*.yaml`, or register a local recipe directory/file or HTTPS YAML index:
-
-```bash
-jforge apt edit-sources --add /path/to/recipes
+jforge apt install 'gsl@2.8 %gcc@13' 'hdf5~mpi' 'root +python'
+jforge apt install sqlite3 --cache only
+jforge apt sources
+jforge apt sources --add site --url https://example.org/spack-cache
+jforge apt sources --trust-key /path/to/site-signing-key.asc
 jforge apt update
-```
-
-When every known requested root resolves, update retains obsolete automatic discovery branches as inactive metadata, including unrelated candidates from earlier failed dependency expansion. Explicit imports, requested roots, installed prefixes and logs remain available; an explicit install reactivates a saved branch. Rejected automatic recipes are removed from available candidates. Incomplete history or unresolved roots preserve tracking conservatively.
-
-Bundled recipes change with Forge releases; `update` refreshes the selected official source index, configured recipe sources and tracked official recipes. Use `update --recipes-only` or `install --no-official` for recipe-only operation. `upgrade` resolves newer compatible versions from that catalog. `full-upgrade` uses the same source-recipe resolver and retains old instances; it performs no system-wide removals. Recipe commands are trusted build instructions, not sandboxed code. See the [package manager design and recipe format](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md).
-
-### Switch Debian and Ubuntu environments
-
-```bash
-# Select Ubuntu 24.04 LTS; metadata is imported on first use:
-jforge apt switch ubuntu
-# Equivalent explicit selection:
-jforge apt switch ubuntu --suite noble --component main,universe
-jforge apt update
-jforge apt install libeigen3-dev libgsl-dev
-jforge apt switch                         # List saved environments
-jforge apt switch debian --suite bookworm
-jforge apt switch legacy                  # Return to the original store
-jforge paths
-```
-
-The selected source persists across CLI invocations and Python versions using the same Forge home. Package prefixes, recipe settings, caches, operation history and apt shell revisions are isolated under `<home>/apt/profiles/<source-id>/`. Previous installations remain available when you switch back. `apt list/search/show`, top-level `list/info`, `env show apt` and `paths` automatically follow the selection. The shared home, named Python environments and acceptance-run histories remain in place. Switching selects a package environment; install the packages you need in that environment.
-
-Ubuntu defaults to `noble` with `main,universe`; Debian defaults to `bookworm/main`. Their base, updates and security pockets are refreshed together. Existing imported components remain selected on upgrade. `apt import` refreshes metadata within an environment; use `apt switch` when changing its distribution, suite or components. An explicitly configured signature keyring is retained on later switches to that environment.
-
-With shell integration enabled, a successful switch immediately refreshes the current Bash/Zsh environment without manual path edits or per-source `source` commands. Without the hook, source `"$(jforge apt env --path)"` explicitly. Source-specific scope selection is shared on disk; switching from another SSH session does not modify an already-running shell.
-
-### Import a complete official index
-
-```bash
-jforge apt import debian
-jforge apt search neofetch
-jforge apt show neofetch
-jforge apt install neofetch
-source "$(jforge apt env --path)"
-neofetch
-```
-
-This imports the selected distribution's source and native-architecture binary package metadata, without downloading every source archive. New Ubuntu imports default to `noble/main,universe`, Debian to `bookworm/main`; `--component` accepts a comma-separated list. Use `apt sources` for available distributions and `apt switch` for isolated selections. An existing populated environment cannot be repurposed to another source family through import. `apt update` refreshes its indexes and tracked recipes; search and show use cached metadata without downloading. `apt edit-sources` displays official and custom recipe configuration.
-
-`apt install` queries the official source after you explicitly import one. Bundled and user-provided recipes remain available without an official import. It verifies source archives, selects a compatible installation adapter and saves the generated recipe and provenance. Dry-run does not fetch missing metadata: it reports the pending official lookup instead. Official index availability does not imply that every package can be built on every host; missing native tools/libraries and unsupported layouts are reported with operation logs. Supported Debian build and runtime dependencies are resolved before compilation; original metadata and explicit adapter decisions are retained.
-
-### Track official Debian and Ubuntu source packages
-
-```bash
-jforge apt import libeigen3-dev --origin debian --suite bookworm --name eigen
-jforge apt update
-jforge apt list --upgradable
-jforge apt upgrade --dry-run
 jforge apt upgrade
+jforge apt remove sqlite3 --yes
+jforge apt switch
 ```
 
-Import maps a binary or source package name through the official `Sources` index, records source versions and SHA-256, and preserves Debian quilt patches. This advanced per-package import can reuse an explicit reviewed template for custom options and checks. Built-in reviewed templates cover Eigen and Redis; `--template NAME` reuses a custom Forge recipe. Ubuntu sources use `--origin ubuntu --suite <codename>`.
+Common Debian development names are aliases to Spack names, for example `libgsl-dev` → `gsl`, `libeigen3-dev` → `eigen`, and `sqlite3` → `sqlite`. Native Spack specs and `name=version` are accepted. This does not import Ubuntu/Debian binary packages: Spack owns the dependency graph and uses its own recipes and signed build caches. Search/list use cached package names; show fetches detailed metadata from the managed local Spack installation.
 
-`update` refreshes these tracked imports without compiling. `upgrade` detects both upstream changes and Debian revision/patch changes, creates new instances, and keeps old ones. Identical official metadata does not force a rebuild. Per-package metadata imports without a reviewed template retain draft/pending information. During explicit installation, automatic adapters can generate supported standard layouts; unsupported layouts remain pending. Drafts themselves do not silently enter the install catalog. Automatic adapters resolve supported Debian build and runtime relationships, retain their original fields and record every upstream-build policy decision; unresolved requirements stop before compilation.
+Spack 1.2.2 and an engine-compatible recipe commit are bootstrapped from checksum-pinned official archives, without Git checkouts. Import requires HTTPS access, curl/wget, Bash, and a working Python. Source builds require a usable host compiler and relevant platform tools. The solver may bootstrap into the managed directory. Spack normally uses the host glibc; Forge does not build glibc or promise an isolated Ubuntu user space. AlmaLinux users use a compiler module or Spack compiler package as appropriate for their site.
 
-Named original-source components are verified and mounted before quilt patches; native single archives are supported too. Internal source symlinks and hardlinks are allowed only within the extraction tree. Full official revisions use Debian version ordering.
+`--cache auto` reuses compatible binaries and permits source builds; `only` refuses source builds for requested packages/dependencies; `never` requires source builds. Spack's own solver/tool bootstrap is separate. Official cache signing keys are installed from the named official mirror. Custom binary mirrors require the user's trusted key; signature checking stays enabled. Cache availability depends on OS, architecture, compiler and the exact dependency graph. Public cache availability is not guaranteed.
 
-Default metadata trust is official HTTPS plus Release/index/archive checksums, reported as `apt_signature_verified: false`. To require archive-signature verification, supply `--keyring /path/to/trusted-archive-keyring.gpg`; this requires `gpgv` and fails if verification cannot be completed. The importer builds upstream projects with quilt patches; it does not execute `debian/rules` or reproduce the full Debian binary-package build.
+Each successful operation saves the concrete `spack.lock`, a configuration snapshot, package hashes and prefixes, stdout/stderr logs, and a new activation revision. Forge commits the selected environment only after Spack reports its packages installed. A failure retains the previous selection and logs; successful dependencies may remain in the store for reuse. Spack emits live installation logs and package status, while Forge reports overall phases. `--json` keeps these on stderr.
+
+`apt check` concretizes and archives a dependency plan without building packages or changing the selected environment; it is not a package integrity audit or a project acceptance test. `--dry-run` is an offline request preview without solver execution. `upgrade` re-solves all selected roots against current recipes; change one root with `install SPEC`. `list --upgradable` is unavailable for this backend because upgrades require solving the environment. `reinstall` uses Spack's overwrite semantics for the same hash and can change files used by saved revisions.
+
+`remove` drops explicit roots from the selected environment and retains the store and previous revisions. `autoremove --yes` delegates garbage collection to Spack while retaining all saved named environments and their build dependencies. It therefore does not reclaim packages still needed by historical revisions. Neither command removes external pyenv/system packages.
+
+Legacy source environments remain selectable with `apt switch ubuntu`, `apt switch debian`, or `apt switch legacy`. Existing recipes, official source metadata, installations and histories are not migrated or mixed into Spack. Legacy `import` and `edit-sources` options continue to apply in those environments. Load `apt shell-init` once to automatically refresh the current Bash/Zsh environment after successful package changes.
+
+See [APT usage](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md), [backend design](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_DEPENDENCIES.md), and [compatibility](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_COMPATIBILITY.md).
 
 ## Suite format
 

@@ -303,6 +303,7 @@ def test_missing_tool_fails_dry_run_before_initialization(tmp_path):
 
 def test_update_empty_sources_and_apt_list_json(tmp_path, capsys):
     home = tmp_path / "fresh"
+    write_json(home / "apt/sources.json", {"schema_version": 1, "sources": []})
     assert main(["apt", "update", "--home", str(home), "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["available"] >= 2

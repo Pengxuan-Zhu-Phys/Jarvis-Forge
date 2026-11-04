@@ -98,6 +98,10 @@ def paths(ctx: typer.Context):
     if selected != ctx.obj.home:
         paths.update(apt_home=str(selected.root), packages=str(selected.root / "packages"), apt=str(selected.root / "apt"),
                      apt_environment=str(selected.root / "environments/apt"))
+    from .spack_backend import configured as spack_configured, root as spack_root
+    if spack_configured(selected):
+        paths.update(spack=str(spack_root(selected)), spack_store=str(spack_root(selected)/"store"),
+                     spack_environments=str(spack_root(selected)/"environments"))
     emit(ctx, "paths", **paths, default_home_file=str(default_home_file()))
 
 
@@ -160,6 +164,9 @@ def info(ctx: typer.Context,
         raise ForgeError("--path and --json are mutually exclusive.")
     from .apt_profiles import active_home
     selected = active_home(ctx.obj.home)
+    from .spack_backend import configured as spack_configured, name_of
+    if spack_configured(selected):
+        package = name_of(package)
     records = [item for item in selected.packages() if (item["name"] == package or package in item.get("provenance", {}).get("binary_versions", {}))
                if (version is None or item["version"] == version)
                and (instance is None or item["install_id"] == instance)]

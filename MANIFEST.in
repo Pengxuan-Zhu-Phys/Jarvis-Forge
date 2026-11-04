@@ -1,6 +1,6 @@
 include CHANGELOG.md
 recursive-include tests *.py
-recursive-include tests/fixtures *.json
+recursive-include tests/fixtures *.json *.yaml
 
 # Git ignores do not control source distributions.
 exclude jfrel

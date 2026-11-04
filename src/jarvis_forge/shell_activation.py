@@ -12,11 +12,11 @@ PATH_VARIABLES = {"PATH", "CMAKE_PREFIX_PATH", "PKG_CONFIG_PATH", "LD_LIBRARY_PA
                   "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"}
 
 
-def activation(home, env_files):
+def activation(home, env_files, *, extra_variables=(), extra_paths=()):
     config = home.root / "config.json"
     base = Path(read_json(config).get("apt_base_home", str(home.root))) if config.exists() else home.root
-    variables = set(PATH_VARIABLES)
-    paths = set(PATH_VARIABLES)
+    variables = set(PATH_VARIABLES) | set(extra_variables)
+    paths = set(PATH_VARIABLES) | set(extra_paths)
     observed = set(env_files)
     observed.update(base.glob("packages/*/*/*/environment.sh"))
     observed.update(base.glob("apt/profiles/*/packages/*/*/*/environment.sh"))
@@ -42,7 +42,7 @@ def activation(home, env_files):
         _jf_drop=0
         if [ "$_jf_mode" = managed ]; then
             case "$_jf_piece" in
-                "$_jf_base"/packages/*/prefix|"$_jf_base"/packages/*/prefix/*|"$_jf_base"/apt/profiles/*/packages/*/prefix|"$_jf_base"/apt/profiles/*/packages/*/prefix/*) _jf_drop=1 ;;
+                "$_jf_base"/packages/*/prefix|"$_jf_base"/packages/*/prefix/*|"$_jf_base"/apt/profiles/*/packages/*/prefix|"$_jf_base"/apt/profiles/*/packages/*/prefix/*|"$_jf_base"/spack/store/*|"$_jf_base"/apt/profiles/*/spack/store/*) _jf_drop=1 ;;
             esac
         else
             case ":$_jf_applied:" in
@@ -66,7 +66,7 @@ def activation(home, env_files):
                       'fi']
         else:
             literal = shlex.quote(str(base))
-            lines += [f'case "${{{name}-}}" in *{literal}/packages/*/prefix*|*{literal}/apt/profiles/*/packages/*/prefix*) unset {name} ;; esac']
+            lines += [f'case "${{{name}-}}" in *{literal}/packages/*/prefix*|*{literal}/apt/profiles/*/packages/*/prefix*|*{literal}/spack/store/*|*{literal}/apt/profiles/*/spack/store/*) unset {name} ;; esac']
         lines += [f'_JFORGE_APT_HAD_{name}=${{{name}+x}}', f'_JFORGE_APT_OLD_{name}=${{{name}-}}']
     for path in env_files:
         lines.append("source " + shlex.quote(str(path)) + " || return $?")
