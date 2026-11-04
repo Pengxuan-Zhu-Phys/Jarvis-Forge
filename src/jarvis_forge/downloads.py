@@ -130,23 +130,3 @@ def unpack(archive: Path, destination: Path) -> None:
         if isinstance(exc, ForgeError):
             raise
         raise ForgeError(f"Cannot unpack source archive: {exc}", code=1) from exc
-
-
-def unpack_component(archive: Path, destination: Path, staging: Path) -> None:
-    """Apply dpkg-source's component layout in an isolated source work tree."""
-    unpack(archive, staging)
-    entries = list(staging.iterdir())
-    payload = entries[0] if len(entries) == 1 and entries[0].is_dir() else staging
-    if destination.is_symlink():
-        raise ForgeError(f"Component destination must not be a symlink: {destination}")
-    if destination.exists():
-        if destination.is_dir():
-            shutil.rmtree(destination)
-        else:
-            destination.unlink()
-    payload.rename(destination)
-    if payload != staging:
-        staging.rmdir()
-    for path in destination.rglob("*"):
-        if path.is_symlink() and not path.resolve().is_relative_to(destination.parent.resolve()):
-            raise ForgeError(f"Source component link escapes the combined source tree: {path}", code=1)

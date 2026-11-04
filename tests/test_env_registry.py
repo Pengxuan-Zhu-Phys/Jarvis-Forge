@@ -187,10 +187,13 @@ def test_modified_managed_file_is_visible_and_cannot_be_activated(home, script):
 
 def test_apt_environment_can_be_listed_but_not_overwritten(home, script):
     home.initialize()
-    activation = home.root / "environments/apt/revisions/op/activate.sh"
+    from jarvis_forge.apt_profiles import active_home
+    target = active_home(home)
+    target.initialize()
+    activation = target.root / "environments/apt/revisions/op/activate.sh"
     activation.parent.mkdir(parents=True)
     activation.write_text("export TEST_APT=1\n")
-    write_json(home.root / "apt/state.json", {"activation": str(activation), "last_operation_id": "op"})
+    write_json(target.root / "apt/state.json", {"backend":"spack", "spack":{"roots":[], "packages":[]}, "activation": str(activation), "last_operation_id": "op"})
     assert list_environments(home)[0]["name"] == "apt"
     assert show(home, "apt", strict=True)["activation"] == str(activation)
     with pytest.raises(ForgeError, match="managed by jforge apt"):

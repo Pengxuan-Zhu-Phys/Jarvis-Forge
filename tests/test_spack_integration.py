@@ -9,7 +9,9 @@ import pytest
 import yaml
 
 from jarvis_forge import spack_backend as b
-from jarvis_forge.storage import ForgeError, ForgeHome
+from jarvis_forge.storage import ForgeError, ForgeHome, write_json
+from jarvis_forge.apt_profiles import active_home, archived_packages, switch
+from jarvis_forge.cli import main
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("JFORGE_SPACK_INTEGRATION") != "1",
@@ -17,9 +19,27 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_real_dependency_install_activation_and_failure(tmp_path):
-    home = ForgeHome(tmp_path / "forge")
-    b.bootstrap(home)
+def test_real_dependency_install_activation_and_failure(tmp_path, capsys):
+    base = ForgeHome(tmp_path / "forge")
+    base.initialize()
+    write_json(
+        base.root / "apt/state.json", {"schema_version": 1, "active": {}, "manual": []}
+    )
+    write_json(
+        base.root / "packages/old/1/previous/manifest.json",
+        {
+            "name": "old",
+            "version": "1",
+            "install_id": "previous",
+            "prefix": str(base.root / "old-prefix"),
+        },
+    )
+    old_state = (base.root / "apt/state.json").read_bytes()
+    switch(base, "spack")
+    home = active_home(base)
+    assert home != base
+    assert archived_packages(base)[0]["name"] == "old"
+    assert (base.root / "apt/state.json").read_bytes() == old_state
     repo = Path(__file__).parent / "fixtures/spack_repo/forge_test"
     config = b.root(home) / "config/repos.yaml"
     repos = yaml.safe_load(config.read_text())["repos"]
@@ -30,6 +50,8 @@ def test_real_dependency_install_activation_and_failure(tmp_path):
         home, "install", ["forge-app@=1.0", "forge-lib"], cache="never", timeout=600
     )
     assert {p["name"] for p in first["packages"]} == {"forge-app", "forge-lib"}
+    assert main(["--home", str(base.root), "apt", "env", "--path"]) == 0
+    assert capsys.readouterr().out.strip() == first["activation"]
     for shell in ["bash", "zsh"]:
         if not shutil.which(shell):
             continue

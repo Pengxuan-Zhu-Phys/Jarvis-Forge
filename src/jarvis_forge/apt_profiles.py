@@ -1,218 +1,194 @@
-"""Source-isolated APT environments inside one shared Forge user directory."""
+"""Select Spack profiles; old source directories are read-only history."""
 
 from __future__ import annotations
 
-from pathlib import Path
+from .storage import ForgeError, ForgeHome, identifier, read_json, write_json
+from .package_operations import _inside, environment_path, locked, operation
 
-from .storage import ForgeError, ForgeHome, read_json, write_json, new_id
+
+def configured(home):
+    return (home.root / "apt/spack.json").is_file()
+
+
+def _selection(base):
+    path = _inside(base, base.root / "apt/selection.json")
+    if not path.exists():
+        return None
+    value = read_json(path)
+    if value.get("schema_version") != 1 or not isinstance(value.get("id"), str):
+        raise ForgeError(
+            f"Invalid package environment selection: {path}",
+            hint="jforge apt switch spack",
+        )
+    return identifier(value["id"])
+
+
+def _profile(base, profile_id):
+    return ForgeHome(_inside(base, base.root / "apt/profiles" / identifier(profile_id)))
 
 
 def active_home(base):
-    selection = base.root / "apt/selection.json"
-    if not selection.exists():
+    selected = _selection(base)
+    selection_file = base.root / "apt/selection.json"
+    if selection_file.exists() and read_json(selection_file).get("location") == "root":
+        if selected != "direct" or not configured(base):
+            raise ForgeError(
+                "The selected root Spack environment is unavailable.",
+                hint="jforge apt switch spack",
+            )
         return base
-    selected = read_json(selection)
-    if selected.get("schema_version") != 1 or not isinstance(selected.get("id"), str):
-        raise ForgeError(f"Invalid APT environment selection: {selection}")
-    if selected["id"] == "legacy":
+    if selected and selected.startswith("spack-"):
+        target = _profile(base, selected)
+        if not (target.root / "config.json").is_file():
+            raise ForgeError(
+                f"Selected Spack profile is missing: {target.root}",
+                hint="jforge apt switch spack",
+            )
+        return target
+    # Existing direct Spack deployments remain valid. Legacy selections do not
+    # execute the removed backend and are replaced only after a successful write.
+    if selected in {None, "legacy"} and configured(base):
         return base
-    from .packages import _inside
-    from .storage import identifier
-
-    identifier(selected["id"])
-    root = _inside(base, base.root / "apt/profiles" / selected["id"])
-    if not (root / "config.json").is_file():
-        raise ForgeError(
-            f"Selected APT environment is missing: {root}",
-            hint="jforge apt switch legacy",
-        )
-    return ForgeHome(root)
+    return _profile(base, "spack-default")
 
 
-def profiles(base):
-    from .official import default_source
-
-    selected = active_home(base)
-    rows = [
-        {
-            "id": "legacy",
-            "path": str(base.root),
-            "source": default_source(base),
-            "active": selected == base,
-        }
+def archived_homes(base):
+    homes = [base] + [
+        _profile(base, path.parent.name)
+        for path in sorted((base.root / "apt/profiles").glob("*/config.json"))
     ]
-    directory = base.root / "apt/profiles"
-    for path in sorted(directory.glob("*/config.json")):
-        from .packages import _inside
-
-        home = ForgeHome(_inside(base, path.parent))
-        rows.append(
-            {
-                "id": path.parent.name,
-                "path": str(home.root),
-                "source": default_source(home),
-                "active": home == selected,
-                "backend": "spack"
-                if (home.root / "apt/spack.json").is_file()
-                else "source",
-            }
+    return [
+        home
+        for home in homes
+        if not configured(home)
+        and (
+            any((home.root / "packages").glob("*/*/*/manifest.json"))
+            or any(
+                (home.root / "apt" / name).exists()
+                for name in ("state.json", "official.json", "sources.json")
+            )
         )
+    ]
+
+
+def archived_packages(base):
+    return [
+        dict(
+            row,
+            archived=True,
+            active=False,
+            profile="legacy" if home == base else home.root.name,
+        )
+        for home in archived_homes(base)
+        for row in home.packages()
+    ]
+
+
+def profiles(base, *, archived=False):
+    selected = active_home(base)
+    homes = ([base] if configured(base) else []) + [
+        _profile(base, path.parent.name)
+        for path in sorted((base.root / "apt/profiles").glob("*/config.json"))
+        if configured(_profile(base, path.parent.name))
+    ]
+    rows = [
+        dict(
+            id="direct" if home == base else home.root.name,
+            path=str(home.root),
+            backend="spack",
+            active=home == selected,
+        )
+        for home in homes
+    ]
+    if archived:
+        rows += [
+            dict(
+                id="legacy" if home == base else home.root.name,
+                path=str(home.root),
+                backend="archived",
+                active=False,
+                operations=str(home.root / "operations"),
+            )
+            for home in archived_homes(base)
+        ]
     return rows
 
 
-def switch(
-    base,
-    origin,
-    *,
-    suite=None,
-    component=None,
-    keyring=None,
-    name="default",
-    python=None,
-    progress=None,
-):
-    from .official import (
-        REPOSITORIES,
-        _selector,
-        import_repository,
-        default_source,
-        source_components,
-        source_family,
+def ensure_active(base, *, progress=None):
+    selected = active_home(base)
+    if configured(selected):
+        return selected
+    switch(
+        base, "spack", name=selected.root.name.removeprefix("spack-"), progress=progress
     )
-    from .packages import locked, operation, _inside, _publish, state, environment_path
+    return active_home(base)
 
-    if origin == "spack":
-        if suite or component or keyring:
+
+def switch(
+    base, origin="spack", *, name="default", python=None, direct=False, progress=None
+):
+    from . import spack_backend as backend
+
+    if origin != "spack":
+        raise ForgeError(
+            "Ubuntu/Debian source backends have been removed; use Spack.",
+            hint="jforge apt switch spack; jforge apt switch --archived",
+        )
+    if direct:
+        if name != "default" or not backend.configured(base):
             raise ForgeError(
-                "Spack uses its own recipes and mirrors; do not supply Debian/Ubuntu source options."
+                "--direct selects an existing root Spack environment and cannot use --name."
             )
-        from .storage import identifier
-        from . import spack_backend as backend
-
-        identifier(name)
-        profile_id = identifier("spack-" + name)
-        target = ForgeHome(_inside(base, base.root / "apt/profiles" / profile_id))
+        prepared = backend.bootstrap(base, python=python, progress=progress)
         with (
             locked(base),
-            operation(base, "switch", {"profile": profile_id, "backend": "spack"}) as (
+            operation(base, "switch", {"profile": "direct", "backend": "spack"}) as (
                 directory,
                 result,
             ),
         ):
-            target.initialize()
-            config = read_json(target.root / "config.json")
-            config["apt_base_home"] = str(base.root)
-            write_json(target.root / "config.json", config)
-            result["bootstrap"] = backend.bootstrap(
-                target, python=python, progress=progress
-            )
             write_json(
                 _inside(base, base.root / "apt/selection.json"),
-                {"schema_version": 1, "id": profile_id},
+                {"schema_version": 1, "id": "direct", "location": "root"},
             )
             result.update(
-                profile=profile_id,
+                profile="direct",
                 backend="spack",
-                apt_home=str(target.root),
+                bootstrap=prepared,
+                apt_home=str(base.root),
                 user_home=str(base.root),
-                packages=str(backend.root(target) / "store"),
-                activation=environment_path(target),
+                packages=str(backend.root(base) / "store"),
+                activation=environment_path(base),
                 state_committed=True,
             )
             return result
-    if origin != "legacy" and origin not in REPOSITORIES:
-        raise ForgeError("Choose spack, debian, ubuntu or legacy.")
-    source = None
-    if origin == "legacy":
-        if suite or component or keyring:
-            raise ForgeError(
-                "legacy selects the existing environment; do not supply new source options."
-            )
-        profile_id, target = "legacy", base
-    else:
-        suite = suite or {"ubuntu": "noble", "debian": "bookworm"}[origin]
-        component = component or ("main,universe" if origin == "ubuntu" else "main")
-        source = _selector(
-            {
-                "origin": origin,
-                "suite": suite,
-                "component": component,
-                "keyring": str(Path(keyring).expanduser().resolve())
-                if keyring
-                else None,
-            }
-        )
-        # Readable identifiers; conflicting existing selections are rejected below.
-        tokens = [origin, suite, *source_components(source), *source.get("pockets", [])]
-        profile_id = "-".join(tokens)
-        import re
-
-        if len(profile_id) > 120 or not re.fullmatch(
-            r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", profile_id
-        ):
-            from hashlib import sha256
-
-            profile_id = (
-                origin
-                + "-"
-                + re.sub(r"[^a-zA-Z0-9_.-]", "-", suite[:30])
-                + "-"
-                + sha256(repr(tokens).encode()).hexdigest()[:20]
-            )
-        target = ForgeHome(_inside(base, base.root / "apt/profiles" / profile_id))
+    profile_id = identifier("spack-" + identifier(name))
+    target = _profile(base, profile_id)
     with (
         locked(base),
-        operation(base, "switch", {"profile": profile_id, "source": source}) as (
+        operation(base, "switch", {"profile": profile_id, "backend": "spack"}) as (
             directory,
             result,
         ),
     ):
         target.initialize()
-        if target != base:
-            config_path = target.root / "config.json"
-            config = read_json(config_path)
-            config["apt_base_home"] = str(base.root)
-            write_json(config_path, config)
-            old_source = default_source(target)
-            # No source change within an existing profile. Refresh metadata only
-            # when first creating it or after its source configuration was lost.
-            if old_source is not None and source_family(old_source) != source_family(
-                source
-            ):
-                raise ForgeError(f"Source profile identity collision: {profile_id}")
-            if old_source is not None and keyring is None:
-                keyring = old_source.get("keyring")
-                source["keyring"] = keyring
-            if (
-                old_source != source
-                or not (target.root / "cache/apt/official-repository.json").is_file()
-            ):
-                result["source_import"] = import_repository(
-                    target,
-                    origin=origin,
-                    suite=suite,
-                    component=",".join(source_components(source)),
-                    keyring=keyring,
-                )
-        with locked(target) if target != base else _nullcontext():
-            current = state(target)
-            # Publish even an empty profile so shell integration can cleanly
-            # remove the previous source's exported paths and variables.
-            _publish(target, current, new_id("switch-env"))
+        config = read_json(target.root / "config.json")
+        config["apt_base_home"] = str(base.root)
+        write_json(target.root / "config.json", config)
+        result["bootstrap"] = backend.bootstrap(
+            target, python=python, progress=progress
+        )
         write_json(
             _inside(base, base.root / "apt/selection.json"),
             {"schema_version": 1, "id": profile_id},
         )
         result.update(
             profile=profile_id,
-            source=default_source(target),
-            user_home=str(base.root),
+            backend="spack",
             apt_home=str(target.root),
-            packages=str(target.root / "packages"),
+            user_home=str(base.root),
+            packages=str(backend.root(target) / "store"),
             activation=environment_path(target),
             state_committed=True,
         )
         return result
-
-
-from contextlib import nullcontext as _nullcontext

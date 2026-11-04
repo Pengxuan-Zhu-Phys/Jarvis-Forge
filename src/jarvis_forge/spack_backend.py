@@ -69,7 +69,7 @@ ALIASES = {
 
 
 def root(home):
-    from .packages import _inside
+    from .package_operations import _inside
 
     return _inside(home, home.root / "spack")
 
@@ -83,22 +83,6 @@ def settings(home):
     if data.get("schema_version") != 1 or data.get("backend") != "spack":
         raise ForgeError("Invalid Spack backend settings.")
     return data
-
-
-def default_backend(home):
-    if configured(home):
-        return True
-    # Preserve existing source installations and customized catalogs.
-    legacy = [
-        home.root / "apt/official.json",
-        home.root / "apt/state.json",
-        home.root / "apt/sources.json",
-    ]
-    return (
-        not any(p.exists() for p in legacy)
-        and not any((home.root / "recipes").glob("*.yaml"))
-        and not any((home.root / "packages").glob("*/*/*/manifest.json"))
-    )
 
 
 def normalize(text):
@@ -151,6 +135,11 @@ def name_of(text):
 def current(home):
     file = home.root / "apt/state.json"
     value = read_json(file).get("spack", {}) if file.exists() else {}
+    if file.exists() and not value:
+        raise ForgeError(
+            "This is an archived source package environment.",
+            hint="jforge apt switch spack; jforge list --archived",
+        )
     return value or {
         "schema_version": 1,
         "roots": [],
@@ -160,7 +149,7 @@ def current(home):
 
 
 def environment(home):
-    from .packages import _inside
+    from .package_operations import _inside
 
     result = current(home).get("environment")
     if not result:
@@ -192,7 +181,7 @@ def _process_environment(home):
 
 
 def _executable(home):
-    from .packages import _inside
+    from .package_operations import _inside
 
     value = settings(home)
     executable = _inside(home, Path(value["engine"]) / "bin/spack")
@@ -220,7 +209,7 @@ def command(home, args, envdir=None):
 
 def run(home, args, op, label, *, envdir=None, timeout=3600, progress=None):
     """Reuse Forge's streamed, separately archived stdout/stderr command runner."""
-    from .packages import _run_command
+    from .package_operations import run_command
 
     script = op / "spack-context.sh"
     env = _process_environment(home)
@@ -240,15 +229,13 @@ def run(home, args, op, label, *, envdir=None, timeout=3600, progress=None):
     )
     if progress:
         progress("Spack " + label + ": " + shlex.join(args))
-    context = {"tools": {"bash": {"path": shutil.which("bash")}}}
-    _run_command(
+    run_command(
         command(home, args, envdir),
         home.root,
         script,
         op,
         label,
         timeout,
-        context,
         progress,
     )
     return (op / f"command-{label}.stdout.log").read_text(
@@ -315,7 +302,7 @@ def _config(home, repo, python):
 
 
 def _unpack(home, source, directory, op, label):
-    from .packages import verified_archive
+    from .package_operations import verified_archive
     from .downloads import unpack
 
     if directory.exists():
@@ -335,12 +322,21 @@ def _unpack(home, source, directory, op, label):
 
 
 def bootstrap(home, *, python=None, progress=None):
-    from .packages import locked, operation
+    from .package_operations import locked, operation
 
     with (
         locked(home),
         operation(home, "spack-bootstrap", {"python": python}) as (op, result),
     ):
+        current(home)  # Refuse to overwrite archived source state.
+        if not configured(home) and any(
+            (home.root / "apt" / name).exists()
+            for name in ("official.json", "sources.json")
+        ):
+            raise ForgeError(
+                "Source package data is archived; select a Spack profile.",
+                hint="jforge apt switch spack",
+            )
         if configured(home) and python is None and current(home).get("environment"):
             value = settings(home)
             _executable(home)
@@ -503,7 +499,7 @@ def _snapshot(home, envdir, op, label="snapshot"):
 
 def _publish(home, op, envdir, roots, snapshot):
     from .shell_activation import activation
-    from .packages import key_for
+    from .package_operations import key_for
 
     revision = home.root / "environments/apt/revisions" / op.name
     revision.mkdir(parents=True, exist_ok=True)
@@ -570,7 +566,7 @@ def _publish(home, op, envdir, roots, snapshot):
                 "external": row["external"],
             },
         }
-        from .packages import _inside
+        from .package_operations import _inside
 
         file = _inside(
             home,
@@ -643,7 +639,7 @@ def transact(
     dry_run=False,
     progress=None,
 ):
-    from .packages import locked, operation
+    from .package_operations import locked, operation
 
     if cache not in {"auto", "only", "never"}:
         raise ForgeError("Build cache mode must be auto, only or never.")
@@ -790,7 +786,7 @@ def transact(
 
 
 def details(home, spec):
-    from .packages import locked, operation
+    from .package_operations import locked, operation
 
     translated = normalize(spec)
     name = name_of(translated)
@@ -855,7 +851,7 @@ def _cache_keys(home, op, envdir, progress):
 
 
 def update(home, *, progress=None):
-    from .packages import locked, operation
+    from .package_operations import locked, operation
     from .downloads import fetch
 
     if not configured(home):
@@ -904,9 +900,7 @@ def update(home, *, progress=None):
         return result
 
 
-def sources(home, *, add=None, url=None, remove=None, trust_key=None, progress=None):
-    from .packages import locked, operation
-
+def validate_sources(*, add=None, url=None, remove=None, trust_key=None):
     if add and (not url or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", add)):
         raise ForgeError("Adding a mirror requires a simple name and --url.")
     if url:
@@ -929,6 +923,12 @@ def sources(home, *, add=None, url=None, remove=None, trust_key=None, progress=N
         )
     if trust_key and not Path(trust_key).expanduser().is_file():
         raise ForgeError(f"Signing key does not exist: {trust_key}")
+
+
+def sources(home, *, add=None, url=None, remove=None, trust_key=None, progress=None):
+    from .package_operations import locked, operation
+
+    validate_sources(add=add, url=url, remove=remove, trust_key=trust_key)
     if not configured(home):
         if add or remove or trust_key:
             bootstrap(home, progress=progress)
@@ -991,7 +991,7 @@ def sources(home, *, add=None, url=None, remove=None, trust_key=None, progress=N
 
 
 def compilers(home, *, find=False, progress=None):
-    from .packages import locked, operation
+    from .package_operations import locked, operation
 
     if not configured(home):
         bootstrap(home, progress=progress)
@@ -1014,7 +1014,7 @@ def compilers(home, *, find=False, progress=None):
 
 
 def autoremove(home, *, dry_run=False, progress=None):
-    from .packages import locked, operation
+    from .package_operations import locked, operation
 
     if dry_run:
         return {

@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import platform
-import shutil
 import sys
 import time
 import traceback
@@ -147,38 +146,39 @@ def doctor(ctx: typer.Context,
 
 
 @app.command("list")
-def list_packages(ctx: typer.Context):
-    """List recorded software installation instances."""
-    from .apt_profiles import active_home
-    emit(ctx, "list", packages=active_home(ctx.obj.home).packages())
+def list_packages(ctx: typer.Context,
+                  archived: bool = typer.Option(False,"--archived",help="Read old source installation records.")):
+    """List recorded Spack instances or read-only archived source records."""
+    from .apt_profiles import active_home, archived_packages
+    records = archived_packages(ctx.obj.home) if archived else active_home(ctx.obj.home).packages()
+    emit(ctx, "list", packages=records)
 
 
 @app.command()
 def info(ctx: typer.Context,
          package: str = typer.Argument(..., help="Package name.", metavar="<package>"),
-         version: Optional[str] = typer.Option(None, "--package-version", help="Select a recorded software version.", metavar="<str>"),
-         instance: Optional[str] = typer.Option(None, "--instance", help="Select an exact install ID.", metavar="<str>"),
-         path: bool = typer.Option(False, "--path", help="Print only the unique installation prefix.")):
-    """Locate recorded software versions and installation prefixes."""
+         version: Optional[str] = typer.Option(None,"--package-version",help="Select a recorded version.",metavar="<str>"),
+         instance: Optional[str] = typer.Option(None,"--instance",help="Select an exact install ID.",metavar="<str>"),
+         path: bool = typer.Option(False,"--path",help="Print only a unique installation prefix."),
+         archived: bool = typer.Option(False,"--archived",help="Read old source installation records.")):
+    """Locate Spack or archived source installation prefixes."""
     if path and ctx.obj.as_json:
         raise ForgeError("--path and --json are mutually exclusive.")
-    from .apt_profiles import active_home
-    selected = active_home(ctx.obj.home)
-    from .spack_backend import configured as spack_configured, name_of
-    if spack_configured(selected):
-        package = name_of(package)
-    records = [item for item in selected.packages() if (item["name"] == package or package in item.get("provenance", {}).get("binary_versions", {}))
-               if (version is None or item["version"] == version)
-               and (instance is None or item["install_id"] == instance)]
+    from .apt_profiles import active_home, archived_packages
+    from .spack_backend import name_of
+    names = {package, name_of(package)}
+    candidates = archived_packages(ctx.obj.home) if archived else active_home(ctx.obj.home).packages()
+    records = [item for item in candidates if (item["name"] in names or names.intersection(item.get("provenance",{}).get("binary_versions",{})))
+               and (version is None or item["version"]==version) and (instance is None or item["install_id"]==instance)]
     if not records:
-        raise ForgeError(f"No recorded installation matches {package!r}.", hint="jforge list")
+        raise ForgeError(f"No recorded installation matches {package!r}.",hint="jforge list --archived" if archived else "jforge list; jforge list --archived")
     if path:
-        if len(records) != 1:
+        if len(records)!=1:
             raise ForgeError(f"{package!r} has {len(records)} matching instances.",
-                             hint=f"jforge info {package} --instance <install-id> --path")
+                             hint=f"jforge info {package} --instance <install-id> --path"+(" --archived" if archived else ""))
         print(records[0]["prefix"])
     else:
-        emit(ctx, "info", packages=records)
+        emit(ctx,"info",packages=records)
 
 
 @app.command()

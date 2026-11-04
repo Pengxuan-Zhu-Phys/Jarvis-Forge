@@ -88,19 +88,6 @@ def test_inspection_timeout_stops_activation_children(tmp_path):
         inspect_environment(shell, timeout=0.1)
 
 
-def test_declared_fortran_recipe_records_users_fc_and_flags(tmp_path, monkeypatch):
-    from jarvis_forge.packages import _context
-    compiler = tmp_path / "custom-fc"
-    compiler.write_text("#!/bin/sh\necho 'Site Fortran 13.2'\n")
-    compiler.chmod(0o755)
-    monkeypatch.setenv("FC", str(compiler))
-    monkeypatch.setenv("FFLAGS", "-O2")
-    monkeypatch.setenv("FCFLAGS", "-fPIC")
-    context = _context([{"requires_tools": ["gfortran"]}])
-    assert context["tools"]["gfortran"]["path"] == str(compiler)
-    assert context["flags"]["FC"] == str(compiler)
-    assert context["flags"]["FFLAGS"] == "-O2" and context["flags"]["FCFLAGS"] == "-fPIC"
-
 
 def test_runs_record_target_environment_and_compare_actual_tool_versions(selected, tmp_path):
     shell, target, compiler = selected

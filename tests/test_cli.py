@@ -63,11 +63,11 @@ def test_multiple_package_instances_require_explicit_path_selection(tmp_path, ca
         write_json(home / "packages/eigen/3.4.0" / name / "manifest.json",
                    {"name": "eigen", "version": "3.4.0", "install_id": name,
                     "prefix": str(tmp_path / name)})
-    assert main(["info", "eigen", "--path", "--home", str(home), "--json"]) == 2
+    assert main(["info", "eigen", "--archived", "--path", "--home", str(home), "--json"]) == 2
     capsys.readouterr()
-    assert main(["info", "eigen", "--path", "--home", str(home)]) == 2
+    assert main(["info", "eigen", "--archived", "--path", "--home", str(home)]) == 2
     capsys.readouterr()
-    assert main(["info", "eigen", "--instance", "a", "--path", "--home", str(home)]) == 0
+    assert main(["info", "eigen", "--archived", "--instance", "a", "--path", "--home", str(home)]) == 0
     assert capsys.readouterr().out.strip() == str(tmp_path / "a")
 
 
@@ -84,6 +84,6 @@ def test_corrupt_package_manifest_returns_error_not_empty_list(tmp_path, capsys)
     path = home / "packages/eigen/3.4.0/bad/manifest.json"
     path.parent.mkdir(parents=True)
     path.write_text("{broken")
-    assert main(["list", "--home", str(home), "--json"]) == 2
+    assert main(["list", "--archived", "--home", str(home), "--json"]) == 2
     assert not json.loads(capsys.readouterr().out)["ok"]
 

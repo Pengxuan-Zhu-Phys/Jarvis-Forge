@@ -4,18 +4,24 @@
 
 ### Added
 
-- Use managed Spack for new package environments, with checksum-pinned engine/recipe archives, native dependency solving, compiler discovery, signed binary-cache reuse and live installation logs.
+- Use managed Spack as the only package backend, with checksum-pinned engine/recipe archives, native dependency solving, compiler discovery, signed binary-cache reuse and live installation logs.
 - Add `apt import spack`, named `apt switch spack` environments, `apt compilers`, `apt check`, and binary mirror/key management through `apt sources`. Accept native Spack specs and common Debian development-package aliases.
 - Save concrete dependency lockfiles, configuration snapshots, package hashes, installation logs and reversible shell activation for each successful environment revision. Read package lists directly from a local name cache.
+- Query retired source installations with `list --archived`, `info --archived`, `apt list --archived`, and `apt switch --archived` without executing old recipes or shell scripts.
+
+### Removed
+
+- Remove the Ubuntu/Debian source backend, custom dependency resolver, source-recipe generation and build adapters, bundled package YAML recipes and recipe schema. Remove the `python-debian` and `packaging` runtime dependencies.
+- Remove source-specific import/switch/edit options. `apt import` and `apt switch` accept Spack; `apt sources` manages Spack mirrors and `apt edit-sources` displays them. Old source backend modules are no longer importable.
 
 ### Compatibility and upgrade notes
 
-- Existing Ubuntu/Debian/source environments retain their backend and data. Explicitly run `jforge apt import spack` to select the new default Spack environment; switch back with `apt switch ubuntu`, `debian`, or `legacy` as appropriate.
-- Spack normally uses the host glibc and requires host build tools when compatible binaries are unavailable. Python remains user-selected through pyenv or an existing interpreter. This backend does not create an Ubuntu user space.
-- `--cache only` requires binary packages; `auto` may build from source. Package names and versions follow Spack recipes, rather than Ubuntu/Debian repositories.
-- Spack `upgrade` updates the entire locked environment; use `install SPEC` to change a root. Offline dry runs preview requests, while `apt check` runs dependency concretization. `list --upgradable` requires a legacy source environment.
-- Removing Spack roots retains prior environments and their store entries; garbage collection preserves saved environment revisions. Reinstall uses native Spack overwrite semantics and can modify the same prefix used by historical revisions.
-- Reload existing Bash/Zsh integration once with `eval "$(command jforge apt shell-init)"` to refresh the environment after import and switch commands.
+- Existing source prefixes, shell files, manifests and operation logs stay on disk as read-only history. Package commands resolve an old source selection to the default Spack profile and save the new selection after successful preparation. Packages must be installed through Spack before they can satisfy its dependencies; old source environments cannot be activated, upgraded or removed through the package CLI.
+- Existing Spack profiles and direct Spack homes retain their data. Explicitly run `jforge apt import spack` to prepare/select the default profile. User-selected pyenv Python remains an external dependency.
+- Spack normally uses the host glibc and requires host build tools when compatible binaries are unavailable. This backend does not create an Ubuntu user space. `--cache only` requires binary packages; `auto` may build from source.
+- Package names/versions follow Spack recipes. `upgrade` updates the entire locked environment; use `install SPEC` to change a root. Offline dry runs preview requests, while `apt check` concretizes dependencies without running project acceptance tests. `list --upgradable` directs users to dependency planning.
+- Removing Spack roots retains prior environments and store entries; garbage collection preserves saved environment revisions. Reinstall uses native Spack overwrite semantics and can modify prefixes used by historical revisions.
+- Reload existing Bash/Zsh integration once with `eval "$(command jforge apt shell-init)"`. The hook refreshes environments after successful imports, switches and package changes; Forge does not edit startup files.
 
 ## 1.0.8
 

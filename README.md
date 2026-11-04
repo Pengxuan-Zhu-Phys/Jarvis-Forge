@@ -2,7 +2,7 @@
 
 Jarvis-Forge is an independent Python package for user-space software environments and command-based acceptance workflows on scientific workstations and HPC systems. Its CLI is `jforge`.
 
-Forge runs local command suites and preserves their evidence. Its `jforge apt` command delegates package recipes, dependency resolution, binary-cache reuse and builds to a pinned, user-local Spack installation. Existing Forge source environments remain available for compatibility. Named environments keep private, versioned shell copies and explicit target Python selections in one shared user directory. Managed services, Slurm submission, scientific comparison policies, and the `Jarvis forge` forwarding command are planned extensions.
+Forge runs local command suites and preserves their evidence. Its `jforge apt` command delegates package recipes, dependency resolution, binary-cache reuse and builds to a pinned, user-local Spack installation. Spack is the only package backend; old source installations remain queryable as archived records. Named environments keep private, versioned shell copies and explicit target Python selections in one shared user directory. Managed services, Slurm submission, scientific comparison policies, and the `Jarvis forge` forwarding command are planned extensions.
 
 ## Install
 
@@ -62,7 +62,7 @@ eval "$(command jforge apt shell-init)"
 
 Add that line to your own `~/.bashrc` or `~/.zshrc` to enable it for future shells. The hook sources the selected package environment on startup and refreshes it after successful installs, upgrades, removals and source switches. It uses the selected Forge home, including an explicit `--home`. Forge does not edit your startup files. Existing shells need to enable the hook themselves. Source switching removes previous managed package paths and restores exported values while preserving user PATH additions. After upgrading Forge, reload this hook once in existing shells to obtain its new behavior; other already-open shells keep their current environment until refreshed. The hook is intended for interactive use, not JSON or script automation.
 
-Spack package names are cached during import/update. Listings read that local cache without starting Spack or accessing the network; complete distribution listings are printed as compact lines. `apt list --installed` only lists installed packages.
+Spack package names are cached during import/update. Listings read that local cache without starting Spack or accessing the network; complete distribution listings are printed as compact lines. `apt list --installed` lists packages in the selected Spack environment. `jforge list` also includes its saved installation instances.
 
 ## User directories and package queries
 
@@ -118,7 +118,7 @@ Scripts are copied, not relocated together with their dependencies: use stable a
 
 ## User-local packages with Spack
 
-Fresh Forge homes use Spack. Existing source installations keep their backend until you explicitly switch:
+All package operations use Spack. Existing source installations are retained as read-only history; the first package write prepares the default Spack profile:
 
 ```bash
 jforge apt import spack
@@ -157,11 +157,22 @@ Spack 1.2.2 and an engine-compatible recipe commit are bootstrapped from checksu
 
 Each successful operation saves the concrete `spack.lock`, a configuration snapshot, package hashes and prefixes, stdout/stderr logs, and a new activation revision. Forge commits the selected environment only after Spack reports its packages installed. A failure retains the previous selection and logs; successful dependencies may remain in the store for reuse. Spack emits live installation logs and package status, while Forge reports overall phases. `--json` keeps these on stderr.
 
-`apt check` concretizes and archives a dependency plan without building packages or changing the selected environment; it is not a package integrity audit or a project acceptance test. `--dry-run` is an offline request preview without solver execution. `upgrade` re-solves all selected roots against current recipes; change one root with `install SPEC`. `list --upgradable` is unavailable for this backend because upgrades require solving the environment. `reinstall` uses Spack's overwrite semantics for the same hash and can change files used by saved revisions.
+`apt check` concretizes and archives a dependency plan without building packages or changing the selected environment; it is not a package integrity audit or a project acceptance test. `--dry-run` is an offline request preview without solver execution. `upgrade` re-solves all selected roots against current recipes; change one root with `install SPEC`. `list --upgradable` is unavailable because upgrades require solving the environment. `reinstall` uses Spack's overwrite semantics for the same hash and can change files used by saved revisions.
 
 `remove` drops explicit roots from the selected environment and retains the store and previous revisions. `autoremove --yes` delegates garbage collection to Spack while retaining all saved named environments and their build dependencies. It therefore does not reclaim packages still needed by historical revisions. Neither command removes external pyenv/system packages.
 
-Legacy source environments remain selectable with `apt switch ubuntu`, `apt switch debian`, or `apt switch legacy`. Existing recipes, official source metadata, installations and histories are not migrated or mixed into Spack. Legacy `import` and `edit-sources` options continue to apply in those environments. Load `apt shell-init` once to automatically refresh the current Bash/Zsh environment after successful package changes.
+The Ubuntu/Debian source resolver, source-package importer, custom build adapters and YAML package recipes have been removed. `apt import ubuntu/debian`, `apt switch ubuntu/debian/legacy`, and their source-specific options no longer activate a backend. `apt sources` now manages Spack mirrors, and `apt edit-sources` displays those mirrors.
+
+Existing source prefixes, manifests, shell files and operation logs stay on disk without conversion or automatic deletion. An old source selection routes package commands to `spack-default`; a successful write saves the new selection. Query old records explicitly:
+
+```bash
+jforge list --archived
+jforge info libgsl-dev --archived --path
+jforge apt list --archived
+jforge apt switch --archived
+```
+
+Archive queries read records without running old shell or recipe commands. Archived records do not satisfy Spack dependencies and cannot be upgraded or removed by the package CLI. Reinstall the packages you need with Spack. Previously named Spack profiles keep working; select an existing root-level Spack store again with `apt switch spack --direct`. Reload `apt shell-init` once after upgrading; subsequent successful package changes automatically refresh the current shell.
 
 See [APT usage](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md), [backend design](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_DEPENDENCIES.md), and [compatibility](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_COMPATIBILITY.md).
 

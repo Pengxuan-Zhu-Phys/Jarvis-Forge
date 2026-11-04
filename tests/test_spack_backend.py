@@ -51,13 +51,16 @@ def test_fresh_queries_and_dry_run_are_offline(tmp_path, capsys):
     assert not path.exists()
 
 
-def test_legacy_detection(tmp_path):
+def test_legacy_data_is_not_a_backend(tmp_path):
+    from jarvis_forge.apt_profiles import active_home
+
     home = ForgeHome(tmp_path / "forge")
-    assert b.default_backend(home)
-    write_json(home.root / "apt/sources.json", {"schema_version": 1, "sources": []})
-    assert not b.default_backend(home)
-    write_json(home.root / "apt/spack.json", {"schema_version": 1, "backend": "spack"})
-    assert b.default_backend(home)
+    write_json(
+        home.root / "apt/state.json", {"schema_version": 1, "active": {}, "manual": []}
+    )
+    assert active_home(home).root == home.root / "apt/profiles/spack-default"
+    with pytest.raises(ForgeError, match="archived"):
+        b.current(home)
 
 
 @pytest.fixture
@@ -241,7 +244,7 @@ def test_failed_switch_preserves_selection(tmp_path, monkeypatch):
     monkeypatch.setattr(b, "bootstrap", fail)
     with pytest.raises(ForgeError):
         switch(home, "spack")
-    assert active_home(home) == home
+    assert read_json(home.root / "apt/selection.json")["id"] == "legacy"
 
 
 def test_satisfy_json_command_name(managed, capsys):

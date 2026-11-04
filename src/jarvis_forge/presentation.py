@@ -107,47 +107,12 @@ def record(console, item, *, indent=0, compact=False):
 
 
 def apt_update(console, values):
-    pending = values.get("pending_imports", [])
-    status = values.get("status", "completed")
-    suffix = f"; {len(pending)} pending" if pending else ""
-    line(console, f"APT update: {status}{suffix}", style="bold")
-    for key in ("official_source", "available", "source_packages", "updated_at"):
+    line(console, "Spack recipes: " + str(values.get("status", "completed")), style="bold")
+    for key in ("available", "repository_commit", "updated_at", "note", "operation_id", "path"):
         if key in values:
-            if key == "available":
-                line(console, f"Recipes available: {values[key]}")
-            elif key == "source_packages" and isinstance(values[key], int):
-                line(console, f"Source packages: {values[key]:,}")
-            else:
-                field(console, key, values[key])
-    imports = values.get("official_imports", [])
-    line(console)
-    line(console, f"Official imports ({len(imports)}):", style="bold")
-    for item in imports:
-        # Successful update rows need an identity/version/status, while failure
-        # details are printed in the dedicated pending section below.
-        summary = {key: item[key] for key in ("name", "debian_version", "version", "import_status", "status") if key in item}
-        record(console, summary, indent=2)
-    if not imports:
-        line(console, "  none")
-    if pending:
-        line(console)
-        field(console, "pending_imports", pending)
-    inactive = values.get("inactive_imports", [])
-    if inactive:
-        line(console)
-        line(console, f"Inactive automatic imports ({len(inactive)}):", style="bold")
-        line(console, "  " + ", ".join(item["name"] for item in inactive))
-        line(console, "  Unused by resolved root packages; saved for later reactivation.")
-    line(console)
-    if "operation_id" in values:
-        field(console, "operation_id", values["operation_id"])
-    if "path" in values:
-        field(console, "logs", values["path"])
-    if "index" in values:
-        field(console, "index", values["index"])
-    consumed = {"official_source", "available", "source_packages", "updated_at", "official_imports", "pending_imports", "inactive_imports", "operation_id", "path", "index", "status"}
+            field(console, "logs" if key == "path" else key, values[key])
     for key, value in values.items():
-        if key not in consumed:
+        if key not in {"available", "repository_commit", "updated_at", "note", "operation_id", "path", "status"}:
             field(console, key, value, compact=True)
 
 
