@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.10
+
+### Fixed
+
+- Prevent Spack installs launched from interactive SSH terminals from failing with `Inappropriate ioctl for device`. Detached package commands now receive closed input instead of inheriting a terminal owned by another session; live stdout/stderr logs and process-group timeout cleanup remain enabled.
+- Record the noninteractive input mode in command evidence. Existing package stores, cached archives, profiles and Python selections remain usable; retry failed installs without resetting the Forge home.
+
 ## 1.0.9
 
 ### Added

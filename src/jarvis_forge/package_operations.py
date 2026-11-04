@@ -129,6 +129,7 @@ def run_command(argv, cwd, environment_script, logs, number, timeout, progress=N
         "started_at": now(),
         "timeout_seconds": timeout,
         "status": "running",
+        "stdin": "devnull",
     }
     write_json(probe, record)
     script_lines = [
@@ -151,6 +152,9 @@ def run_command(argv, cwd, environment_script, logs, number, timeout, progress=N
             process = subprocess.Popen(
                 [bash, "--noprofile", "--norc", str(script), *argv],
                 cwd=cwd,
+                # The detached session cannot own the caller's SSH terminal.
+                # Spack commands are noninteractive; CLI confirmations happen first.
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 start_new_session=True,
