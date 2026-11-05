@@ -1,0 +1,56 @@
+# ROOT requirements are explicit; home, directories, logs and ordinary build policy use Forge defaults.
+name: root-build
+platforms: [linux]
+dependencies: [pkgconf, gsl, openblas+shared, openssl, libbsd, libmd, libx11, libxext, libxft, libxpm,
+  fontconfig, freetype, mesa, mesa-glu, gl2ps, graphviz, libxml2, curl, intel-tbb, pcre2, fftw, cfitsio,
+  nlohmann-json, giflib, libjpeg-turbo, libpng, libtiff, lz4, xz, zstd, sqlite, pythia8, arrow, davix,
+  vecgeom]
+build:
+  name: ROOT
+  version: 6.40.04
+  source:
+    url: https://root.cern/download/root_v6.40.04.source.tar.gz
+    sha256: 44ada253b1935d34b6801222232d50731fe7c5e3cbcfab47734c85031cfbe4d3
+    subdir: root-6.40.04
+  cmake:
+    options:
+      CMAKE_CXX_STANDARD: 17
+      OPENSSL_ROOT_DIR: "${packages.openssl.prefix}"  # Discover SSL/crypto from the same installation.
+      all: true
+      fcgi: false
+      dcache: false
+      r: false
+      qt6web: false
+      cuda: false
+      tmva-gpu: false
+      tmva-cudnn: false
+    # Package names resolve to this run's Spack prefixes; no machine paths are hard-coded.
+    # Includes reach CMake discovery AND compilers in nested builds such as builtin ZeroMQ.
+    includes:
+      - libbsd                         # include/bsd/string.h
+      - mesa-glu                       # include/GL/glu.h
+      - mesa                           # OpenGL headers
+      - fontconfig                     # include/fontconfig/fontconfig.h, required by Xft
+      - freetype:include/freetype2      # FreeType's nonstandard header subdirectory
+    # libbsd.so is a linker script that also needs libmd: both -L search paths are required.
+    libraries: [libbsd, libmd, mesa-glu]
+    # Prepend lib64/lib during BUILD and after installation; also set build/install RPATH.
+    # This keeps Spack libssl.so and libcrypto.so together instead of mixing system OpenSSL.
+    runtime: [openssl, libbsd, libmd]
+  environment: bin/thisroot.sh
+  cmake_dir: cmake
+  required_files: [bin/root-config, bin/thisroot.sh, lib/libCore.so, cmake/ROOTConfig.cmake]
+  features: [pyroot, roofit, opengl, mathmore, arrow, davix, vecgeom, pythia8]
+checks:
+  before:
+    python:
+      version: ">=3.10"
+      development: true
+      modules: [numpy]
+    tools: [cmake, cc, c++, gfortran]
+  after:
+    python:
+      modules: [ROOT]
+    scripts:
+      - path: scripts/root_acceptance.py
+        args: ["${path}", "${build.version}", "${parameters.cxx_standard}", "${build.features}"]

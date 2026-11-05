@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 import shutil
 import os
 import subprocess
+import time
 import tarfile
 from urllib.parse import unquote, urlparse
 import zipfile
@@ -13,7 +14,7 @@ import zipfile
 from .storage import ForgeError
 
 
-def fetch(url: str, target: Path, logs: Path) -> None:
+def fetch(url: str, target: Path, logs: Path, *, timeout: float = 300) -> None:
     parsed = urlparse(url)
     if parsed.scheme == "file" and parsed.netloc in {"", "localhost"}:
         source = Path(unquote(parsed.path))
@@ -26,16 +27,32 @@ def fetch(url: str, target: Path, logs: Path) -> None:
     curl, wget = shutil.which("curl"), shutil.which("wget")
     if curl:
         argv = [curl, "--fail", "--location", "--proto", "=https", "--proto-redir", "=https",
-                "--connect-timeout", "20", "--max-time", "300", "--output", str(target), url]
+                "--connect-timeout", "20", "--max-time", str(timeout), "--output", str(target), url]
     elif wget:
         argv = [wget, "--https-only", "--timeout=60", "--tries=1", "-O", str(target), url]
     else:
         raise ForgeError("HTTPS downloads require curl or wget on PATH.")
     with logs.with_suffix(".stdout.log").open("wb") as out, logs.with_suffix(".stderr.log").open("wb") as err:
-        try:
-            result = subprocess.run(argv, stdout=out, stderr=err, timeout=330)
-        except subprocess.TimeoutExpired as exc:
-            raise ForgeError(f"Download timed out: {url}", code=1) from exc
+        deadline = time.monotonic() + timeout
+        # Large workflow sources may span multiple interrupted HTTP transfers.
+        # Retries resume into the same temporary file; callers verify its hash.
+        for attempt in range(10 if timeout > 300 else 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ForgeError(f"Download timed out: {url}", code=1)
+            command = list(argv)
+            if curl and timeout > 300:
+                command[command.index("--max-time") + 1] = str(remaining)
+                if attempt and target.exists() and target.stat().st_size:
+                    command[1:1] = ["--continue-at", "-"]
+            try:
+                result = subprocess.run(command, stdout=out, stderr=err, timeout=remaining + 30)
+            except subprocess.TimeoutExpired as exc:
+                raise ForgeError(f"Download timed out: {url}", code=1) from exc
+            if result.returncode == 0 or not curl or result.returncode not in {18, 28, 33, 52, 55, 56}:
+                break
+            if result.returncode == 33:
+                target.unlink(missing_ok=True)  # Server rejected range; retry from zero.
     if result.returncode:
         raise ForgeError(f"Download failed for {url}; see {logs.with_suffix('.stderr.log')}", code=1)
 

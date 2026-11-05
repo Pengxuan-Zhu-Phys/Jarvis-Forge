@@ -36,6 +36,7 @@ def selected(tmp_path):
     shell.write_text(f"export PATH={shlex.quote(str(target / 'bin'))}:{shlex.quote(str(tools))}:\"$PATH\"\n"
                      f"export FC={shlex.quote(shlex.quote(str(compiler)))}\n"
                      "export PYENV_VERSION=user-chosen-cbs\n"
+                     "unset PYTHONPATH\n"
                      f"export VIRTUAL_ENV={shlex.quote(str(target))}\n"
                      "printf 'user activation output\\n'\n")
     return shell, target, compiler

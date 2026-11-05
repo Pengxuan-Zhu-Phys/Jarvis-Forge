@@ -115,7 +115,7 @@ def operation(home, action, request):
         write_json(directory / "result.json", {**result, "finished_at": now()})
 
 
-def run_command(argv, cwd, environment_script, logs, number, timeout, progress=None):
+def run_command(argv, cwd, environment_script, logs, number, timeout, progress=None, *, process_env=None):
     from .runner import _stop
 
     script = logs / f"command-{number}.sh"
@@ -158,6 +158,7 @@ def run_command(argv, cwd, environment_script, logs, number, timeout, progress=N
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 start_new_session=True,
+                env=process_env,
             )
             try:
                 with selectors.DefaultSelector() as selector:
@@ -222,7 +223,10 @@ def verified_archive(home, source, log_path):
     if not archive.is_file() or digest(archive) != source["sha256"]:
         temporary = archive.with_name(archive.name + "." + uuid.uuid4().hex + ".part")
         try:
-            fetch(source["url"], temporary, log_path)
+            if source.get("timeout_seconds"):
+                fetch(source["url"], temporary, log_path, timeout=source["timeout_seconds"])
+            else:
+                fetch(source["url"], temporary, log_path)
             if digest(temporary) != source["sha256"]:
                 raise ForgeError(
                     f"SHA-256 mismatch for source archive: {source['url']}", code=1

@@ -37,8 +37,9 @@ def _emit(ctx, command, **values):
 
 def _progress():
     from .cli import _console
+    from .build_logging import format_record
 
-    return lambda message: line(_console(stderr=True), message)
+    return lambda message: line(_console(stderr=True), format_record(message, module="Jarvis-Forge.Library").rstrip("\n"))
 
 
 def _ready(ctx):

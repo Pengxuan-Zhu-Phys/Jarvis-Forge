@@ -1,0 +1,17 @@
+# Engine policy shared by user build cards. Project recipes are independent Release data.
+version: 1
+source:
+  timeout_seconds: 7200
+cmake:
+  phases: [configure, build, install]
+  cache:
+    CMAKE_BUILD_TYPE: {type: STRING, value: Release}
+  export:
+    paths:
+      PATH: [bin]
+      LD_LIBRARY_PATH: [lib, lib64]
+      DYLD_LIBRARY_PATH: [lib]
+command:
+  timeout_seconds: 3600
+build:
+  timeout_seconds: 172800

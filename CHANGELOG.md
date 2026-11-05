@@ -1,11 +1,35 @@
 # Changelog
 
-## 1.0.12
+## 1.1.0 — 2026-11-05
 
-- Export EIGEN3_INCLUDE_DIR and EIGEN3_ROOT from the selected Eigen installation during activation, allowing existing header probes to locate user-prefix Eigen.
+### Added
 
-- Download native Spack extension recipes from a dedicated GitHub Release, independently of the Python package. Verify archive SHA-256 and engine compatibility, retain immutable snapshots and refresh recipes with apt update. The initial recipe release provides neofetch 7.1.0.
-- Move extension recipe sources outside the Python distribution and provide a standalone asset builder. Existing private recipe snapshots remain usable offline after upgrading the client.
+- Add `jforge build` for dependency preparation, source downloads, CMake configuration, compilation, installation and acceptance checks. Reuse verified installation outputs across dependent projects and resume interrupted builds with their original inputs.
+- Add independently distributed build recipes with checksum-verified YAML and companion Python scripts, editable local copies and offline cached execution. The initial Linux ROOT 6.40.04 recipe includes explicit dependencies, CMake options, feature checks and PyROOT, file I/O and RooFit acceptance.
+- Support complete project workspaces through `build fetch/run --directory`, keeping recipe scripts, source archives, extracted sources, build trees and installed outputs together. Update the workspace activation script only after acceptance succeeds.
+- Add `jforge checker` for full, selected and declared-input regression checks. Reuse successful unchanged evidence, invalidate dependent checks and archive commands, environment observations and logs.
+- Provide structured Python, module and tool checks with version constraints. Run probes in the selected Python without requiring Forge in that environment; keep custom checks in companion scripts.
+- Download native Spack extension recipes from a separate, checksum-verified Release. The initial extension recipe provides neofetch 7.1.0; cached recipe snapshots remain usable offline.
+
+### Changed
+
+- New Spack environments install directly into `apps/<environment>/<package>`, without version/hash suffixes, architecture directories or padding. Spack's own metadata and database retain the full build identity.
+- Enforce one concrete build per package name in new environments. Reject duplicate-name dependency plans and conflicting occupied directories before installation. Reuse matching builds; select a fresh environment for changed versions, compilers or dependency combinations.
+- Use concise project cards with `dependencies`, `build` and `checks`, and bundled defaults for ordinary build policy and logging. Reserve the `workflow` command namespace for future orchestration.
+
+### Fixed
+
+- Export `EIGEN3_INCLUDE_DIR` and `EIGEN3_ROOT` from the selected Eigen installation so existing header probes can locate it.
+- Pass selected package prefixes and explicit header/library paths to CMake and nested builds. Include ROOT's libbsd/libmd, OpenGL/GLU and fontconfig paths, matching OpenSSL discovery and runtime paths, and build/install RPATH settings.
+- Preserve raw stdout/stderr and structured JSON while using consistent process-log headers. Archive resolved dependency search paths and CMake configuration evidence.
+- Resume bounded retries for interrupted large source downloads.
+
+### Compatibility and upgrade notes
+
+- Existing Spack environments retain their installation layout and upgrade policy. No existing package or ROOT installation is moved or renamed. Choose a previously unused environment name to adopt package-name directories.
+- New name-only environments preserve occupied package directories rather than replacing them with a different build. Explicit same-spec `reinstall` retains native Spack overwrite semantics and can modify files referenced by history.
+- Build and extension recipes have independent Release catalogs; installing or updating the Python package does not publish those resources. New build recipes require Jarvis-Forge 1.1.0 or newer.
+- The supplied ROOT recipe is Linux-only and uses `all=ON` with explicit CPU/site exceptions. Full target-machine build and runtime acceptance remain necessary; `all=ON` does not guarantee every optional feature.
 
 ## 1.0.11
 

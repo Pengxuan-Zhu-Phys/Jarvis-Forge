@@ -97,9 +97,9 @@ def paths(ctx: typer.Context):
     if selected != ctx.obj.home:
         paths.update(apt_home=str(selected.root), packages=str(selected.root / "packages"), apt=str(selected.root / "apt"),
                      apt_environment=str(selected.root / "environments/apt"))
-    from .spack_backend import configured as spack_configured, root as spack_root
+    from .spack_backend import configured as spack_configured, root as spack_root, store_root
     if spack_configured(selected):
-        paths.update(spack=str(spack_root(selected)), spack_store=str(spack_root(selected)/"store"),
+        paths.update(spack=str(spack_root(selected)), spack_store=str(store_root(selected)),
                      spack_environments=str(spack_root(selected)/"environments"))
     emit(ctx, "paths", **paths, default_home_file=str(default_home_file()))
 
@@ -217,10 +217,11 @@ def run(ctx: typer.Context,
         env: Optional[str] = typer.Option(None, "--env", help="Explicitly select a registered environment.", metavar="<name>")):
     """Execute every configured step and preserve a new run record."""
     def progress(event):
+        from .build_logging import format_record
         suffix = f" {event['step_id']}" if "step_id" in event else ""
         if "status" in event:
             suffix += f" {event['status']}"
-        line(_console(stderr=True), f"[{event['run_id']}] {event['event']}{suffix}")
+        line(_console(stderr=True), format_record(f"[{event['run_id']}] {event['event']}{suffix}", module="Jarvis-Forge.Calculator").rstrip("\n"))
 
     result = execute(ctx.obj.home, suite, progress=progress, environment_name=env)
     emit(ctx, "run", ok=result["status"] == "passed", **result)
@@ -242,11 +243,18 @@ def show(ctx: typer.Context,
     result = ctx.obj.home.show(run_id)
     if step is not None:
         identifier(step)
-        record = ctx.obj.home.run_path(run_id) / "steps" / step / "result.json"
+        if result.get("kind") in {"build", "workflow"}:
+            from .builds import step_path
+            record = step_path(ctx.obj.home, run_id, step) / "result.json"
+        else:
+            record = ctx.obj.home.run_path(run_id) / "steps" / step / "result.json"
         if not record.exists():
             raise ForgeError(f"No completed step record for {step!r}.")
         emit(ctx, "show", run_id=run_id, step=read_json(record))
     else:
+        if result.get("kind") in {"build", "workflow"}:
+            from .builds import summary
+            result = summary(result)
         emit(ctx, "show", **result)
 
 
@@ -261,7 +269,11 @@ def logs(ctx: typer.Context,
         raise ForgeError("Use --stream stdout|stderr; --follow and --json are mutually exclusive.")
     identifier(step)
     run_dir = ctx.obj.home.run_path(run_id)
-    path = run_dir / "steps" / step / f"{stream}.log"
+    if ctx.obj.home.show(run_id).get("kind") in {"build", "workflow"}:
+        from .builds import step_path
+        path = step_path(ctx.obj.home, run_id, step) / f"{stream}.log"
+    else:
+        path = run_dir / "steps" / step / f"{stream}.log"
     if not path.is_file():
         raise ForgeError(f"Log is not available: {path}")
     if ctx.obj.as_json:
@@ -274,7 +286,7 @@ def logs(ctx: typer.Context,
             if text:
                 sys.stdout.write(text)
                 sys.stdout.flush()
-            if not follow or (run_dir / "result.json").exists():
+            if not follow or ctx.obj.home.show(run_id)["status"] in {"passed", "failed", "interrupted"}:
                 break
             time.sleep(0.2)
 
@@ -299,6 +311,14 @@ app.add_typer(apt_app, name="apt")
 from .env_cli import app as env_app
 
 app.add_typer(env_app, name="env")
+
+from .build_cli import app as build_app
+
+app.add_typer(build_app, name="build")
+
+from .checker_cli import app as checker_app
+
+app.add_typer(checker_app, name="checker")
 
 
 def _globals(argv: list[str]) -> list[str]:

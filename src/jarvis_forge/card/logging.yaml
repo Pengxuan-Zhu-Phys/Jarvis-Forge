@@ -1,0 +1,7 @@
+# Same process-record layout as Jarvis-HEP/card/logging.yaml.
+version: 1
+process:
+  date_format: "%m-%d %H:%M:%S"
+  millis_digits: 3
+  bullet: "·•·"
+  head: "\n{bullet} {module} \n\t-> {timestamp} - [{level}] >>> \n"

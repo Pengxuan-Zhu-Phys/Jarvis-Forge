@@ -191,7 +191,8 @@ def test_shell_hook_only_refreshes_after_changes(tmp_path, capsys, arguments, ex
 
 
 @pytest.mark.parametrize("shell", ["bash", "zsh"])
-def test_spack_profile_activation_removes_old_managed_paths(base, tmp_path, shell):
+@pytest.mark.parametrize("layout", ["legacy", "native-short"])
+def test_spack_profile_activation_removes_old_managed_paths(base, tmp_path, shell, layout):
     if not shutil.which(shell):
         pytest.skip("shell is not installed")
     paths = []
@@ -202,7 +203,7 @@ def test_spack_profile_activation_removes_old_managed_paths(base, tmp_path, shel
             home.root / "config.json",
             {**read_json(home.root / "config.json"), "apt_base_home": str(base.root)},
         )
-        prefix = home.root / "spack/store/toy/bin"
+        prefix = home.root / "spack/store/toy/bin" if layout == "legacy" else base.root / "apps" / name / "toy-1-abcdef123456/bin"
         prefix.mkdir(parents=True)
         env = tmp_path / (name + ".env")
         env.write_text(

@@ -157,7 +157,7 @@ def switch(
                 bootstrap=prepared,
                 apt_home=str(base.root),
                 user_home=str(base.root),
-                packages=str(backend.root(base) / "store"),
+                packages=str(backend.store_root(base)),
                 activation=environment_path(base),
                 state_committed=True,
             )
@@ -187,7 +187,7 @@ def switch(
             backend="spack",
             apt_home=str(target.root),
             user_home=str(base.root),
-            packages=str(backend.root(target) / "store"),
+            packages=str(backend.store_root(target)),
             activation=environment_path(target),
             state_committed=True,
         )

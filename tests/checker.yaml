@@ -1,0 +1,169 @@
+schema_version: 1
+kind: checker
+id: forge-development
+project: ..
+checks:
+- id: build-engine
+  inputs:
+  - src/jarvis_forge/cmake.py
+  - src/jarvis_forge/build*.py
+  - src/jarvis_forge/schemas/build.schema.json
+  - src/jarvis_forge/downloads.py
+  - tests/test_project_builds.py
+  - pyproject.toml
+  - src/jarvis_forge/storage.py
+  - src/jarvis_forge/package_operations.py
+  - src/jarvis_forge/suite.py
+  - tests/checker.yaml
+  - src/jarvis_forge/card/*.yaml
+  - src/jarvis_forge/standard_checks.py
+  - builds/scripts/*.py
+  - tools/build_project_assets.py
+  - tests/test_standard_checks.py
+  argv:
+  - ${python}
+  - -m
+  - pytest
+  - -q
+  - tests/test_project_builds.py
+  - tests/test_standard_checks.py
+- id: checker-engine
+  inputs:
+  - src/jarvis_forge/checker*.py
+  - src/jarvis_forge/cmake.py
+  - src/jarvis_forge/builds.py
+  - tests/test_checker.py
+  - pyproject.toml
+  - src/jarvis_forge/storage.py
+  - src/jarvis_forge/package_operations.py
+  - src/jarvis_forge/suite.py
+  - tests/checker.yaml
+  - src/jarvis_forge/card/*.yaml
+  - src/jarvis_forge/standard_checks.py
+  argv:
+  - ${python}
+  - -m
+  - pytest
+  - -q
+  - tests/test_checker.py
+- id: apt-backend
+  inputs:
+  - src/jarvis_forge/spack*.py
+  - src/jarvis_forge/apt*.py
+  - src/jarvis_forge/package_operations.py
+  - src/jarvis_forge/recipe_releases.py
+  - src/jarvis_forge/downloads.py
+  - tests/test_spack*.py
+  - tests/test_apt.py
+  - tests/test_profiles.py
+  - tests/test_package*.py
+  - src/jarvis_forge/storage.py
+  - src/jarvis_forge/suite.py
+  - tests/checker.yaml
+  - pyproject.toml
+  - src/jarvis_forge/card/*.yaml
+  argv:
+  - ${python}
+  - -m
+  - pytest
+  - -q
+  - tests/test_spack_backend.py
+  - tests/test_spack_integration.py
+  - tests/test_apt.py
+  - tests/test_profiles.py
+  - tests/test_package_operations.py
+  - tests/test_package_terminal.py
+  - tests/test_spack_layout.py
+- id: environments
+  inputs:
+  - src/jarvis_forge/environment*.py
+  - src/jarvis_forge/shell_activation.py
+  - tests/test_env*.py
+  - src/jarvis_forge/storage.py
+  - src/jarvis_forge/package_operations.py
+  - src/jarvis_forge/suite.py
+  - tests/checker.yaml
+  - pyproject.toml
+  - src/jarvis_forge/card/*.yaml
+  argv:
+  - ${python}
+  - -m
+  - pytest
+  - -q
+  - tests/test_environment.py
+  - tests/test_env_registry.py
+- id: acceptance-history
+  inputs:
+  - src/jarvis_forge/runner.py
+  - src/jarvis_forge/suite.py
+  - src/jarvis_forge/comparison.py
+  - src/jarvis_forge/storage.py
+  - src/jarvis_forge/schemas/suite.schema.json
+  - tests/test_workflow.py
+  - src/jarvis_forge/package_operations.py
+  - tests/checker.yaml
+  - pyproject.toml
+  - src/jarvis_forge/card/*.yaml
+  argv:
+  - ${python}
+  - -m
+  - pytest
+  - -q
+  - tests/test_workflow.py
+- id: release-recipes
+  inputs:
+  - src/jarvis_forge/recipe_releases.py
+  - tools/build*assets.py
+  - tests/test_recipe_releases.py
+  - src/jarvis_forge/storage.py
+  - src/jarvis_forge/package_operations.py
+  - src/jarvis_forge/suite.py
+  - tests/checker.yaml
+  - pyproject.toml
+  - src/jarvis_forge/card/*.yaml
+  argv:
+  - ${python}
+  - -m
+  - pytest
+  - -q
+  - tests/test_recipe_releases.py
+- id: cli
+  inputs:
+  - src/jarvis_forge/*cli.py
+  - src/jarvis_forge/presentation.py
+  - src/jarvis_forge/__init__.py
+  - tests/test_cli.py
+  - src/jarvis_forge/storage.py
+  - src/jarvis_forge/package_operations.py
+  - src/jarvis_forge/suite.py
+  - tests/checker.yaml
+  - pyproject.toml
+  - src/jarvis_forge/card/*.yaml
+  argv:
+  - ${python}
+  - -m
+  - pytest
+  - -q
+  - tests/test_cli.py
+- id: root-recipe
+  inputs:
+  - builds/root-build.yaml
+  - src/jarvis_forge/builds.py
+  - src/jarvis_forge/schemas/build.schema.json
+  - src/jarvis_forge/storage.py
+  - src/jarvis_forge/package_operations.py
+  - src/jarvis_forge/suite.py
+  - tests/checker.yaml
+  - pyproject.toml
+  - src/jarvis_forge/card/*.yaml
+  - builds/library/*.yaml
+  - src/jarvis_forge/standard_checks.py
+  - builds/scripts/*.py
+  - tools/build_project_assets.py
+  argv:
+  - ${python}
+  - -m
+  - jarvis_forge
+  - build
+  - validate
+  - builds/root-build.yaml

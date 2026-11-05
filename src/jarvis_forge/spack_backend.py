@@ -19,6 +19,7 @@ import yaml
 from .storage import ForgeError, digest, now, read_json, write_json
 
 ENGINE_VERSION = "1.2.2"
+INSTALL_PROJECTION = "{name}"
 ENGINE = {
     "url": "https://github.com/spack/spack/releases/download/v1.2.2/spack-1.2.2.tar.gz",
     "sha256": "ed39d08bc295571cdec23a4566cbd8aa7ef4ebd582013d43874471a2b1257bf5",
@@ -83,6 +84,52 @@ def settings(home):
     if data.get("schema_version") != 1 or data.get("backend") != "spack":
         raise ForgeError("Invalid Spack backend settings.")
     return data
+
+
+def _saved_install_tree(home):
+    file = root(home) / "config/config.yaml"
+    if file.is_file():
+        try:
+            data = yaml.safe_load(file.read_text())
+            tree = data["config"]["install_tree"]
+        except (OSError, KeyError, TypeError, yaml.YAMLError) as exc:
+            raise ForgeError(f"Cannot read the existing Spack install layout: {file}") from exc
+        if not isinstance(tree, dict) or not isinstance(tree.get("root"), str):
+            raise ForgeError(f"Invalid Spack install layout: {file}")
+        return tree
+    if configured(home) or (root(home) / "store").exists():
+        saved = settings(home).get("install_tree") if configured(home) else None
+        if saved:
+            if not isinstance(saved, dict) or not isinstance(saved.get("root"), str):
+                raise ForgeError("Invalid saved Spack install layout.")
+            return saved
+        # Old deployments used this exact padding rule. Never change their
+        # layout in place, even when repairing a missing config file.
+        return {"root": str(root(home) / "store"),
+                "padded_length": max(128, len(str(root(home) / "store")) + 32)}
+    return None
+
+
+def _new_install_tree(home):
+    from .package_operations import _inside
+    from .storage import ForgeHome, identifier
+    config = read_json(home.root / "config.json")
+    base = ForgeHome(Path(config.get("apt_base_home", str(home.root))))
+    if base.root != home.root:
+        if not home.root.is_relative_to(base.root / "apt/profiles"):
+            raise ForgeError("Spack profile is outside its Forge home.")
+        name = identifier(home.root.name.removeprefix("spack-"))
+    else:
+        name = "_direct"
+    store = _inside(base, base.root / "apps" / name)
+    return {"root": str(store), "padded_length": False,
+            "projections": {"all": INSTALL_PROJECTION}}
+
+
+def store_root(home):
+    """Report the native store without initializing it or changing old layouts."""
+    tree = _saved_install_tree(home) or _new_install_tree(home)
+    return Path(tree["root"])
 
 
 def normalize(text):
@@ -257,10 +304,7 @@ def _config(home, repo, python):
     directory.mkdir(parents=True, exist_ok=True)
     data = {
         "config": {
-            "install_tree": {
-                "root": str(root(home) / "store"),
-                "padded_length": max(128, len(str(root(home) / "store")) + 32),
-            },
+            "install_tree": _saved_install_tree(home) or _new_install_tree(home),
             "build_stage": [str(root(home) / "stage")],
             "source_cache": str(root(home) / "sources"),
             "environments_root": str(root(home) / "environments"),
@@ -299,6 +343,7 @@ def _config(home, repo, python):
                 }
             )
         )
+    return data["config"]["install_tree"]
 
 
 def _unpack(home, source, directory, op, label):
@@ -321,7 +366,7 @@ def _unpack(home, source, directory, op, label):
             shutil.rmtree(temporary)
 
 
-def bootstrap(home, *, python=None, progress=None):
+def bootstrap(home, *, python=None, progress=None, extensions=None):
     from .package_operations import locked, operation
 
     with (
@@ -388,7 +433,7 @@ def bootstrap(home, *, python=None, progress=None):
                 REPOSITORY,
                 REPO_COMMIT,
             )
-        _config(home, repo_path, selected)
+        install_tree = _config(home, repo_path, selected)
         for name in ["discovery", "system", "environments"]:
             (base / name).mkdir(exist_ok=True)
         value = {
@@ -406,6 +451,9 @@ def bootstrap(home, *, python=None, progress=None):
                 else {}
             ),
             "python": selected,
+            "install_tree": install_tree,
+            "extension_recipes": (previous.get("extension_recipes", True) if previous else True)
+            if extensions is None else extensions,
         }
         write_json(home.root / "apt/spack.json", value)
         version = run(home, ["--version"], op, "version", progress=progress).strip()
@@ -423,7 +471,8 @@ def bootstrap(home, *, python=None, progress=None):
         ).strip()
         from .recipe_releases import ensure
 
-        ensure(home, op)
+        if value["extension_recipes"]:
+            ensure(home, op)
         _refresh_catalog(home, op)
         if not current(home)["environment"]:
             envdir = _candidate(home, op, [], previous=None)
@@ -481,7 +530,8 @@ def catalog(home, pattern="*", query=None):
 def _candidate(home, op, roots, previous):
     from .recipe_releases import ensure
 
-    ensure(home, op)
+    if settings(home).get("extension_recipes", True):
+        ensure(home, op)
     directory = root(home) / "environments" / op.name
     directory.mkdir(parents=True)
     (directory / "spack.yaml").write_text(
@@ -518,6 +568,34 @@ def _snapshot(home, envdir, op, label="snapshot"):
         ),
         label,
     )
+
+
+def _validate_name_only_plan(plan, envdir):
+    """Reject conflicting builds before installation; Spack owns spec metadata."""
+    file = envdir / ".jforge-config/config.yaml"
+    if not file.is_file():
+        return
+    layout = yaml.safe_load(file.read_text()).get("config", {}).get("install_tree", {})
+    if not isinstance(layout, dict) or layout.get("projections") != {"all": "{name}"}:
+        return  # Existing profiles retain their original multi-instance policy.
+    builds = {}
+    for package in plan["packages"]:
+        builds.setdefault(package["name"], set()).add(package["hash"])
+    conflicts = sorted(name for name, hashes in builds.items() if len(hashes) > 1)
+    if conflicts:
+        raise ForgeError("This environment allows one build per package; the plan contains multiple instances of: " +
+                         ", ".join(conflicts), code=1,
+                         hint="Choose compatible Spack specs that require one instance of each package.")
+    store = Path(layout["root"])
+    for package in plan["packages"]:
+        if package["external"]:
+            continue
+        prefix = Path(package["prefix"])
+        if prefix != store / package["name"]:
+            raise ForgeError(f"Spack returned an unexpected name-only prefix: {prefix}", code=1)
+        if (prefix.exists() or prefix.is_symlink()) and not package["installed"] and not package.get("prefix_matches"):
+            raise ForgeError(f"{package['name']} already occupies {prefix} with another build; its metadata and files are preserved.",
+                             code=1, hint="jforge apt switch spack --name <new-name>; then install the requested packages there.")
 
 
 def _publish(home, op, envdir, roots, snapshot):
@@ -749,6 +827,7 @@ def transact(
             else:
                 plan = {"packages": [], "modifications": []}
             write_json(op / "plan.json", plan)
+            _validate_name_only_plan(plan, envdir)
             if action == "check":
                 result.update(
                     backend="spack",

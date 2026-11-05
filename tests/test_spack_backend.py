@@ -147,6 +147,60 @@ def test_transaction_dependency_snapshot_and_cache_policy(managed):
     assert read_json(home.root / "apt/state.json")["spack"]["roots"] == ["fixture-app"]
 
 
+def named_layout(home):
+    (b.root(home) / 'config/config.yaml').write_text(yaml.safe_dump({'config':{'install_tree':{
+        'root':str(b.root(home) / 'store'), 'padded_length':False, 'projections':{'all':'{name}'}}}}))
+
+
+def test_name_only_layout_blocks_changed_build_before_install(managed, monkeypatch):
+    home, calls = managed
+    named_layout(home)
+    first = b.transact(home, 'install', ['fixture-app'], cache='never')
+    old_state = (home.root / 'apt/state.json').read_bytes()
+    installs = len([args for args, kwargs in calls if args[0]=='install'])
+    run = b.run
+    def changed(home, args, op, label, **kwargs):
+        output = run(home,args,op,label,**kwargs)
+        if label == 'plan':
+            plan = json.loads(output)
+            plan['packages'][0].update(hash='another-build', installed=False)
+            return json.dumps(plan)
+        return output
+    monkeypatch.setattr(b,'run',changed)
+    with pytest.raises(ForgeError, match='another build'):
+        b.transact(home,'upgrade',cache='never')
+    assert (home.root / 'apt/state.json').read_bytes() == old_state
+    assert len([args for args, kwargs in calls if args[0]=='install']) == installs
+    assert Path(first['activation']).is_file()
+
+
+def test_name_only_layout_rejects_duplicate_package_builds(managed, monkeypatch):
+    home, calls = managed
+    named_layout(home)
+    run = b.run
+    def duplicate(home,args,op,label,**kwargs):
+        output = run(home,args,op,label,**kwargs)
+        if label=='plan':
+            plan = json.loads(output)
+            plan['packages'].append({**plan['packages'][0], 'hash':'different-variant'})
+            return json.dumps(plan)
+        return output
+    monkeypatch.setattr(b,'run',duplicate)
+    with pytest.raises(ForgeError,match='multiple instances'):
+        b.transact(home,'install',['fixture-app'],cache='never')
+    assert not any(args[0]=='install' for args,kwargs in calls)
+    assert not (home.root / 'apt/state.json').exists()
+
+
+def test_name_only_layout_allows_same_build_reuse(managed):
+    home,calls = managed
+    named_layout(home)
+    first = b.transact(home,'install',['fixture-app'],cache='never')
+    second = b.transact(home,'install',['fixture-app'],cache='never')
+    assert first['packages'][0]['prefix'] == second['packages'][0]['prefix']
+    assert second['state_committed']
+
+
 def test_failure_keeps_active_state_and_archives_candidate(managed):
     home, calls = managed
     first = b.transact(home, "install", ["fixture-app"], cache="never")

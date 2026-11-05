@@ -90,6 +90,21 @@ jforge info eigen --package-version 3.4.0 --instance <install-id> --path
 
 `info` queries JSON installation manifests under the selected package environment's `packages/<name>/<version>/<install-id>/manifest.json`. `jforge apt install` creates those records after installation checks pass. Multiple instances are listed explicitly; `--path` requires a unique match. `--package-version` selects installed software; `--version` remains Forge's version query.
 
+New Spack environments install each package into `<home>/apps/<profile>/<package>`, for example `apps/root-env/eigen`. These are real installation directories. Versions, compiler/variant/dependency identities and full hashes remain in Spack's own `.spack/spec.json` and database. There is no extra link layer or Forge-specific package metadata format.
+
+Each new environment permits one concrete build per package name. A dependency plan requiring two instances of one name is rejected before installation. If an existing package directory belongs to a different build, Forge preserves it and requires a fresh environment for the changed version/toolchain/dependency combination. Spack validates existing native metadata; compatible installed packages can be reused. `reinstall` retains its explicit same-spec overwrite behavior.
+
+Existing environments retain their original layout and multi-instance policy, including when regenerating configuration or selecting another Python. To adopt package-name directories with an existing Forge home, choose a previously unused environment name:
+
+```bash
+jforge apt switch                         # List saved package environments.
+jforge apt switch spack --name root-env    # Create/select this independent package environment.
+jforge apt install libeigen3-dev libgsl-dev sqlite3
+jforge info eigen --path
+```
+
+`jforge paths` reports the selected native store. Old prefixes and installed ROOT references are preserved. Each `build` dependency profile follows the same one-build-per-name rule when newly created. Saved Spack environment revisions are installation history, distinct from the user-selected apt profiles; named shell/Python environments are listed separately by `jforge env list`.
+
 You select and prepare Python environments with pyenv or your existing tools. `doctor --shell` sources your trusted Bash script and reports the resulting CC/CXX/FC selections, compiler and build-tool paths and versions, Python interpreter paths and versions, virtual environment prefixes, installed Python packages, and selected module/pyenv variables. It does not choose an environment or switch to a fallback. Without `--shell`, it inspects the inherited environment. Missing tools and failed version probes are reported individually; activation errors fail the command. `--timeout` limits the complete inspection, including activation. Shell output is kept separate from JSON results. Inspection creates no Forge user state.
 
 ## Named environments and target Python
@@ -176,7 +191,103 @@ Archive queries read records without running old shell or recipe commands. Archi
 
 See [APT usage](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md), [backend design](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_DEPENDENCIES.md), and [compatibility](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_COMPATIBILITY.md).
 
-## Suite format
+## Project builds and regression checker
+
+`jforge build` prepares, configures, compiles, installs and verifies software projects using CMake and reusable installation outputs. The `workflow` command namespace is reserved for future orchestration design. It is parallel to `apt`; dependency installation still uses the same Spack backend, in private upstream-only profiles that do not change the interactive apt selection. Build YAML sources are distributed independently from PyPI through GitHub Release assets. From a development checkout:
+
+```bash
+jforge build validate builds/root-build.yaml
+jforge build plan builds/root-build.yaml --env hep
+jforge build run builds/root-build.yaml --env hep --jobs 8
+jforge build resume <run-id> --jobs 8
+jforge build artifacts
+source "$(jforge build env <artifact-id> --path)"
+```
+
+A downloaded recipe can own its complete project workspace (after the maintainer publishes the build Release):
+
+```bash
+jforge build run root-build --directory "$HOME/workshops/root-forge" --jobs 8
+source "$HOME/workshops/root-forge/activate.sh"
+```
+
+To inspect or edit the recipe first:
+
+```bash
+jforge build fetch root-build --directory "$HOME/workshops/root-forge"
+jforge build run "$HOME/workshops/root-forge" --jobs 8
+```
+
+The directory contains `build.yaml`, companion scripts and `instances/<id>/{downloads,sources,build,install}`. Package dependencies remain in Forge's shared Spack profiles. `runs/<run-id>` links to the retained Forge history. A successful acceptance run updates the workspace's `activate.sh`; failure preserves the previous successful activation and build directories. Resume uses the saved workspace and scripts. Absolute installation paths remain fixed; this is not a relocatable binary bundle.
+
+An uncached Release ID is downloaded on explicit `build fetch/run`; cached IDs and existing workspaces remain usable offline. `build update` refreshes the catalog explicitly and never overwrites an editable workspace. The existing `fetch --output file.yaml` still copies only an editable card and its companion scripts; it does not create a workspace. `validate/plan` stay read-only and do not implicitly download missing recipes.
+
+Build cards use native Forge project sections: `dependencies`, `build` and `checks`. The ROOT card explicitly lists its source URL/checksum, packages, CMake options, extra dependency search paths and acceptance commands. A shortened excerpt is:
+
+```yaml
+name: root-build
+dependencies: [gsl, openblas+shared, openssl, libbsd, libmd]  # Full list in the actual card.
+build:
+  name: ROOT
+  version: "6.40.04"
+  # The actual card declares source URL, SHA-256 and archive subdirectory here.
+  cmake:
+    options:
+      CMAKE_CXX_STANDARD: 17
+      all: true
+    includes: [libbsd, mesa-glu, fontconfig]
+    libraries: [libbsd, libmd, mesa-glu]
+    runtime: [openssl, libbsd, libmd]
+checks:
+  before:
+    python:
+      version: ">=3.10"
+      development: true
+      modules: [numpy]
+    tools: [cmake, cc, c++, gfortran]
+  after:
+    python:
+      modules: [ROOT]
+    scripts:
+      - path: scripts/root_acceptance.py
+        args: ["${path}", "${build.version}", "${parameters.cxx_standard}", "${build.features}"]
+```
+
+Only engine policy is implicit: Forge home selection, work/build/install/log directories, phase defaults, ordinary build type and timeouts. These defaults live in `card/build_default.yaml`; process-log layout lives in `card/logging.yaml`. Dependency path lists resolve from selected apt package prefixes. Includes/libraries feed both CMake discovery and compiler/linker search paths, including nested builds. Runtime paths apply during builds and after installation, with CMake RPATH defaults. Each CMake step saves resolved paths in `dependency-paths.json`. The independently released `builds/root-build.yaml` declares the project requirements; its companion `builds/scripts/root_acceptance.py` implements ROOT-specific acceptance. `build show` displays the authored card; `--expanded` displays its effective execution configuration.
+
+`build.source` accepts a local source directory or URL/SHA-256/subdir mapping. Use `build.cmake.preset` for a project's native preset, and `requires` to consume another build's installation output. Standard `checks.before/after` declare Python versions/development files, imported modules and executable requirements. Module/tool mappings add constraints, for example `modules: {numpy: ">=1.26"}`. Checks run with the selected Python, which does not need Forge installed. Reports preserve actual versions, paths and failures in `checks.json`. Custom Python belongs in relative companion scripts, with optional argument lists; shell strings, cmd/cwd mappings and literal argv lists remain supported. Previous LibDeps/Calculators spellings remain compatible aliases; new cards do not require HEP-specific keys. Similar log presentation does not add a dependency on Jarvis-HEP.
+
+`hep` is a user-registered environment; omit `--env` to inherit the current compiler/Python selection. The ROOT recipe currently targets Linux, needs an existing CMake/C/C++/Fortran toolchain and Python with NumPy/development headers, and defaults to C++17. It requests `all=ON` with explicit CPU/site exceptions; it does not promise every ROOT option or GPU support. PyROOT, required features, histogram/file I/O and RooFit are checked before the output is published for another build. ROOT's full real build requires separate target-machine validation of this new automation.
+
+User cards declare prerequisite modules with `required_modules`; the expanded execution schema represents external build outputs using `requires` entries. Compatible installed artifacts are reused; missing ones are built first. Recipes, local source digests, parameters, dependency instances and tool observations are locked. Multiple compatible instances require an explicit artifact binding; incompatible compiler/Python/C++ choices fail before consumer configuration. `cmake.project` consumes pinned prefixes and verifies the selected package-config path. History/show remain available; logs support qualified step names such as `root-build.ROOT.install`.
+
+Independent recipe distribution (once the maintainer publishes the assets):
+
+```bash
+jforge build update
+jforge build list
+jforge build fetch root-build --output root.yaml
+PYTHONPATH=src python3 tools/build_project_assets.py --version r1 --output /tmp/forge-build-release
+```
+
+The asset builder prepares versioned YAML, referenced Python scripts and a checksum index. `update` validates the whole bundle; `fetch` copies the YAML and its scripts together, refusing conflicting local files. Script changes alter recipe identity, and resume uses the original script snapshots. Companion scripts should be self-contained. The builder never uploads or modifies `jfrel`. An unavailable Release does not prevent executing local or previously cached YAML.
+
+`jforge checker` runs commands, builds or the same structured standard checks as regression checks. Standard checks use `check: {python: {modules: [numpy]}}` and run every time by default. Default selection for command/build checks compares declared input globs (including additions/deletions), check configuration, prerequisite signatures and the observed environment with the last successful evidence. It does not infer all software dependencies from Git changes. Checks with external/untracked inputs should use `cache: false` or be run with `--full`.
+
+```bash
+jforge checker list tests/checker.yaml
+jforge checker run tests/checker.yaml --full
+jforge checker run tests/checker.yaml
+jforge checker run tests/checker.yaml --check build-engine
+jforge history --suite forge-development
+jforge logs <checker-run-id> --step build-engine
+```
+
+The development checker covers all existing local test modules plus ROOT YAML validation. Build checks can run real ROOT/CBS/MadGraph acceptance separately; `--full` reruns checks but does not erase CMake incremental builds or force successful build artifacts to rebuild. `history`, `show` and `logs` work for both types. Byte/scientific comparison policies for these new run types are not yet part of `compare`.
+
+Both executors run in the foreground and clean up their child processes on interruption; use tmux for long SSH builds. See the [build implementation and design](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/BUILDS.md) and [checker guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/CHECKER.md).
+
+## Acceptance suite format
 
 Suites use `schema_version: 1`, a stable `id`, and ordered command steps. Each step chooses either `argv` or an explicit Bash `script`, with optional `needs`, `cwd`, `timeout_seconds`, `expect_exit_code` and required `artifacts`. Commands and scripts are trusted user code.
 

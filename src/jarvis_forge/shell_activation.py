@@ -42,7 +42,7 @@ def activation(home, env_files, *, extra_variables=(), extra_paths=()):
         _jf_drop=0
         if [ "$_jf_mode" = managed ]; then
             case "$_jf_piece" in
-                "$_jf_base"/packages/*/prefix|"$_jf_base"/packages/*/prefix/*|"$_jf_base"/apt/profiles/*/packages/*/prefix|"$_jf_base"/apt/profiles/*/packages/*/prefix/*|"$_jf_base"/spack/store/*|"$_jf_base"/apt/profiles/*/spack/store/*) _jf_drop=1 ;;
+                "$_jf_base"/apps/*|"$_jf_base"/packages/*/prefix|"$_jf_base"/packages/*/prefix/*|"$_jf_base"/apt/profiles/*/packages/*/prefix|"$_jf_base"/apt/profiles/*/packages/*/prefix/*|"$_jf_base"/spack/store/*|"$_jf_base"/apt/profiles/*/spack/store/*) _jf_drop=1 ;;
             esac
         else
             case ":$_jf_applied:" in
@@ -66,7 +66,7 @@ def activation(home, env_files, *, extra_variables=(), extra_paths=()):
                       'fi']
         else:
             literal = shlex.quote(str(base))
-            lines += [f'case "${{{name}-}}" in *{literal}/packages/*/prefix*|*{literal}/apt/profiles/*/packages/*/prefix*|*{literal}/spack/store/*|*{literal}/apt/profiles/*/spack/store/*) unset {name} ;; esac']
+            lines += [f'case "${{{name}-}}" in *{literal}/apps/*|*{literal}/packages/*/prefix*|*{literal}/apt/profiles/*/packages/*/prefix*|*{literal}/spack/store/*|*{literal}/apt/profiles/*/spack/store/*) unset {name} ;; esac']
         lines += [f'_JFORGE_APT_HAD_{name}=${{{name}+x}}', f'_JFORGE_APT_OLD_{name}=${{{name}-}}']
     for path in env_files:
         lines.append("source " + shlex.quote(str(path)) + " || return $?")

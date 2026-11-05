@@ -16,10 +16,28 @@ def test_help(command, capsys):
     assert "\x1b[" not in out.out
 
 
+@pytest.mark.parametrize('command', [[], ['list'], ['update'], ['show'], ['fetch'], ['validate'],
+                                      ['plan'], ['run'], ['resume'], ['artifacts'], ['env']])
+def test_build_help_and_reserved_workflow_namespace(command, capsys):
+    assert main(['build', *command, '--help']) == 0
+    output = capsys.readouterr().out
+    assert 'Usage: jforge build' in output
+    assert 'jforge workflow' not in output
+
+
+def test_build_json_uses_build_command_and_workflow_is_reserved(capsys):
+    assert main(['build', 'list', '--json']) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['command'] == 'build list'
+    assert 'builds' in result
+    assert main(['workflow', '--json']) == 2
+    assert json.loads(capsys.readouterr().out)['ok'] is False
+
+
 @pytest.mark.parametrize("args", [["--version"], ["-v"], ["-V"]])
 def test_version(args, capsys):
     assert main(args) == 0
-    assert capsys.readouterr().out == "Jarvis-Forge 1.0.12\n"
+    assert capsys.readouterr().out == "Jarvis-Forge 1.1.0\n"
 
 
 @pytest.mark.parametrize("args", [["--json", "--version"], ["--version", "--json"]])

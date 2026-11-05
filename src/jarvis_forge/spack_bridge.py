@@ -29,6 +29,17 @@ def snapshot(runtime_only=False):
              if runtime_only else environment.all_specs())
     for spec in specs:
         installed = bool(spec.external or spack.store.STORE.db.query_one(spec))
+        prefix_matches = False
+        if not spec.external and spack.store.STORE.layout.projections == {"all": "{name}"} and (installed or Path(spec.prefix).exists()):
+            # Read and verify .spack/spec.json through Spack itself. Forge does
+            # not introduce its own prefix metadata format or overwrite policy.
+            from spack.directory_layout import DirectoryLayoutError
+            try:
+                spack.store.STORE.layout.ensure_installed(spec)
+                prefix_matches = True
+            except DirectoryLayoutError:
+                if installed:
+                    raise
         packages.append(
             {
                 "name": spec.name,
@@ -37,6 +48,7 @@ def snapshot(runtime_only=False):
                 "prefix": str(spec.prefix),
                 "external": bool(spec.external),
                 "installed": installed,
+                "prefix_matches": prefix_matches,
                 "root": spec.dag_hash() in root_hashes,
                 "spec": str(spec),
                 "node": spec.node_dict_with_hashes(),
