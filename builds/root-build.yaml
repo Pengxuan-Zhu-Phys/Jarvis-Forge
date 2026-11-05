@@ -5,6 +5,9 @@ dependencies: [pkgconf, gsl, openblas+shared, openssl, libbsd, libmd, libx11, li
   fontconfig, freetype, mesa, mesa-glu, gl2ps, graphviz, libxml2, curl, intel-tbb, pcre2, fftw, cfitsio,
   nlohmann-json, giflib, libjpeg-turbo, libpng, libtiff, lz4, xz, zstd, sqlite, pythia8, arrow, davix,
   vecgeom]
+# zlib is not listed separately. These packages already depend on Spack's zlib-api
+# provider, zlib-ng, and ROOT accepts that library. A second zlib package would
+# install another libz beside it.
 build:
   name: ROOT
   version: 6.40.04
@@ -16,7 +19,30 @@ build:
     options:
       CMAKE_CXX_STANDARD: 17
       OPENSSL_ROOT_DIR: "${packages.openssl.prefix}"  # Discover SSL/crypto from the same installation.
-      all: true
+      # `all` also enables components that download undeclared sources when they
+      # are missing: XRootD, VDT, Clad, and RooFit MultiProcess (ZeroMQ).
+      fail-on-missing: true
+      arrow: true          # default OFF; required by acceptance
+      mathmore: true       # default OFF; requires the declared GSL
+      pythia8: true        # default OFF; required by acceptance
+      vecgeom: true        # default OFF; required by acceptance
+      fftw3: true          # default OFF; the declared FFTW package
+      gviz: true           # default OFF; the declared Graphviz package
+      # These copies ship in the ROOT tarball. fail-on-missing rejects that
+      # fallback unless the builtin option is on. None of them need a download.
+      builtin_ftgl: true
+      builtin_xxhash: true
+      builtin_civetweb: true
+      xrootd: false        # default ON; otherwise configure downloads builtin XRootD
+      vdt: false           # default ON; otherwise configure downloads builtin VDT
+      clad: false          # default ON; otherwise configure downloads Clad
+      cefweb: false
+      roofit_multiprocess: false
+      unuran: false
+      fortran: false
+      tmva-pymva: false
+      tmva-rmva: false
+      shadowpw: false
       fcgi: false
       dcache: false
       r: false
@@ -25,7 +51,7 @@ build:
       tmva-gpu: false
       tmva-cudnn: false
     # Package names resolve to this run's Spack prefixes; no machine paths are hard-coded.
-    # Includes reach CMake discovery AND compilers in nested builds such as builtin ZeroMQ.
+    # Includes reach CMake discovery and the compilers used by nested builds.
     includes:
       - libbsd                         # include/bsd/string.h
       - mesa-glu                       # include/GL/glu.h

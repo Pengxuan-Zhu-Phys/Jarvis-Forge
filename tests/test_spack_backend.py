@@ -152,6 +152,39 @@ def named_layout(home):
         'root':str(b.root(home) / 'store'), 'padded_length':False, 'projections':{'all':'{name}'}}}}))
 
 
+def candidate_document(calls):
+    envdir = next(kw["envdir"] for args, kw in calls if args and args[0] == "concretize")
+    return yaml.safe_load((envdir / "spack.yaml").read_text())["spack"]
+
+
+def test_name_only_environment_pins_installed_gcc_runtime(managed):
+    home, calls = managed
+    named_layout(home)
+    spec = b.root(home) / "store/gcc-runtime/.spack/spec.json"
+    spec.parent.mkdir(parents=True)
+    spec.write_text(json.dumps({"spec": {"nodes": [{
+        "name": "gcc-runtime",
+        "arch": {"target": {"name": "x86_64_v3"}},
+    }]}}))
+    b.transact(home, "install", ["fixture-app"], cache="never")
+    assert candidate_document(calls)["packages"]["gcc-runtime"]["require"] == ["target=x86_64_v3"]
+
+
+def test_name_only_environment_uses_generic_target_before_runtime_exists(managed, monkeypatch):
+    home, calls = managed
+    named_layout(home)
+    monkeypatch.setattr(b, "_generic_host_target", lambda home: "x86_64_v3")
+    b.transact(home, "install", ["fixture-app"], cache="never")
+    assert candidate_document(calls)["packages"]["gcc-runtime"]["require"] == ["target=x86_64_v3"]
+
+
+def test_multi_instance_store_does_not_pin_gcc_runtime(managed, monkeypatch):
+    home, calls = managed
+    monkeypatch.setattr(b, "_generic_host_target", lambda home: "x86_64_v3")
+    b.transact(home, "install", ["fixture-app"], cache="never")
+    assert "packages" not in candidate_document(calls)
+
+
 def test_name_only_layout_blocks_changed_build_before_install(managed, monkeypatch):
     home, calls = managed
     named_layout(home)

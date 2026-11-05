@@ -577,13 +577,11 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
                     raise ForgeError(f"Locked apt dependency changed: {file}")
             return previous
         from . import spack_backend as backend
-        target = ForgeHome(home.root / "apt/profiles" / ("spack-build-" + work.name[:20] + "-" + step["id"]))
-        target.initialize()
-        write_json(target.root / "config.json", {**read_json(target.root / "config.json"), "apt_base_home": str(home.root)})
+        from .apt_profiles import ensure_active
+        # Package dependencies belong in the apt environment. With no apt switch
+        # that is spack-default, the same store and compilers as `jforge apt`.
         with process_environment(environment):
-            # These builds use upstream Spack recipes; an unpublished optional
-            # extension Release must not block their builtin package dependencies.
-            backend.bootstrap(target, python=observed.get("python", {}).get("path"), progress=progress, extensions=False)
+            target = ensure_active(home, progress=progress)
             installed = backend.transact(target, "install", options["specs"], jobs=jobs,
                                          timeout=step.get("timeout_seconds", 86400), progress=progress)
         lock = Path(installed["lockfile"])

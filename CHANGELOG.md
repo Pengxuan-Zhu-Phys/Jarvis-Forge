@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.3 — 2026-11-06
+
+### Changed
+
+- Install `jforge build` recipe dependencies into the active apt Spack environment. With no `apt switch`, that environment is `spack-default`. Builds no longer create a private `spack-build-*` profile.
+- Build the ROOT recipe from its declared dependencies. `all=ON` also enabled XRootD, VDT, Clad, and RooFit MultiProcess, and ROOT downloads those during configuration when they are not installed. The recipe now enables the checked features directly, keeps the copies that ship in the ROOT tarball, and fails configuration when a declared package is missing.
+
+### Fixed
+
+- Keep a package-name Spack store to one `gcc-runtime`. Reused binaries for the host microarchitecture, such as `zen2`, were planned beside generic `x86_64_v3` packages, and each target brought its own runtime into the same prefix. New plans require the runtime already in the store, or the host's generic target when none is installed.
+
 ## 1.1.2
 
 ### Fixed

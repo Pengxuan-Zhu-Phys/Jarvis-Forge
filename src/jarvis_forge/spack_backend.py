@@ -527,6 +527,81 @@ def catalog(home, pattern="*", query=None):
     ]
 
 
+def _spec_target(path):
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise ForgeError(f"Cannot read installed package spec: {path}") from exc
+    spec = data.get("spec", data) if isinstance(data, dict) else None
+    node = spec
+    if isinstance(spec, dict) and isinstance(spec.get("nodes"), list) and spec["nodes"]:
+        node = spec["nodes"][0]
+    arch = node.get("arch") if isinstance(node, dict) else None
+    target = arch.get("target") if isinstance(arch, dict) else None
+    if isinstance(target, dict):
+        target = target.get("name")
+    if not isinstance(target, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", target):
+        raise ForgeError(f"Installed package spec has no CPU target: {path}")
+    return target
+
+
+def _generic_host_target(home):
+    """Best generic CPU target, matching Spack build-cache binaries."""
+    vendor = root(home) / "engine" / ENGINE_VERSION / "lib/spack/spack/vendor"
+    if not (vendor / "archspec/cpu").is_dir():
+        return None
+    env = os.environ.copy()
+    env.pop("PYTHONHOME", None)
+    env["PYTHONPATH"] = str(vendor)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    try:
+        probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import archspec.cpu as cpu\n"
+                "host = cpu.host()\n"
+                "print((host.generic or host).name)\n",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+            env=env,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ForgeError("Cannot detect the host CPU target for this Spack store.") from exc
+    if probe.returncode != 0:
+        detail = (probe.stderr or probe.stdout).strip().splitlines()
+        raise ForgeError(
+            "Cannot detect the host CPU target for this Spack store.",
+            hint=detail[-1] if detail else None,
+        )
+    name = probe.stdout.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+        raise ForgeError(f"Unexpected host CPU target: {name!r}")
+    return name
+
+
+def _gcc_runtime_target(home):
+    """Keep one gcc-runtime in a package-name store.
+
+    A reused binary may be the host microarchitecture while another package is
+    the generic target. Each target plans its own gcc-runtime, and both would
+    occupy the same prefix. Use the runtime already installed, otherwise the
+    host's generic target.
+    """
+    layout = _saved_install_tree(home) or _new_install_tree(home)
+    if not isinstance(layout, dict) or layout.get("projections") != {"all": INSTALL_PROJECTION}:
+        return None
+    installed = Path(layout["root"]) / "gcc-runtime" / ".spack" / "spec.json"
+    if installed.is_file():
+        return _spec_target(installed)
+    return _generic_host_target(home)
+
+
 def _candidate(home, op, roots, previous):
     from .recipe_releases import ensure
 
@@ -534,18 +609,17 @@ def _candidate(home, op, roots, previous):
         ensure(home, op)
     directory = root(home) / "environments" / op.name
     directory.mkdir(parents=True)
-    (directory / "spack.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "spack": {
-                    "specs": roots,
-                    "view": False,
-                    "concretizer": {"unify": True, "reuse": True},
-                }
-            },
-            sort_keys=False,
-        )
-    )
+    document = {
+        "spack": {
+            "specs": roots,
+            "view": False,
+            "concretizer": {"unify": True, "reuse": True},
+        }
+    }
+    target = _gcc_runtime_target(home)
+    if target:
+        document["spack"]["packages"] = {"gcc-runtime": {"require": [f"target={target}"]}}
+    (directory / "spack.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
     shutil.copytree(root(home) / "config", directory / ".jforge-config")
     if previous and (Path(previous) / "spack.lock").is_file():
         shutil.copy2(Path(previous) / "spack.lock", directory / "spack.lock")

@@ -8,7 +8,19 @@ import yaml
 
 from jarvis_forge import cmake, builds, build_catalog
 from jarvis_forge.cli import main
-from jarvis_forge.storage import ForgeHome, ForgeError, digest, read_json
+from jarvis_forge.storage import ForgeHome, ForgeError, digest, read_json, write_json
+
+
+def fake_bootstrap(target, *args, **kwargs):
+    activation = target.root / "environments/apt/activate.sh"
+    activation.parent.mkdir(parents=True, exist_ok=True)
+    activation.write_text(":\n")
+    write_json(target.root / "apt/spack.json", {"schema_version": 1, "backend": "spack"})
+    write_json(target.root / "apt/state.json", {
+        "schema_version": 1,
+        "spack": {"roots": [], "packages": []},
+        "activation": str(activation),
+    })
 
 
 def save(path, **config):
@@ -233,7 +245,14 @@ def test_compact_root_overrides_and_default_provenance():
     root=raw['build']
     assert 'libbsd' in raw['dependencies']
     assert root['source']['sha256']
-    assert root['cmake']['options']['all'] is True
+    options = root['cmake']['options']
+    assert 'all' not in options
+    assert options['fail-on-missing'] is True
+    assert options['arrow'] is True and options['mathmore'] is True
+    assert options['pythia8'] is True and options['vecgeom'] is True
+    assert options['xrootd'] is False and options['vdt'] is False and options['clad'] is False
+    assert options['roofit_multiprocess'] is False
+    assert options['builtin_ftgl'] is True and options['builtin_xxhash'] is True
     assert 'recipe' not in root and 'home' not in str(raw.keys())
     effective=next(s for s in loaded['ordered'] if s['uses']=='cmake.project')['with']
     assert effective['cache']['CMAKE_BUILD_TYPE']['value']=='Release'
@@ -406,6 +425,31 @@ def test_show_compact_card_does_not_require_library_download(tmp_path,capsys):
     assert not home.exists()
 
 
+def test_package_install_uses_active_apt_profile(home, tmp_path, monkeypatch):
+    from jarvis_forge import spack_backend
+    seen = {}
+    monkeypatch.setattr(spack_backend, "bootstrap", fake_bootstrap)
+
+    def install(target, action, specs, **kwargs):
+        seen["root"] = target.root
+        seen["action"] = action
+        seen["specs"] = list(specs)
+        activation = target.root / "activate.sh"
+        activation.write_text(":\n")
+        lock = target.root / "spack.lock"
+        lock.write_text("{}")
+        return {"activation": str(activation), "lockfile": str(lock), "packages": []}
+
+    monkeypatch.setattr(spack_backend, "transact", install)
+    path = tmp_path / "deps.yaml"
+    path.write_text(yaml.safe_dump({"name": "deps", "dependencies": ["gsl"], "checks": {"after": [["true"]]}}))
+    result = builds.execute(home, path)
+    assert result["status"] == "passed", result
+    assert seen == {"root": home.root / "apt/profiles/spack-default", "action": "install", "specs": ["gsl"]}
+    assert read_json(home.root / "apt/selection.json")["id"] == "spack-default"
+    assert not list((home.root / "apt/profiles").glob("spack-build-*"))
+
+
 def test_inline_package_archive_and_cmake_paths(home,projects,tmp_path,monkeypatch):
     from jarvis_forge import spack_backend
     import tarfile
@@ -417,7 +461,7 @@ def test_inline_package_archive_and_cmake_paths(home,projects,tmp_path,monkeypat
         tar.add(source,arcname='source')
     package=tmp_path/'dependency'; (package/'include').mkdir(parents=True); (package/'lib').mkdir()
     (package/'include/dependency.h').write_text('#define DEP_VALUE 42\n')
-    monkeypatch.setattr(spack_backend,'bootstrap',lambda *args,**kwargs: None)
+    monkeypatch.setattr(spack_backend,'bootstrap',fake_bootstrap)
     def install(target,*args,**kwargs):
         activation=target.root/'activate.sh'; activation.write_text(':\n')
         lock=target.root/'spack.lock'; lock.write_text('{}')
@@ -437,7 +481,8 @@ def test_inline_package_archive_and_cmake_paths(home,projects,tmp_path,monkeypat
     assert Path(output['prefix'],'include/value.h').is_file()
     activation=Path(output['activation']).read_text()
     assert str(package/'lib64') in activation and str(package/'lib') in activation
-    assert not (home.root/'apt/selection.json').exists()
+    assert read_json(home.root/'apt/selection.json')['id'] == 'spack-default'
+    assert not list((home.root/'apt/profiles').glob('spack-build-*'))
 
 
 def test_package_paths_reach_cmake_discovery_and_nested_build(home, projects, tmp_path, monkeypatch):
@@ -451,7 +496,7 @@ def test_package_paths_reach_cmake_discovery_and_nested_build(home, projects, tm
     dependency = builds.execute(home, producer)
     assert dependency['status'] == 'passed', dependency
     prefix = dependency['outputs']['installation']['prefix']
-    monkeypatch.setattr(spack_backend, 'bootstrap', lambda *args, **kwargs: None)
+    monkeypatch.setattr(spack_backend, 'bootstrap', fake_bootstrap)
     def install(target, *args, **kwargs):
         # No Spack search-path activation: Forge must provide the selected prefix itself.
         activation = target.root / 'activate.sh'; activation.write_text(':\n')

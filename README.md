@@ -199,7 +199,7 @@ See [APT usage](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs
 
 ## Project builds and regression checker
 
-`jforge build` prepares, configures, compiles, installs and verifies software projects using CMake and reusable installation outputs. The `workflow` command namespace is reserved for future orchestration design. It is parallel to `apt`; dependency installation still uses the same Spack backend, in private upstream-only profiles that do not change the interactive apt selection. Build YAML sources are distributed independently from PyPI through GitHub Release assets. From a development checkout:
+`jforge build` prepares, configures, compiles, installs and verifies software projects using CMake and reusable installation outputs. The `workflow` command namespace is reserved for future orchestration design. It is parallel to `apt`. Recipe dependencies install into the active apt Spack environment; with no `apt switch`, that environment is `spack-default`. Build YAML sources are distributed independently from PyPI through GitHub Release assets. From a development checkout:
 
 ```bash
 jforge build validate builds/root-build.yaml
@@ -240,7 +240,9 @@ build:
   cmake:
     options:
       CMAKE_CXX_STANDARD: 17
-      all: true
+      fail-on-missing: true
+      mathmore: true
+      xrootd: false
     includes: [libbsd, mesa-glu, fontconfig]
     libraries: [libbsd, libmd, mesa-glu]
     runtime: [openssl, libbsd, libmd]
@@ -263,7 +265,7 @@ Only engine policy is implicit: Forge home selection, work/build/install/log dir
 
 `build.source` accepts a local source directory or URL/SHA-256/subdir mapping. Use `build.cmake.preset` for a project's native preset, and `requires` to consume another build's installation output. Standard `checks.before/after` declare Python versions/development files, imported modules and executable requirements. Module/tool mappings add constraints, for example `modules: {numpy: ">=1.26"}`. Checks run with the selected Python, which does not need Forge installed. Reports preserve actual versions, paths and failures in `checks.json`. Custom Python belongs in relative companion scripts, with optional argument lists; shell strings, cmd/cwd mappings and literal argv lists remain supported. Previous LibDeps/Calculators spellings remain compatible aliases; new cards do not require HEP-specific keys. Similar log presentation does not add a dependency on Jarvis-HEP.
 
-`hep` is a user-registered environment; omit `--env` to inherit the current compiler/Python selection. The ROOT recipe currently targets Linux, needs an existing CMake/C/C++/Fortran toolchain and Python with NumPy/development headers, and defaults to C++17. It requests `all=ON` with explicit CPU/site exceptions; it does not promise every ROOT option or GPU support. PyROOT, required features, histogram/file I/O and RooFit are checked before the output is published for another build. ROOT's full real build requires separate target-machine validation of this new automation.
+`hep` is a user-registered environment; omit `--env` to inherit the current compiler/Python selection. The ROOT recipe currently targets Linux, needs an existing CMake/C/C++/Fortran toolchain and Python with NumPy/development headers, and defaults to C++17. It enables its declared features explicitly and fails configuration when one of them is missing. It does not download undeclared components such as XRootD, VDT, Clad, or RooFit MultiProcess, and it does not promise GPU support. PyROOT, required features, histogram/file I/O and RooFit are checked before the output is published for another build. ROOT's full real build requires separate target-machine validation of this new automation.
 
 User cards declare prerequisite modules with `required_modules`; the expanded execution schema represents external build outputs using `requires` entries. Compatible installed artifacts are reused; missing ones are built first. Recipes, local source digests, parameters, dependency instances and tool observations are locked. Multiple compatible instances require an explicit artifact binding; incompatible compiler/Python/C++ choices fail before consumer configuration. `cmake.project` consumes pinned prefixes and verifies the selected package-config path. History/show remain available; logs support qualified step names such as `root-build.ROOT.install`.
 
