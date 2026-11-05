@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Simplify APT list/search output to one row per package with version, requested/dependency kind and state. Sort requested packages before dependencies; keep full paths and instance metadata in `apt show` and unchanged JSON records. Installation summaries show selected roots and package counts, while `apt check` retains the complete dependency plan.
 - New Spack environments install directly into `apps/<environment>/<package>`, without version/hash suffixes, architecture directories or padding. Spack's own metadata and database retain the full build identity.
 - Enforce one concrete build per package name in new environments. Reject duplicate-name dependency plans and conflicting occupied directories before installation. Reuse matching builds; select a fresh environment for changed versions, compilers or dependency combinations.
 - Use concise project cards with `dependencies`, `build` and `checks`, and bundled defaults for ordinary build policy and logging. Reserve the `workflow` command namespace for future orchestration.

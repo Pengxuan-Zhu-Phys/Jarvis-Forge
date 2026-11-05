@@ -106,6 +106,89 @@ def record(console, item, *, indent=0, compact=False):
             field(console, key, item[key], indent=indent + (2 if identity else 0), compact=compact)
 
 
+def package_kind(item):
+    if "automatic" in item:
+        return "dependency" if item["automatic"] else "requested"
+    if "root" in item:
+        return "requested" if item["root"] else "dependency"
+    return ""
+
+
+def package_rows(console, packages, *, planned=False):
+    """One row per instance; never fold or crop a package name or version."""
+    rows = []
+    for item in sorted(packages, key=lambda p: (package_kind(p) == "dependency", p["name"], str(p.get("version", "")))):
+        state = ("archived" if item.get("archived") else "active" if item.get("active")
+                 else "installed" if item.get("installed") else "planned" if planned
+                 else item.get("status", "available"))
+        if item.get("external") or item.get("provenance", {}).get("external"):
+            state += ", external"
+        rows.append([str(item["name"]), str(item.get("version") or "—"), package_kind(item) or "—", state])
+    if not rows:
+        line(console, "  No matching packages.")
+        return
+    headers = ["Package", "Version", "Kind", "State"]
+    widths = [max(Text(row[i]).cell_len for row in [headers, *rows]) for i in range(4)]
+    if sum(widths) + 8 > console.width:
+        # Narrow SSH terminals retain complete identifiers on a single logical
+        # line; terminal wrapping stays visual, so copying still works.
+        for name, version, kind, state in rows:
+            tags = "; ".join(v for v in (kind, state) if v != "—")
+            line(console, f"  {name} {version} [{tags}]")
+        return
+    for index, row in enumerate([headers, *rows]):
+        text = Text("  ")
+        for column, value in enumerate(row):
+            text.append(value, style="bold" if index == 0 else "cyan" if column == 0 else None)
+            if column < 3:
+                text.append(" " * (widths[column] - Text(value).cell_len + 2))
+        console.print(text, soft_wrap=True)
+
+
+def package_summary(console, packages):
+    kinds = [package_kind(p) for p in packages]
+    parts = [f"{len(packages)} packages"]
+    for kind in ("requested", "dependency"):
+        count = kinds.count(kind)
+        if count:
+            noun = "dependency" if count == 1 else "dependencies"
+            parts.append(f"{count} {noun if kind == 'dependency' else kind}")
+    line(console, " · ".join(parts))
+
+
+def apt_packages(console, values):
+    line(console, "APT packages · " + str(values.get("backend", "spack")), style="bold")
+    packages = values.get("packages", [])
+    package_summary(console, packages)
+    line(console)
+    package_rows(console, packages)
+    if packages:
+        line(console)
+        line(console, "Details: jforge apt show <package>", style="dim")
+
+
+def apt_transaction(console, command, values):
+    preview = values.get("dry_run")
+    line(console, f"APT {command.removeprefix('apt ')}: " + ("preview" if preview else str(values.get("status", "completed"))), style="bold")
+    if "roots" in values:
+        line(console, "Requests: " + (", ".join(values["roots"]) or "none"))
+    if "packages" in values:
+        packages = values["packages"]
+        package_summary(console, packages)
+        line(console)
+        # A solver check shows the complete plan; installation summaries show
+        # roots, rather than repeating every dependency after its live logs.
+        selected = packages if command == "apt check" else [p for p in packages if package_kind(p) != "dependency"]
+        package_rows(console, selected, planned=command == "apt check")
+        line(console)
+        line(console, "All packages: jforge apt list --installed" if command != "apt check" else "Plan only; no packages built or activated.", style="dim")
+    for key in ("note", "activation", "plan", "path"):
+        if values.get(key):
+            field(console, "logs" if key == "path" else key, values[key])
+    if values.get("store_retained"):
+        line(console, "Package store retained for saved environment revisions.")
+
+
 def apt_update(console, values):
     line(console, "Spack recipes: " + str(values.get("status", "completed")), style="bold")
     for key in ("available", "repository_commit", "updated_at", "note", "operation_id", "path"):
@@ -117,6 +200,12 @@ def apt_update(console, values):
 
 
 def render(console, command, values):
+    if command in {"apt list", "apt search"}:
+        apt_packages(console, values)
+        return
+    if command in {"apt install", "apt reinstall", "apt remove", "apt upgrade", "apt full-upgrade", "apt satisfy", "apt check"}:
+        apt_transaction(console, command, values)
+        return
     if command == "apt update":
         apt_update(console, values)
         return
