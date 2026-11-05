@@ -150,6 +150,8 @@ jforge apt list --installed
 jforge info libgsl-dev --path
 ```
 
+Maintainers publish all package recipes, project build YAMLs, library cards and companion scripts with one standalone command: `./jfrecipes <recipe-revision>`. `--dry` prepares and checks both catalogs without network access. The script needs Python, PyYAML and an authenticated GitHub CLI; it does not import Forge or read its version. Compatibility comes from `recipes/release.json` and `builds/release.json`. The fixed `recipes/recipes.json` and `builds/builds.json` download entries remain unchanged across recipe and client releases. Clients refresh them with `jforge apt update` and `jforge build update`, respectively. See the [recipe publishing guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/RELEASING.md#独立发布扩展配方).
+
 `import spack` selects `spack-default`. `switch spack --name NAME` selects a separate store, configuration and saved environments under the shared Forge home. Re-selecting an existing environment retains its configuration and installations. `--python` registers an existing interpreter, including pyenv Python, as an external dependency; Forge does not install or switch Python. The interpreter running Forge controls Spack itself. Select compilers/variants explicitly with native quoted specs when needed:
 
 ```bash

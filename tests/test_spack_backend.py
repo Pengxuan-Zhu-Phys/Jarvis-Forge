@@ -411,6 +411,37 @@ def test_recipe_update_rolls_back_policy_and_catalog_on_native_failure(
     assert all(p.read_bytes() == content for p, content in before.items())
 
 
+def test_update_refreshes_extension_recipes_without_rebuilding_packages(managed, monkeypatch):
+    from jarvis_forge import recipe_releases, downloads
+
+    home, calls = managed
+    b.transact(home, "install", ["fixture-app"], cache="never")
+    state_before = (home.root / "apt/state.json").read_bytes()
+    staged = b.root(home) / "repositories/new-release/spack_repo/jforge"
+    staged.mkdir(parents=True)
+    (staged / "repo.yaml").write_text("repo: {namespace: jforge, api: v2.2}\n")
+    refreshed = []
+
+    def prepare(selected, operation):
+        refreshed.append(selected.root)
+        return {"version": "independent-r2", "repository": str(staged), "index_url": recipe_releases.INDEX_URL}
+
+    def fetch(url, target, logs):
+        target.write_bytes(b'{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' if "api.github.com" in url else b"archive")
+
+    monkeypatch.setattr(recipe_releases, "prepare", prepare)
+    monkeypatch.setattr(downloads, "fetch", fetch)
+    monkeypatch.setattr(b, "_unpack", lambda *args: None)
+    monkeypatch.setattr(b, "_refresh_catalog", lambda *args: ["example", "neofetch"])
+    result = b.update(home)
+    assert refreshed == [home.root]
+    assert result["recipe_release"] == "independent-r2"
+    assert read_json(home.root / "apt/recipe-release.json")["index_url"] == recipe_releases.INDEX_URL
+    assert yaml.safe_load((b.root(home) / "config/repos.yaml").read_text())["repos"]["jforge"] == str(staged)
+    assert (home.root / "apt/state.json").read_bytes() == state_before
+    assert len([args for args, kwargs in calls if args[0] == "install"]) == 1
+
+
 def test_eigen_activation_exports_legacy_header_hints(managed):
     home, calls = managed
     include = b.root(home) / 'store/eigen/include/eigen3'

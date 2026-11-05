@@ -5,6 +5,7 @@ recursive-include tests/fixtures *.json *.yaml
 
 # Git ignores do not control source distributions.
 exclude jfrel
+include jfrecipes
 prune .github
 prune .agents
 prune .codex

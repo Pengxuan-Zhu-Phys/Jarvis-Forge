@@ -112,9 +112,17 @@ checks:
   - tests/test_workflow.py
 - id: release-recipes
   inputs:
+  - jfrecipes
+  - recipes/release.json
+  - recipes/spack_repo/**
+  - builds/release.json
+  - builds/*.yaml
+  - builds/library/*.yaml
+  - builds/scripts/*.py
   - src/jarvis_forge/recipe_releases.py
   - tools/build*assets.py
   - tests/test_recipe_releases.py
+  - tests/test_recipe_publisher.py
   - src/jarvis_forge/storage.py
   - src/jarvis_forge/package_operations.py
   - src/jarvis_forge/suite.py
@@ -127,6 +135,7 @@ checks:
   - pytest
   - -q
   - tests/test_recipe_releases.py
+  - tests/test_recipe_publisher.py
 - id: cli
   inputs:
   - src/jarvis_forge/*cli.py

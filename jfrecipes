@@ -1,0 +1,445 @@
+#!/usr/bin/env python3
+"""Publish all independent package and build recipes with one command.
+
+No Forge imports, PyPI operations, local Git operations or jfrel invocation.
+Build YAML parsing requires PyYAML; publication requires GitHub CLI.
+Maintainer documentation: Jarvis-Books/Docs/Jarvis-Forge/RELEASING.md.
+"""
+
+import argparse
+import ast
+import gzip
+import hashlib
+import io
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+from urllib.request import Request, urlopen
+
+REPOSITORY = "Pengxuan-Zhu-Phys/Jarvis-Forge"
+TAG = "recipes"
+BASE_URL = f"https://github.com/{REPOSITORY}/releases/download/{TAG}/"
+INDEX_URL = BASE_URL + "recipes.json"
+BUILDS_URL = f"https://github.com/{REPOSITORY}/releases/download/builds/"
+API = f"repos/{REPOSITORY}"
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def write_asset(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.read_bytes() != data:
+        raise ValueError(f"Local asset differs; choose a new revision/output directory: {path}")
+    path.write_bytes(data)
+
+
+def build(revision, source, output):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,100}", revision):
+        raise ValueError("Use a simple independent recipe revision, e.g. 2026.11.05.1")
+    metadata = json.loads((source / "release.json").read_text())
+    if not isinstance(metadata, dict):
+        raise ValueError("recipes/release.json must contain a metadata object")
+    engines = metadata.get("engine_versions")
+    if (metadata.get("schema_version") != 1 or not isinstance(engines, list) or not engines
+            or any(not isinstance(v, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", v) for v in engines)):
+        raise ValueError("recipes/release.json must declare supported Spack engine_versions")
+    repo = source / "spack_repo/jforge"
+    descriptor = {line.strip() for line in (repo / "repo.yaml").read_text().splitlines() if line.strip()}
+    if descriptor != {"repo:", "namespace: jforge", "api: v2.2"}:
+        raise ValueError("Expected the jforge v2.2 repository descriptor")
+    packages = sorted(p.parent.name.replace("_", "-") for p in repo.glob("packages/*/package.py"))
+    if not packages or len(set(packages)) != len(packages):
+        raise ValueError("Missing packages or duplicate Spack package names")
+    raw = io.BytesIO()
+    with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0, filename="") as compressed:
+        with tarfile.open(fileobj=compressed, mode="w") as archive:
+            for file in sorted((source / "spack_repo").rglob("*")):
+                if file.is_symlink():
+                    raise ValueError(f"Recipe sources must not contain symlinks: {file}")
+                if not file.is_file() or any(p.startswith('.') or p == '__pycache__' for p in file.relative_to(source).parts) or file.suffix == '.pyc':
+                    continue
+                data = file.read_bytes()
+                if file.suffix == ".py":
+                    ast.parse(data, filename=str(file))
+                info = tarfile.TarInfo("jforge-spack-recipes/" + file.relative_to(source).as_posix())
+                info.size, info.mode = len(data), 0o644
+                archive.addfile(info, io.BytesIO(data))
+    filename = f"jforge-spack-recipes-{revision}.tar.gz"
+    manifest = dict(schema_version=1, version=revision, engine_versions=sorted(set(engines)),
+                    archive=dict(url=BASE_URL + filename, sha256=sha(raw.getvalue())), packages=packages)
+    output.mkdir(parents=True, exist_ok=True)
+    files = {filename: raw.getvalue(), "recipes.json": (json.dumps(manifest, indent=2) + "\n").encode()}
+    for name, data in files.items():
+        write_asset(output / name, data)
+    return manifest
+
+
+def read_card(file):
+    try:
+        import yaml
+    except ImportError as exc:
+        raise RuntimeError("Build recipes need PyYAML: python3 -m pip install PyYAML") from exc
+
+    class UniqueLoader(yaml.SafeLoader):
+        pass
+
+    def mapping(loader, node):
+        result = {}
+        for key_node, value_node in node.value:
+            key = loader.construct_object(key_node, deep=True)
+            if not isinstance(key, str) or key in result:
+                raise ValueError(f"Duplicate or non-string YAML key in {file}: {key}")
+            result[key] = loader.construct_object(value_node, deep=True)
+        return result
+
+    UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
+    try:
+        result = yaml.load(file.read_bytes(), Loader=UniqueLoader)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid YAML in {file}: {exc}") from exc
+    if not isinstance(result, dict):
+        raise ValueError(f"Expected a YAML mapping: {file}")
+    return result
+
+
+def script_paths(value):
+    """Read explicit script declarations, without expanding Forge defaults."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "script":
+                if not isinstance(child, str):
+                    raise ValueError("A companion script must be a relative Python path")
+                yield child
+            elif key == "scripts":
+                entries = [child] if isinstance(child, str) else child
+                if not isinstance(entries, list):
+                    raise ValueError("Companion scripts must be a list")
+                for entry in entries:
+                    path = entry.get("path") if isinstance(entry, dict) else entry
+                    if not isinstance(path, str):
+                        raise ValueError("Companion scripts need a path")
+                    yield path
+            else:
+                yield from script_paths(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from script_paths(child)
+
+
+def identifier(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,100}", value):
+        raise ValueError(f"Invalid recipe ID: {value}")
+    return value
+
+
+def build_projects(revision, source, output):
+    identifier(revision)
+    metadata = json.loads((source / "release.json").read_text())
+    if (not isinstance(metadata, dict) or metadata.get("schema_version") != 1
+            or not isinstance(metadata.get("requires_forge"), str) or not metadata["requires_forge"]):
+        raise ValueError("builds/release.json must declare schema_version and requires_forge")
+    rows, libraries = [], []
+    for file in sorted((source / "library").glob("*.yaml")):
+        card = read_card(file)
+        library = card.get("Library")
+        if (set(card) != {"Library"} or not isinstance(library, dict)
+                or not {"name", "version"} <= library.keys()
+                or set(library) - {"name", "version", "build", "workflow"}
+                or not isinstance(library["name"], str) or not isinstance(library["version"], str)
+                or sum(key in library for key in ("build", "workflow")) != 1
+                or not isinstance(library.get("build", library.get("workflow")), dict)):
+            raise ValueError(f"Invalid library card: {file}")
+        if list(script_paths(library)):
+            raise ValueError("Library companion scripts need a newer catalog format; declare them in the build card")
+        content = file.read_bytes()
+        name = f"library-{identifier(file.stem)}-{revision}-{sha(content)[:12]}.yaml"
+        write_asset(output / name, content)
+        libraries.append(dict(id=file.stem, revision=revision, url=BUILDS_URL + name, sha256=sha(content)))
+    for file in sorted(source.glob("*.yaml")):
+        card = read_card(file)
+        if "name" in card:
+            name = identifier(card["name"])
+        elif "Workflow" in card and isinstance(card["Workflow"], dict):
+            name = identifier(card["Workflow"].get("name", file.stem))
+        elif card.get("schema_version") == 1 and isinstance(card.get("steps"), list):
+            name = identifier(card.get("id", file.stem))
+        else:
+            raise ValueError(f"Unsupported build card layout: {file}")
+        if any(row["id"] == name for row in rows):
+            raise ValueError(f"Duplicate build ID: {name}")
+        companions = []
+        for relative in sorted(set(script_paths(card))):
+            script = file.parent / relative
+            if ("\\" in relative or Path(relative).is_absolute() or ".." in Path(relative).parts
+                    or Path(relative).suffix != ".py" or not script.is_file()
+                    or not script.resolve().is_relative_to(source.resolve())):
+                raise ValueError(f"Unsafe or missing companion script: {relative}")
+            content = script.read_bytes()
+            ast.parse(content.decode("utf-8"), filename=str(script))
+            filename = f"{name}-{revision}-{sha(content)}.py"
+            write_asset(output / filename, content)
+            companions.append(dict(path=relative, url=BUILDS_URL + filename, sha256=sha(content)))
+        content = file.read_bytes()
+        filename = f"{name}-{revision}-{sha(content)[:12]}.yaml"
+        write_asset(output / filename, content)
+        rows.append(dict(id=name, revision=revision, url=BUILDS_URL + filename, sha256=sha(content),
+                         description=card.get("description", ""), files=companions))
+    if not rows:
+        raise ValueError("No build YAML recipes found")
+    manifest = dict(schema_version=1, requires_forge=metadata["requires_forge"], builds=rows, libraries=libraries)
+    write_asset(output / "builds.json", (json.dumps(manifest, indent=2) + "\n").encode())
+    return manifest
+
+
+class GitHub:
+    def __init__(self, tag=TAG):
+        self.tag = tag
+
+    def run(self, *args, payload=None):
+        result = subprocess.run(["gh", *args], input=None if payload is None else json.dumps(payload).encode(),
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+        if result.returncode:
+            raise RuntimeError(result.stderr.decode("utf-8", errors="replace").strip())
+        return result.stdout
+
+    def api(self, endpoint, payload=None):
+        options = [] if payload is None else ["--method", "PATCH", "--input", "-"]
+        return json.loads(self.run("api", endpoint, *options, payload=payload))
+
+    def release(self):
+        pages = json.loads(self.run("api", API + "/releases", "--paginate", "--slurp"))
+        releases = [r for page in pages for r in page if r["tag_name"] == self.tag]
+        if not releases:
+            return None
+        release = releases[0]
+        pages = json.loads(self.run("api", f"{API}/releases/{release['id']}/assets", "--paginate", "--slurp"))
+        release["assets"] = [a for page in pages for a in page]
+        return release
+
+    def create(self):
+        index_url = f"https://github.com/{REPOSITORY}/releases/download/{self.tag}/{self.tag}.json"
+        self.run("release", "create", self.tag, "--repo", REPOSITORY, "--draft", "--title", self.tag.capitalize() + " recipes",
+                 "--notes", "Independent recipe snapshots. Stable entry point: " + index_url)
+
+    def upload(self, path):
+        self.run("release", "upload", self.tag, str(path), "--repo", REPOSITORY)
+
+    def download(self, asset):
+        return self.run("api", f"{API}/releases/assets/{asset['id']}", "-H", "Accept: application/octet-stream")
+
+    def rename(self, asset, name):
+        self.api(f"{API}/releases/assets/{asset['id']}", {"name": name})
+
+    def publish(self, release):
+        self.api(f"{API}/releases/{release['id']}", {"draft": False, "make_latest": "false"})
+
+    def hide(self, release):
+        self.api(f"{API}/releases/{release['id']}", {"draft": True})
+
+
+def asset_named(release, name):
+    return next((a for a in release["assets"] if a["name"] == name), None)
+
+
+def public_bytes(url, expected):
+    failure = None
+    for attempt in range(5):
+        try:
+            with urlopen(Request(url, headers={"User-Agent": "jfrecipes", "Cache-Control": "no-cache"}), timeout=30) as response:
+                if response.geturl().split(":", 1)[0] != "https":
+                    raise RuntimeError("Release download redirected outside HTTPS")
+                data = response.read()
+            if sha(data) != expected:
+                raise RuntimeError("Public download has not reached the expected checksum")
+            return data
+        except (OSError, RuntimeError) as exc:
+            failure = exc
+            if attempt < 4:
+                time.sleep(min(2 ** attempt, 8))
+    raise RuntimeError(f"Anonymous download verification failed: {url}: {failure}")
+
+
+def payloads(manifest, tag):
+    if tag == "recipes":
+        return [manifest["archive"]]
+    if tag != "builds":
+        raise ValueError(f"Unknown recipe catalog: {tag}")
+    return [item for row in manifest["builds"] + manifest.get("libraries", [])
+            for item in [row, *row.get("files", [])]]
+
+
+def revision_of(manifest, tag):
+    if tag == "recipes":
+        return manifest["version"]
+    versions = {row["revision"] for row in manifest["builds"] + manifest.get("libraries", [])}
+    if len(versions) != 1:
+        raise ValueError("All entries in a build publication must use the same recipe revision")
+    return next(iter(versions))
+
+
+def stage(manifest, output, github, tag):
+    """Upload every immutable payload and stage the index without switching it."""
+    base_url = f"https://github.com/{REPOSITORY}/releases/download/{tag}/"
+    index_name = tag + ".json"
+    revision = revision_of(manifest, tag)
+    release = github.release()
+    if release is None:
+        github.create()
+        release = github.release()
+    if release is None:
+        raise RuntimeError(f"The created {tag} Release is not visible yet; retry the same revision")
+    if release.get("immutable"):
+        raise ValueError(f"The fixed {tag} Release must allow catalog updates")
+    old = asset_named(release, index_name)
+    data = (output / index_name).read_bytes()
+    old_data = github.download(old) if old else None
+    if old_data:
+        previous = json.loads(old_data)
+        if previous.get("schema_version") != 1 or any(not row["url"].startswith(base_url) for row in payloads(previous, tag)):
+            raise ValueError("Refusing to break the existing index URL/schema")
+        if tag == "recipes" and not set(previous.get("engine_versions", [])) <= set(manifest["engine_versions"]):
+            raise ValueError("Refusing to drop supported Spack engines")
+        if tag == "builds" and previous.get("requires_forge") != manifest["requires_forge"]:
+            raise ValueError("Refusing to change existing client compatibility; use a compatible build catalog")
+        if revision_of(previous, tag) == revision and previous != manifest:
+            raise ValueError("Recipe revision already exists with different metadata; choose a new revision")
+    verified = set()
+    for row in payloads(manifest, tag):
+        if (not row["url"].startswith(base_url) or "/" in row["url"][len(base_url):]
+                or not re.fullmatch(r"[a-f0-9]{64}", row["sha256"])):
+            raise ValueError("Recipe payload must have a fixed Release URL and SHA-256")
+        name = row["url"][len(base_url):]
+        if name in verified:
+            continue
+        asset = asset_named(github.release(), name)
+        if asset is None:
+            print(f"Uploading immutable {tag} asset: {name}", flush=True)
+            github.upload(output / name)
+            asset = asset_named(github.release(), name)
+        if asset is None or sha(github.download(asset)) != row["sha256"]:
+            raise ValueError("Uploaded asset differs; existing archives/assets are never overwritten")
+        verified.add(name)
+    replacement = old
+    if old_data != data:
+        stage_name = f"{tag}-index-{revision}-{sha(data)[:12]}.json"
+        staged = output / stage_name
+        write_asset(staged, data)
+        replacement = asset_named(github.release(), stage_name)
+        if replacement is None:
+            github.upload(staged)
+            replacement = asset_named(github.release(), stage_name)
+        if replacement is None or github.download(replacement) != data:
+            raise ValueError("Staged catalog verification failed; current catalog is unchanged")
+    return dict(tag=tag, manifest=manifest, release=release, github=github, old=old, old_data=old_data,
+                data=data, replacement=replacement, switched=False, made_public=False)
+
+
+def activate(state):
+    github, old = state["github"], state["old"]
+    if state["old_data"] == state["data"]:
+        return
+    index_name = state["tag"] + ".json"
+    latest = asset_named(github.release(), index_name)
+    if (latest or {}).get("id") != (old or {}).get("id") or (latest and github.download(latest) != state["old_data"]):
+        raise ValueError("Another publisher changed the catalog; retry after it finishes")
+    if old:
+        github.rename(old, f"{state['tag']}-previous-{old['id']}.json")
+    try:
+        github.rename(state["replacement"], index_name)
+        state["switched"] = True
+    except Exception:
+        if old:
+            github.rename(old, index_name)
+        raise
+
+
+def restore(state):
+    github = state["github"]
+    if state["made_public"]:
+        github.hide(state["release"])
+    if state["switched"]:
+        replacement = state["replacement"]
+        github.rename(replacement, f"{state['tag']}-failed-{replacement['id']}.json")
+        if state["old"]:
+            github.rename(state["old"], state["tag"] + ".json")
+
+
+def publish_all(bundles, verify=public_bytes):
+    # All local preparation is complete before this function. All uploads are
+    # verified before either catalog changes. GitHub has no cross-Release atomic
+    # transaction, so failure restores the previous indexes where possible.
+    states = [stage(manifest, output, github, tag) for tag, manifest, output, github in bundles]
+    try:
+        for state in states:
+            activate(state)
+        for state in states:
+            if state["release"]["draft"]:
+                state["github"].publish(state["release"])
+                state["made_public"] = True
+        for state in states:
+            verified = set()
+            for row in payloads(state["manifest"], state["tag"]):
+                if row["url"] not in verified:
+                    verify(row["url"], row["sha256"])
+                    verified.add(row["url"])
+            base_url = f"https://github.com/{REPOSITORY}/releases/download/{state['tag']}/"
+            verify(base_url + state["tag"] + ".json", sha(state["data"]))
+    except Exception as exc:
+        failures = []
+        for state in reversed(states):
+            try:
+                restore(state)
+            except Exception as recovery:
+                failures.append(f"{state['tag']}: {recovery}")
+        if failures:
+            raise RuntimeError(f"{exc}; catalog recovery needs attention: {'; '.join(failures)}") from exc
+        raise
+    for state in states:
+        print(f"Published {state['tag']} {revision_of(state['manifest'], state['tag'])}", flush=True)
+        print(f"Stable index: https://github.com/{REPOSITORY}/releases/download/{state['tag']}/{state['tag']}.json")
+    print("Clients: jforge apt update; jforge build update")
+
+
+def publish(manifest, output, github, verify=public_bytes):
+    """Compatibility entry point for package-catalog-only callers."""
+    publish_all([("recipes", manifest, output, github)], verify)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("revision", help="Independent recipe revision, e.g. 2026.11.05.1")
+    parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parent / "recipes", help="Spack recipe directory")
+    parser.add_argument("--build-source", type=Path, default=Path(__file__).resolve().parent / "builds", help="Build YAML/library/script directory")
+    parser.add_argument("--output", type=Path, help="Keep prepared assets here (default: temporary directory)")
+    parser.add_argument("--dry", action="store_true", help="Build and validate locally; no network or upload")
+    args = parser.parse_args(argv)
+    try:
+        with tempfile.TemporaryDirectory(prefix="jfrecipes-") as temporary:
+            output = args.output or Path(temporary)
+            manifest = build(args.revision, args.source, output / "recipes")
+            projects = build_projects(args.revision, args.build_source, output / "builds")
+            print(f"Recipes {manifest['version']}: {', '.join(manifest['packages'])}")
+            print("Spack engines: " + ", ".join(manifest["engine_versions"]))
+            print("Build recipes: " + ", ".join(row["id"] for row in projects["builds"]))
+            print("Libraries: " + str(len(projects["libraries"])))
+            print("Stable indexes: " + INDEX_URL + "; " + BUILDS_URL + "builds.json")
+            if args.dry:
+                print("Dry run passed; no uploads or client changes.")
+            else:
+                publish_all([("recipes", manifest, output / "recipes", GitHub("recipes")),
+                             ("builds", projects, output / "builds", GitHub("builds"))])
+        return 0
+    except (OSError, ValueError, RuntimeError, SyntaxError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+        print(f"jfrecipes: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
