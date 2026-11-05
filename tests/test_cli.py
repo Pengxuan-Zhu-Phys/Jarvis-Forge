@@ -2,7 +2,9 @@ import json
 from pathlib import Path
 
 import pytest
+import typer
 
+from jarvis_forge import cli
 from jarvis_forge.cli import main
 from jarvis_forge.storage import ForgeHome, write_json
 
@@ -37,7 +39,7 @@ def test_build_json_uses_build_command_and_workflow_is_reserved(capsys):
 @pytest.mark.parametrize("args", [["--version"], ["-v"], ["-V"]])
 def test_version(args, capsys):
     assert main(args) == 0
-    assert capsys.readouterr().out == "Jarvis-Forge 1.1.1\n"
+    assert capsys.readouterr().out == "Jarvis-Forge 1.1.2\n"
 
 
 @pytest.mark.parametrize("args", [["--json", "--version"], ["--version", "--json"]])
@@ -45,7 +47,7 @@ def test_json_version(args, capsys):
     assert main(args) == 0
     value = json.loads(capsys.readouterr().out)
     assert value["name"] == "Jarvis-Forge" and value["command"] == "version"
-    assert value["version"] == "1.1.1"
+    assert value["version"] == "1.1.2"
 
 
 @pytest.mark.parametrize("args", [["unknown"], ["--unknown"], ["run"], ["--home"]])
@@ -55,6 +57,23 @@ def test_json_errors(args, capsys):
     value = json.loads(result.out)
     assert value["ok"] is False and value["error"]["message"]
     assert "Traceback" not in result.err
+
+
+def test_cli_catches_the_click_exceptions_owned_by_typer():
+    assert issubclass(typer.BadParameter, cli.ClickException)
+
+
+@pytest.mark.parametrize("exception,code", [(typer.Abort(), 130), (typer.Exit(17), 17)])
+def test_typer_abort_and_exit_preserve_exit_codes(monkeypatch, capsys, exception, code):
+    def invoke(**kwargs):
+        raise exception
+
+    monkeypatch.setattr(cli, "app", invoke)
+    assert main(["--json"]) == code
+    output = capsys.readouterr()
+    assert "Unexpected error" not in output.out + output.err
+    if code == 130:
+        assert json.loads(output.out)["error"]["message"] == "Interrupted."
 
 
 def test_global_options_after_commands_do_not_create_home(tmp_path, capsys):

@@ -35,14 +35,12 @@ def _emit(ctx, command, **values):
     return emit(ctx, "apt " + command, **values)
 
 
-def _progress():
-    from click import get_current_context
-
-    return get_current_context().obj.apt_progress
+def _progress(ctx):
+    return ctx.obj.apt_progress
 
 
 def _ready(ctx):
-    ctx.obj.home = ensure_active(ctx.obj.user_home, progress=_progress())
+    ctx.obj.home = ensure_active(ctx.obj.user_home, progress=_progress(ctx))
     return ctx.obj.home
 
 
@@ -84,7 +82,7 @@ def _transact(
             jobs=jobs,
             timeout=timeout,
             cache=cache,
-            progress=_progress(),
+            progress=_progress(ctx),
         )
     )
     _emit(ctx, command or action, **result)
@@ -331,7 +329,7 @@ def autoremove(
         **backend.autoremove(
             ctx.obj.home if dry_run else _ready(ctx),
             dry_run=dry_run,
-            progress=_progress(),
+            progress=_progress(ctx),
         ),
     )
 
@@ -339,7 +337,7 @@ def autoremove(
 @app.command("update")
 def update_sources(ctx: typer.Context):
     """Refresh the engine-compatible Spack recipes and package-name cache."""
-    _emit(ctx, "update", **backend.update(_ready(ctx), progress=_progress()))
+    _emit(ctx, "update", **backend.update(_ready(ctx), progress=_progress(ctx)))
 
 
 @app.command("switch")
@@ -389,7 +387,7 @@ def switch_source(
                 name=name,
                 python=python,
                 direct=direct,
-                progress=_progress(),
+                progress=_progress(ctx),
             ),
         )
 
@@ -402,7 +400,7 @@ def import_spack(
     ),
 ):
     """Prepare and select the default Spack profile."""
-    _emit(ctx, "import", **switch(ctx.obj.user_home, source, progress=_progress()))
+    _emit(ctx, "import", **switch(ctx.obj.user_home, source, progress=_progress(ctx)))
 
 
 @app.command("sources")
@@ -436,7 +434,7 @@ def sources(
             url=url,
             remove=remove,
             trust_key=trust_key,
-            progress=_progress(),
+            progress=_progress(ctx),
         ),
     )
 
@@ -496,7 +494,7 @@ def spack_compilers(
     _emit(
         ctx,
         "compilers",
-        **backend.compilers(_ready(ctx), find=find, progress=_progress()),
+        **backend.compilers(_ready(ctx), find=find, progress=_progress(ctx)),
     )
 
 

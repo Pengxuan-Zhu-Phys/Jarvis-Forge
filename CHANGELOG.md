@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.2
+
+### Fixed
+
+- Fix apt operations failing with "There is no active click context" when Typer uses its bundled Click implementation. Reuse the context supplied to each command for progress reporting, including update, install, import, profile switching, mirror management and compiler discovery.
+- Handle the Click exceptions used by Typer so usage errors, aborts and explicit exits retain their intended messages and exit codes across both external and bundled Click implementations.
+
 ## 1.1.1
 
 ### Changed

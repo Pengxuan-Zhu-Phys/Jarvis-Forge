@@ -13,9 +13,15 @@ import time
 import traceback
 from typing import Optional
 
-import click
 from rich.console import Console
 import typer
+
+# New Typer releases own a bundled Click implementation. Its exceptions are
+# distinct from those in an independently installed click package.
+try:
+    from typer._click import ClickException
+except ImportError:
+    from click import ClickException
 
 from . import __version__
 from .presentation import render, line, error as render_error
@@ -357,13 +363,13 @@ def main(argv: Optional[list[str]] = None, prog: str = "jforge") -> int:
     try:
         result = app(args=_globals(args), prog_name=prog, standalone_mode=False)
         return result if isinstance(result, int) else 0
-    except click.exceptions.Exit as exc:
+    except typer.Exit as exc:
         return exc.exit_code
-    except (KeyboardInterrupt, click.Abort):
+    except (KeyboardInterrupt, typer.Abort):
         exc = ForgeError("Interrupted.", code=130)
     except ForgeError as error:
         exc = error
-    except click.ClickException as error:
+    except ClickException as error:
         exc = ForgeError(error.format_message(), hint=f"{prog} -h")
     except OSError as error:
         exc = ForgeError(str(error), code=1)
