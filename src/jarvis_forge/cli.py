@@ -38,6 +38,7 @@ class Settings:
     home: ForgeHome
     as_json: bool
     user_home: ForgeHome | None = None
+    verbose: bool = False
 
 
 def _console(stderr=False) -> Console:
@@ -62,9 +63,11 @@ def root(ctx: typer.Context,
          home: Optional[str] = typer.Option(None, "--home", help="Use this Forge user directory; init remembers it.", metavar="<path>"),
          as_json: bool = typer.Option(False, "--json", help="Output one JSON object."),
          version: bool = typer.Option(False, "--version", "-v", help="Show the version and exit.", is_eager=True),
+         verbose: bool = typer.Option(False, "--verbose", help="Show raw Spack commands and output for apt operations."),
          debug: bool = typer.Option(False, "--debug", "-d", help="Show diagnostic tracebacks.")):
     # Version queries must remain available even if a saved preference is corrupt.
-    ctx.obj = Settings(ForgeHome.resolve(home, read_default=not version), as_json)
+    ctx.obj = Settings(ForgeHome.resolve(home, read_default=not version), as_json,
+                       verbose=verbose or debug)
     if version:
         if as_json:
             emit(ctx, "version", name="Jarvis-Forge", version=__version__)
@@ -330,7 +333,7 @@ def _globals(argv: list[str]) -> list[str]:
         if arg == "--":
             rest.extend(argv[index:])
             break
-        if arg in {"--json", "--debug", "-d", "--version", "-v", "-V"}:
+        if arg in {"--json", "--debug", "-d", "--verbose", "--version", "-v", "-V"}:
             common.append("--version" if arg == "-V" else arg)
         elif arg == "--home":
             if index + 1 >= len(argv) or argv[index + 1].startswith("-"):

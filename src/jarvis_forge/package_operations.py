@@ -177,7 +177,10 @@ def run_command(argv, cwd, environment_script, logs, number, timeout, progress=N
                             key.data.write(data)
                             key.data.flush()
                             if progress is not None:
-                                if hasattr(sys.stderr, "buffer"):
+                                output = getattr(progress, "output", None)
+                                if output is not None:
+                                    output("stdout" if key.data is out else "stderr", data)
+                                elif hasattr(sys.stderr, "buffer"):
                                     sys.stderr.buffer.write(data)
                                     sys.stderr.buffer.flush()
                                 else:
@@ -205,7 +208,9 @@ def run_command(argv, cwd, environment_script, logs, number, timeout, progress=N
                     if pipe is not None:
                         pipe.close()
         if code:
+            failure = getattr(progress, "command_failure", None)
             raise ForgeError(
+                failure(number, code, logs / f"command-{number}.stderr.log") if failure else
                 f"Package command failed with exit {code}: {shlex.join(argv)}; logs: {logs}",
                 code=1,
             )
@@ -213,6 +218,9 @@ def run_command(argv, cwd, environment_script, logs, number, timeout, progress=N
         record.update(status="failed", error=str(exc))
         raise ForgeError(f"Cannot start package command: {exc}", code=1) from exc
     finally:
+        finished = getattr(progress, "output_finished", None)
+        if finished is not None:
+            finished()
         record.update(finished_at=now(), elapsed_seconds=time.monotonic() - started)
         write_json(probe, record)
 

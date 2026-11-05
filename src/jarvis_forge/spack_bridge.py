@@ -12,7 +12,29 @@ import re
 import sys
 
 
-def snapshot(runtime_only=False):
+def installation_specs(environment, roots, policy, overwrite):
+    """Ask the pinned Spack installer which dependencies this request needs."""
+    from spack.installer import BuildRequest
+
+    overwrite_hashes = [
+        spec.dag_hash() for spec in environment.all_specs() if spec.name in overwrite
+    ]
+    policies = {"only": "cache_only", "never": "cache_never", "auto": "auto"}
+    install_args = {
+        "root_policy": policies[policy],
+        "dependencies_policy": policies[policy],
+        "overwrite": overwrite_hashes,
+    }
+    selected = {}
+    for root in roots:
+        selected[root.dag_hash()] = root
+        request = BuildRequest(root.package, dict(install_args))
+        for spec in request.traverse_dependencies():
+            selected[spec.dag_hash()] = spec
+    return selected.values()
+
+
+def snapshot(runtime_only=False, policy=None, overwrite=()):
     import spack.environment as ev
     import spack.traverse
     import spack.store
@@ -25,8 +47,11 @@ def snapshot(runtime_only=False):
     root_hashes = {s.dag_hash() for s in roots}
     packages = []
     # A binary installation may omit tools used only to build the archive.
-    specs = (spack.traverse.traverse_nodes(roots, deptype=("link", "run"))
-             if runtime_only else environment.all_specs())
+    if policy is not None:
+        specs = installation_specs(environment, roots, policy, overwrite)
+    else:
+        specs = (spack.traverse.traverse_nodes(roots, deptype=("link", "run"))
+                 if runtime_only else environment.all_specs())
     for spec in specs:
         installed = bool(spec.external or spack.store.STORE.db.query_one(spec))
         prefix_matches = False
@@ -111,9 +136,25 @@ def render(path):
     print(modifications.shell_modifications("sh"))
 
 
+def dependency_tree():
+    import spack.environment as ev
+    import spack.spec
+    import spack.traverse
+
+    environment = ev.active_environment()
+    if environment is None:
+        raise RuntimeError("An active Spack environment is required")
+    print(spack.spec.tree(environment.concrete_roots(), hashes=True, hashlen=7,
+                          format=spack.spec.DISPLAY_FORMAT, key=spack.traverse.by_dag_hash))
+
+
 if __name__ == "__main__":
     if sys.argv[1] in {"snapshot", "installed"}:
         snapshot(runtime_only=sys.argv[1] == "installed")
+    elif sys.argv[1] == "installation-plan":
+        snapshot(policy=sys.argv[2], overwrite=json.loads(sys.argv[3]))
+    elif sys.argv[1] == "tree":
+        dependency_tree()
     elif sys.argv[1] == "render":
         render(sys.argv[2])
     else:

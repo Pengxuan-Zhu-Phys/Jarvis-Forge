@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import shlex
-import textwrap
 
 from rich.panel import Panel
 from rich.text import Text
@@ -227,9 +226,7 @@ def error(console, prog, message, hint=None):
     if all(len(part) <= width for part in text.splitlines()):
         console.print(Panel(Text(text), title=Text(prog), border_style="red"))
         return
-    summary = textwrap.shorten(message.replace("\n", " "), width=width, placeholder="...")
-    console.print(Panel(Text(summary), title=Text(prog), border_style="red"))
-    line(console, "Details:", style="bold")
+    console.print(Panel(Text("Command failed."), title=Text(prog), border_style="red"))
     line(console, message)
     if hint:
         line(console, "Try:", style="bold")

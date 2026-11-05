@@ -201,6 +201,134 @@ def test_name_only_layout_allows_same_build_reuse(managed):
     assert second['state_committed']
 
 
+@pytest.mark.parametrize("cache", ["auto", "only", "never"])
+def test_installation_plan_uses_spack_installer_policy(managed, cache):
+    home, calls = managed
+    named_layout(home)
+    result = b.transact(home, "install", ["fixture-app"], cache=cache)
+    expected = "only" if cache == "auto" else cache
+    plan_args = next(args for args, _ in calls if "installation-plan" in args)
+    assert plan_args[-3:] == ["installation-plan", expected, "[]"]
+    assert read_json(Path(result["path"]) / "plan.json")["cache_policy"] == expected
+    assert (Path(result["path"]) / "dag.json").is_file()
+    install_args = [args for args, _ in calls if args[0] == "install"]
+    assert len(install_args) == 1
+    assert install_args[0][install_args[0].index("--use-buildcache") + 1] == expected
+
+
+def test_binary_install_keeps_full_dag_without_rejecting_unused_builds(managed, monkeypatch):
+    home, calls = managed
+    named_layout(home)
+    run = b.run
+
+    def historical(home, args, op, label, **kwargs):
+        output = run(home, args, op, label, **kwargs)
+        if label == "dag":
+            data = json.loads(output)
+            data["packages"].append({**data["packages"][0], "hash": "historical-build"})
+            return json.dumps(data)
+        return output
+
+    monkeypatch.setattr(b, "run", historical)
+    result = b.transact(home, "install", ["fixture-app"])
+    directory = Path(result["path"])
+    assert len(read_json(directory / "dag.json")["packages"]) == 3
+    assert len(read_json(directory / "plan.json")["packages"]) == 2
+    assert result["state_committed"]
+
+
+@pytest.mark.parametrize("conflict", [None, "duplicate", "occupied"])
+def test_auto_cache_failure_validates_source_plan_before_fallback(managed, monkeypatch, conflict):
+    home, calls = managed
+    named_layout(home)
+    first = b.transact(home, "install", ["fixture-app"], cache="never")
+    before = (home.root / "apt/state.json").read_bytes()
+    calls.clear()
+    run = b.run
+
+    def cache_miss(home, args, op, label, **kwargs):
+        output = run(home, args, op, label, **kwargs)
+        if label == "install-cache":
+            write_json(op / "command-install-cache.json", {"status": "failed", "exit_code": 1})
+            raise ForgeError("fixture cache miss", code=1)
+        if label == "source-plan":
+            data = json.loads(output)
+            if conflict == "duplicate":
+                data["packages"].append({**data["packages"][0], "hash": "other-build"})
+            elif conflict == "occupied":
+                data["packages"][0].update(hash="other-build", installed=False)
+            return json.dumps(data)
+        return output
+
+    monkeypatch.setattr(b, "run", cache_miss)
+    if conflict:
+        with pytest.raises(ForgeError, match="multiple instances|another build"):
+            b.transact(home, "install", ["fixture-app"])
+        assert (home.root / "apt/state.json").read_bytes() == before
+        assert Path(first["activation"]).is_file()
+    else:
+        result = b.transact(home, "install", ["fixture-app"])
+        assert result["state_committed"]
+        assert (Path(result["path"]) / "source-plan.json").is_file()
+    policies = [args[args.index("--use-buildcache") + 1]
+                for args, _ in calls if args[0] == "install"]
+    assert policies == (["only"] if conflict else ["only", "auto"])
+    assert any("installation-plan" in args and args[-2] == "auto" for args, _ in calls)
+
+
+@pytest.mark.parametrize("status,exit_code", [("timeout", -15), ("interrupted", -2), ("failed", None), ("failed", -15)])
+def test_auto_does_not_retry_timeout_interruption_or_launch_failure(managed, monkeypatch, status, exit_code):
+    home, calls = managed
+    named_layout(home)
+    run = b.run
+
+    def fail(home, args, op, label, **kwargs):
+        output = run(home, args, op, label, **kwargs)
+        if label == "install-cache":
+            write_json(op / "command-install-cache.json", {"status": status, "exit_code": exit_code})
+            raise ForgeError("fixture stopped", code=1)
+        return output
+
+    monkeypatch.setattr(b, "run", fail)
+    with pytest.raises(ForgeError, match="fixture stopped"):
+        b.transact(home, "install", ["fixture-app"])
+    assert len([args for args, _ in calls if args[0] == "install"]) == 1
+    assert not (home.root / "apt/state.json").exists()
+
+
+def test_reinstall_plan_marks_requested_overwrites(managed):
+    home, calls = managed
+    named_layout(home)
+    b.transact(home, "install", ["fixture-app"], cache="never")
+    calls.clear()
+    b.transact(home, "reinstall", ["fixture-app"], cache="never")
+    args = next(args for args, _ in calls if "installation-plan" in args)
+    assert json.loads(args[-1]) == ["fixture-app"]
+
+
+def test_cache_only_failure_does_not_fall_back_to_source(managed, monkeypatch):
+    home, calls = managed
+    named_layout(home)
+    (home.root / "fail").touch()
+    with pytest.raises(ForgeError, match="fixture install failed"):
+        b.transact(home, "install", ["fixture-app"], cache="only")
+    assert len([args for args, _ in calls if args[0] == "install"]) == 1
+    assert not (home.root / "apt/state.json").exists()
+
+
+def test_check_reports_conditional_source_fallback_without_installing(managed):
+    home, calls = managed
+    named_layout(home)
+    result = b.transact(home, "check", ["fixture-app"])
+    assert result["source_fallback_requires_validation"]
+    assert "Binary-only" in result["note"]
+    assert not any(args[0] == "install" for args, _ in calls)
+    assert not (home.root / "apt/state.json").exists()
+    empty = b.transact(home, "check")
+    assert not empty["source_fallback_requires_validation"]
+    assert "note" not in empty
+
+
 def test_failure_keeps_active_state_and_archives_candidate(managed):
     home, calls = managed
     first = b.transact(home, "install", ["fixture-app"], cache="never")

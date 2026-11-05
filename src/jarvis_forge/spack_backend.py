@@ -552,15 +552,18 @@ def _candidate(home, op, roots, previous):
     return directory
 
 
-def _snapshot(home, envdir, op, label="snapshot"):
+def _snapshot(home, envdir, op, label="snapshot", *, cache=None, overwrite=()):
     bridge = Path(__file__).with_name("spack_bridge.py")
+    args = (["installation-plan", cache, json.dumps(list(overwrite))]
+            if cache is not None else
+            ["installed" if label == "installed" else "snapshot"])
     return _json(
         run(
             home,
             [
                 "python",
                 str(bridge),
-                "installed" if label == "installed" else "snapshot",
+                *args,
             ],
             op,
             label,
@@ -570,16 +573,25 @@ def _snapshot(home, envdir, op, label="snapshot"):
     )
 
 
-def _validate_name_only_plan(plan, envdir):
-    """Reject conflicting builds before installation; Spack owns spec metadata."""
+def _name_only_layout(envdir):
     file = envdir / ".jforge-config/config.yaml"
     if not file.is_file():
-        return
+        return None
     layout = yaml.safe_load(file.read_text()).get("config", {}).get("install_tree", {})
     if not isinstance(layout, dict) or layout.get("projections") != {"all": "{name}"}:
+        return None
+    return layout
+
+
+def _validate_name_only_plan(plan, envdir):
+    """Reject conflicting required prefixes; Spack owns dependency selection."""
+    layout = _name_only_layout(envdir)
+    if layout is None:
         return  # Existing profiles retain their original multi-instance policy.
     builds = {}
     for package in plan["packages"]:
+        if package["external"]:
+            continue  # Externals do not occupy this store's package directories.
         builds.setdefault(package["name"], set()).add(package["hash"])
     conflicts = sorted(name for name, hashes in builds.items() if len(hashes) > 1)
     if conflicts:
@@ -794,10 +806,16 @@ def transact(
             if action not in {"upgrade", "full-upgrade"}
             else None,
         )
+        # In a flat store, validate binary and source work separately. Historical
+        # build dependencies of installed/binary packages need no local prefix.
+        cache_first = (bool(roots) and action != "remove" and cache == "auto"
+                       and _name_only_layout(envdir) is not None)
+        plan_cache = "only" if cache_first or action == "remove" else cache
+        overwrite = [name_of(s) for s in translated] if action == "reinstall" else []
         committed = False
         try:
             if progress:
-                progress("[1/4] Resolve the Spack dependency graph")
+                progress("[1/4] Resolve dependencies")
             if roots:
                 flags = ["concretize"] + (
                     ["--fresh", "--force"]
@@ -820,13 +838,18 @@ def transact(
                     timeout=timeout,
                     progress=progress,
                 )
-                plan = _snapshot(home, envdir, op, "plan")
-                write_json(op / "plan.json", plan)
+                dag = _snapshot(home, envdir, op, "dag")
+                write_json(op / "dag.json", dag)
+                run(home, ["python", str(Path(__file__).with_name("spack_bridge.py")), "tree"],
+                    op, "dependency-tree", envdir=envdir, timeout=timeout,
+                    progress=progress if getattr(progress, "verbose", False) else None)
+                plan = _snapshot(home, envdir, op, "plan", cache=plan_cache,
+                                 overwrite=overwrite)
                 if progress:
-                    progress(f"[2/4] Concrete plan: {len(plan['packages'])} packages")
+                    progress(f"[2/4] Check installation plan: {len(plan['packages'])} packages")
             else:
                 plan = {"packages": [], "modifications": []}
-            write_json(op / "plan.json", plan)
+            write_json(op / "plan.json", {**plan, "cache_policy": plan_cache})
             _validate_name_only_plan(plan, envdir)
             if action == "check":
                 result.update(
@@ -837,17 +860,26 @@ def transact(
                     plan=str(op / "plan.json"),
                     packages=plan["packages"],
                     ready_to_install=True,
+                    source_fallback_requires_validation=cache_first,
                     builds_executed=False,
                     state_committed=False,
                 )
+                if cache_first:
+                    result["note"] = (
+                        "Binary-only installation plan; if a cache install fails, "
+                        "remaining source dependencies are validated before building."
+                    )
                 return result
             if progress:
                 progress(
-                    "[3/4] Install dependencies and requested packages"
+                    "[3/4] Install packages"
                     if action != "remove"
                     else "[3/4] Retain installed store; update selected roots"
                 )
             if roots and action != "remove":
+                show_plan = getattr(progress, "installation_plan", None)
+                if show_plan is not None:
+                    show_plan(plan["packages"], overwrite)
                 if cache != "never":
                     _cache_keys(home, op, envdir, progress)
 
@@ -859,19 +891,35 @@ def transact(
                     "-j",
                     str(jobs),
                     "--use-buildcache",
-                    cache,
+                    plan_cache,
                 ]
                 if action == "reinstall":
                     args += ["--overwrite", "-y", *[name_of(s) for s in translated]]
-                run(
-                    home,
-                    args,
-                    op,
-                    "install",
-                    envdir=envdir,
-                    timeout=timeout,
-                    progress=progress,
-                )
+                label = "install-cache" if cache_first else "install"
+                try:
+                    run(home, args, op, label, envdir=envdir,
+                        timeout=timeout, progress=progress)
+                except ForgeError:
+                    # Timeouts, interruptions and launch failures must propagate.
+                    # Only a completed failed Spack cache attempt can fall back.
+                    record = op / "command-install-cache.json"
+                    failure = read_json(record) if record.is_file() else {}
+                    exit_code = failure.get("exit_code")
+                    if (not cache_first or failure.get("status") != "failed"
+                            or not isinstance(exit_code, int) or exit_code <= 0):
+                        raise
+                    if progress:
+                        progress("Binary installation incomplete; validate remaining source dependencies")
+                    source_plan = _snapshot(home, envdir, op, "source-plan",
+                                            cache="auto", overwrite=overwrite)
+                    write_json(op / "source-plan.json", {**source_plan, "cache_policy": "auto"})
+                    _validate_name_only_plan(source_plan, envdir)
+                    if show_plan is not None:
+                        show_plan(source_plan["packages"], overwrite)
+                    source_args = list(args)
+                    source_args[source_args.index("--use-buildcache") + 1] = "auto"
+                    run(home, source_args, op, "install", envdir=envdir,
+                        timeout=timeout, progress=progress)
             final = _snapshot(home, envdir, op, "installed") if roots else plan
             missing = [
                 p["name"]
@@ -883,7 +931,7 @@ def transact(
                     "Spack packages are not ready: " + ", ".join(missing), code=1
                 )
             if progress:
-                progress("[4/4] Save the lockfile and publish the shell environment")
+                progress("[4/4] Save environment")
             records = _publish(home, op, envdir, roots, final)
             committed = True
             result.update(

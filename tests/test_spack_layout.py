@@ -112,3 +112,17 @@ def test_matching_native_metadata_allows_same_build_retry(tmp_path):
     package['prefix_matches'] = False
     with pytest.raises(ForgeError, match='another build'):
         backend._validate_name_only_plan({'packages':[package]}, env)
+
+
+def test_external_instances_do_not_compete_for_store_directory(tmp_path):
+    env = tmp_path / 'environment'
+    store = tmp_path / 'apps/test'
+    file = env / '.jforge-config/config.yaml'; file.parent.mkdir(parents=True)
+    file.write_text(yaml.safe_dump({'config': {'install_tree': {
+        'root': str(store), 'projections': {'all': '{name}'}}}}))
+    backend._validate_name_only_plan({'packages': [
+        {'name': 'tool', 'hash': 'external-one', 'external': True},
+        {'name': 'tool', 'hash': 'external-two', 'external': True},
+        {'name': 'tool', 'hash': 'managed', 'external': False,
+         'prefix': str(store / 'tool'), 'installed': False},
+    ]}, env)

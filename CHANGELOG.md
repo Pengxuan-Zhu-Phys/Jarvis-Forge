@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.1
+
+### Changed
+
+- Show concise apt installation progress and results by default, with phase and package progress bars in interactive terminals. Pipes, JSON, dumb terminals and `NO_COLOR` use plain text. Add `--verbose` before or after commands to stream native Spack commands, the full dependency tree and raw output; `--debug` also enables this detail.
+- Keep complete dependency trees and original stdout/stderr in operation logs in every display mode. Show complete errors, hints and copyable paths once, without truncated duplicate summaries.
+- Make `apt check` describe the initial installation plan and indicate when source fallback still needs validation through its note and JSON `source_fallback_requires_validation` field. Save the full graph in `dag.json`, the initial plan and cache policy in `plan.json`, the readable tree in `command-dependency-tree.stdout.log`, and any source fallback plan in `source-plan.json`.
+
+### Fixed
+
+- Prevent valid package-name environments from rejecting installs because of duplicate historical build dependencies. Check the dependencies required for the current installation, retain runtime dependencies, and include build tools when rebuilding from source. External packages no longer compete for managed store directories.
+- For automatic caching in package-name stores, first attempt a validated binary-only install, then refresh installation state and check remaining source dependencies before permitting fallback. Keep genuine directory conflicts blocked and stop on timeouts, interruptions or command launch failures.
+
 ## 1.1.0 — 2026-11-05
 
 ### Added

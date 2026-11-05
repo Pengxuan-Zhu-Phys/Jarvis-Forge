@@ -19,7 +19,6 @@ from .apt_profiles import (
     switch,
 )
 from .package_operations import environment_path
-from .presentation import line
 from .storage import ForgeError
 
 app = typer.Typer(
@@ -32,14 +31,14 @@ app = typer.Typer(
 def _emit(ctx, command, **values):
     from .cli import emit
 
+    ctx.obj.apt_progress.close(success=values.get("status") == "passed")
     return emit(ctx, "apt " + command, **values)
 
 
 def _progress():
-    from .cli import _console
-    from .build_logging import format_record
+    from click import get_current_context
 
-    return lambda message: line(_console(stderr=True), format_record(message, module="Jarvis-Forge.Library").rstrip("\n"))
+    return get_current_context().obj.apt_progress
 
 
 def _ready(ctx):
@@ -93,6 +92,13 @@ def _transact(
 
 @app.callback()
 def apt(ctx: typer.Context):
+    from .apt_progress import AptProgress
+    from .cli import _console
+
+    ctx.obj.apt_progress = AptProgress(_console(stderr=True), verbose=ctx.obj.verbose,
+                                     as_json=ctx.obj.as_json,
+                                     check=ctx.invoked_subcommand == "check")
+    ctx.call_on_close(ctx.obj.apt_progress.close)
     ctx.obj.user_home = ctx.obj.home
     if ctx.invoked_subcommand not in {"switch", "import"}:
         ctx.obj.home = active_home(ctx.obj.home)

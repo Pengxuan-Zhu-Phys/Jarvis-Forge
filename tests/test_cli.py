@@ -37,7 +37,7 @@ def test_build_json_uses_build_command_and_workflow_is_reserved(capsys):
 @pytest.mark.parametrize("args", [["--version"], ["-v"], ["-V"]])
 def test_version(args, capsys):
     assert main(args) == 0
-    assert capsys.readouterr().out == "Jarvis-Forge 1.1.0\n"
+    assert capsys.readouterr().out == "Jarvis-Forge 1.1.1\n"
 
 
 @pytest.mark.parametrize("args", [["--json", "--version"], ["--version", "--json"]])
@@ -45,6 +45,7 @@ def test_json_version(args, capsys):
     assert main(args) == 0
     value = json.loads(capsys.readouterr().out)
     assert value["name"] == "Jarvis-Forge" and value["command"] == "version"
+    assert value["version"] == "1.1.1"
 
 
 @pytest.mark.parametrize("args", [["unknown"], ["--unknown"], ["run"], ["--home"]])

@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 from jarvis_forge import spack_backend as b
-from jarvis_forge.storage import ForgeError, ForgeHome, write_json
+from jarvis_forge.storage import ForgeError, ForgeHome, read_json, write_json
 from jarvis_forge.apt_profiles import active_home, archived_packages, switch
 from jarvis_forge.cli import main
 
@@ -17,6 +17,43 @@ pytestmark = pytest.mark.skipif(
     os.environ.get("JFORGE_SPACK_INTEGRATION") != "1",
     reason="real Spack acceptance is explicitly opt-in",
 )
+
+
+def test_real_installer_plans_and_guarded_cache_fallback(tmp_path):
+    base = ForgeHome(tmp_path / "forge")
+    base.initialize()
+    switch(base, "spack")
+    home = active_home(base)
+    repo = Path(__file__).parent / "fixtures/spack_repo/forge_test"
+    config = b.root(home) / "config/repos.yaml"
+    repos = yaml.safe_load(config.read_text())["repos"]
+    config.write_text(yaml.safe_dump({"repos": {"forge_test": str(repo.resolve()), **repos}}))
+
+    # These private fixtures have no binary cache: auto must fail its binary
+    # phase, validate source work, then build both tiny packages successfully.
+    result = b.transact(home, "install", ["forge-builder"], timeout=600)
+    op = Path(result["path"])
+    assert result["state_committed"]
+    assert {p["name"] for p in read_json(op / "plan.json")["packages"]} == {"forge-builder"}
+    assert {p["name"] for p in read_json(op / "source-plan.json")["packages"]} == {
+        "forge-builder", "forge-lib"}
+    assert {p["name"] for p in result["packages"]} == {"forge-builder"}
+
+    # The installed builder retains its build DAG in the lock, but its tool is
+    # not required again. This must hold even with cache=never.
+    result = b.transact(home, "check", cache="never", timeout=120)
+    assert {p["name"] for p in result["packages"]} == {"forge-builder"}
+    assert {p["name"] for p in read_json(Path(result["path"]) / "dag.json")["packages"]} == {
+        "forge-builder", "forge-lib"}
+
+    # A library that is a real runtime dependency of another root must stay.
+    result = b.transact(home, "check", ["forge-app"], cache="only", timeout=120)
+    assert {p["name"] for p in result["packages"]} == {"forge-builder", "forge-app", "forge-lib"}
+
+    # Rebuilding an installed root makes its build dependencies required again.
+    result = b.transact(home, "reinstall", ["forge-builder"], cache="never", timeout=120)
+    assert {p["name"] for p in read_json(Path(result["path"]) / "plan.json")["packages"]} == {
+        "forge-builder", "forge-lib"}
 
 
 def test_real_dependency_install_activation_and_failure(tmp_path, capsys):
