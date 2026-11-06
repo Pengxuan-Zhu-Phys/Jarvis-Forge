@@ -185,6 +185,73 @@ def test_multi_instance_store_does_not_pin_gcc_runtime(managed, monkeypatch):
     assert "packages" not in candidate_document(calls)
 
 
+@pytest.mark.parametrize("conflict_phase", ["plan", "source-plan"])
+def test_runtime_conflict_retries_with_installed_spec_and_original_lock(managed, monkeypatch, conflict_phase):
+    home, calls = managed
+    named_layout(home)
+    first = b.transact(home, "install", ["fixture-app"], cache="never")
+    original_lock = Path(first["environment"]) / "spack.lock"
+    original_lock.write_text("original roots")
+    prefix = b.root(home) / "store/gcc-runtime"
+    spec = prefix / ".spack/spec.json"
+    spec.parent.mkdir(parents=True)
+    installed = "a" * 32
+    write_json(spec, {"spec": {"nodes": [{
+        "name": "gcc-runtime", "version": "11.4.0", "hash": installed,
+        "arch": {"platform": "linux", "platform_os": "ubuntu22.04", "target": "x86_64_v3"},
+    }]}})
+    run = b.run
+
+    def conflicting_runtime(home, args, op, label, **kwargs):
+        envdir = kwargs["envdir"]
+        lock = envdir / "spack.lock"
+        if label == "concretize":
+            lock.write_text("first plan")
+        if label == "concretize-runtime-retry":
+            assert lock.read_text() == "original roots"
+            assert args == ["concretize"]
+            document = yaml.safe_load((envdir / "spack.yaml").read_text())["spack"]
+            assert document["packages"]["gcc-runtime"]["require"] == [
+                "@=11.4.0 platform=linux os=ubuntu22.04 target=x86_64_v3",
+            ]
+            assert document["packages"]["fixture-other"]["require"] == [
+                "platform=linux os=ubuntu22.04 target=x86_64_v3 %c=gcc@=11.4.0",
+            ]
+            assert document["concretizer"]["reuse"]["from"] == [
+                {"type": "local"}, {"type": "external"},
+            ]
+            assert document["specs"] == ["fixture-app", "fixture-other"]
+            lock.write_text("retry plan")
+        if label == "install-cache" and conflict_phase == "source-plan":
+            write_json(op / "command-install-cache.json", {"status": "failed", "exit_code": 1})
+            raise ForgeError("Cache miss", code=1)
+        output = run(home, args, op, label, **kwargs)
+        if label in {"plan", "source-plan", "plan-runtime-retry"}:
+            plan = json.loads(output)
+            runtime = {"name": "gcc-runtime", "hash": installed, "external": False,
+                       "installed": True, "prefix": str(prefix)}
+            plan["packages"].append(runtime)
+            if label == conflict_phase:
+                plan["packages"].append({**runtime, "hash": "b" * 32, "installed": False})
+                dependent = next(p for p in plan["packages"] if p["name"] == "fixture-other")
+                dependent["node"] = {"dependencies": [
+                    {"name": "gcc-runtime", "hash": "b" * 32},
+                    {"name": "gcc", "parameters": {"virtuals": ["c"]}},
+                ]}
+            return json.dumps(plan)
+        return output
+
+    monkeypatch.setattr(b, "run", conflicting_runtime)
+    result = b.transact(home, "install", ["fixture-other"])
+    op = Path(result["path"])
+    assert result["state_committed"]
+    assert original_lock.read_text() == "original roots"
+    assert (op / "spack-before-runtime-retry.lock").read_text() == "first plan"
+    assert (op / f"{conflict_phase}-before-runtime-retry.json").is_file()
+    assert [p["hash"] for p in read_json(op / f"{conflict_phase}.json")["packages"]
+            if p["name"] == "gcc-runtime"] == [installed]
+
+
 def test_name_only_layout_blocks_changed_build_before_install(managed, monkeypatch):
     home, calls = managed
     named_layout(home)

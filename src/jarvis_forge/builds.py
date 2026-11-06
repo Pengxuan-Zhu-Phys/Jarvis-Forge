@@ -181,6 +181,48 @@ def file_lock(path):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def _instance_directory(base, config, instance, *, installs=None):
+    legacy = base / instance
+    if legacy.exists():
+        return legacy
+
+    label = config["id"]
+    outputs = config.get("outputs", {})
+    if len(outputs) == 1:
+        output = next(iter(outputs.values()))
+        producer = next(step for step in config["steps"] if step["id"] == output["step"])
+        export = producer["with"]["export"]
+        if "${" not in export["package"] and "${" not in export["version"]:
+            package = re.sub(r"[^a-zA-Z0-9_.-]+", "-", export["package"]).strip(".-")
+            version = re.sub(r"[^a-zA-Z0-9_.-]+", "-", export["version"]).strip(".-")
+            label = "-".join(part for part in (package or label, version) if part)
+    # Bound the path component even for user-supplied package/version labels.
+    label = label[:100].rstrip(".-")
+    if re.fullmatch(r"[0-9a-f]{64}", label):
+        label += "-build"
+    marker = ".jforge-instance.json"
+    with file_lock(base.parent / f".{base.name}.lock"):
+        base.mkdir(exist_ok=True)
+        # Look for an existing identity before filling a gap in the numbering.
+        for work in base.iterdir():
+            if (not re.fullmatch(re.escape(label) + r"(?:-[0-9]+)?", work.name)
+                    or work.is_symlink() or not work.is_dir()):
+                continue
+            record = work / marker
+            if record.is_file() and not record.is_symlink() and read_json(record).get("instance") == instance:
+                return work
+
+        work = base / label
+        number = 1
+        while (work.exists() or work.is_symlink()
+               or (installs is not None and any(installs.glob(f"*/{work.name}")))):
+            number += 1
+            work = base / f"{label}-{number}"
+        work.mkdir()
+        write_json(work / marker, {"schema_version": 1, "instance": instance})
+        return work
+
+
 @contextmanager
 def process_environment(values):
     previous = os.environ.copy()
@@ -261,6 +303,34 @@ def find_artifact(home, request, context):
         raise ForgeError("Multiple compatible artifacts; bind requires.NAME.artifact explicitly: " +
                          ", ".join(v["artifact_id"] for v in matches))
     return matches[0] if matches else None
+
+
+def _source_archive(home, source, log, name, *, show_progress):
+    if not show_progress or os.environ.get("NO_COLOR"):
+        return verified_archive(home, source, log)
+
+    from rich.progress import BarColumn, DownloadColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+    from .cli import _console
+
+    console = _console(stderr=True)
+    if not console.is_terminal or console.is_dumb_terminal:
+        return verified_archive(home, source, log)
+    with Progress(
+        SpinnerColumn(), TextColumn("{task.description}", markup=False),
+        BarColumn(bar_width=None), TaskProgressColumn(text_format_no_percentage=""),
+        DownloadColumn(binary_units=True), console=console, transient=True,
+        redirect_stdout=False, redirect_stderr=False,
+    ) as display:
+        task = None
+
+        def update(completed, total):
+            nonlocal task
+            if task is None:
+                task = display.add_task(f"Downloading {name}", completed=completed, total=total)
+            else:
+                display.update(task, completed=completed, total=total, refresh=True)
+
+        return verified_archive(home, source, log, progress=update)
 
 
 class _AptInstallProgress:
@@ -406,8 +476,10 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
             instance = fingerprint(identity)
             if old.get("instance") and old["instance"] != instance:
                 raise ForgeError("Build inputs changed; start a new run instead of resuming.")
-            work = workspace / "instances" / instance if workspace else home.root / "builds/work" / instance
-            work.mkdir(parents=True, exist_ok=True)
+            work = _instance_directory(
+                workspace / "instances" if workspace else home.root / "builds/work",
+                config, instance, installs=None if workspace else home.root / "builds/installs",
+            )
             if workspace:
                 from .build_workspace import link_run
                 link_run(workspace, directory)
@@ -469,8 +541,13 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                             continue
                         marker = target / ".jforge-extracted"
                         if not marker.is_file():
-                            event(f"Download source {name}; logs: {node_dir / (name + '-download.stderr.log')}")
-                            archive = verified_archive(home, source_spec, node_dir / (name + "-download"))
+                            log = node_dir / (name + "-download")
+                            detail = f" ({log.with_suffix('.stderr.log')})" if verbose else ""
+                            event(f"Download source {name}{detail}")
+                            archive = _source_archive(
+                                home, source_spec, log, name,
+                                show_progress=progress is not None and not verbose and not as_json,
+                            )
                             if workspace:
                                 local_archive = work / "downloads" / (name + "-" + source_spec["sha256"])
                                 local_archive.parent.mkdir(parents=True, exist_ok=True)

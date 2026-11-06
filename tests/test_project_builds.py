@@ -216,6 +216,40 @@ def test_large_download_retries_partial_transfer(tmp_path, monkeypatch):
     assert len(calls)==2 and '--continue-at' in calls[1]
 
 
+def test_download_progress_uses_total_size_after_resuming(tmp_path, monkeypatch):
+    import shlex
+    from jarvis_forge import downloads
+
+    curl = tmp_path / "curl"
+    curl.write_text(
+        "#!/bin/sh\nexec " + shlex.quote(sys.executable) + " - \"$@\" <<'PY'\n"
+        "from pathlib import Path\n"
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "target = Path(args[args.index('--output') + 1])\n"
+        "headers = Path(args[args.index('--dump-header') + 1])\n"
+        "if '--continue-at' not in args:\n"
+        "    headers.write_bytes(b'HTTP/1.1 302 Found\\r\\nContent-Length: 2\\r\\n\\r\\n'"
+        " b'HTTP/2 200\\r\\nContent-Length: 10\\r\\n\\r\\n')\n"
+        "    target.write_bytes(b'abcde')\n"
+        "    print('interrupted', file=sys.stderr)\n"
+        "    sys.exit(18)\n"
+        "headers.write_bytes(b'HTTP/2 206\\r\\nContent-Length: 5\\r\\nContent-Range: bytes 5-9/10\\r\\n\\r\\n')\n"
+        "with target.open('ab') as out: out.write(b'fghij')\n"
+        "print('resumed', file=sys.stderr)\n"
+        "PY\n"
+    )
+    curl.chmod(0o700)
+    monkeypatch.setattr(downloads.shutil, "which", lambda name: str(curl) if name == "curl" else None)
+    sizes = []
+    target = tmp_path / "archive"
+    downloads.fetch("https://example.org/source.tar.gz", target, tmp_path / "download",
+                    timeout=7200, progress=lambda done, total: sizes.append((done, total)))
+    assert target.read_bytes() == b"abcdefghij"
+    assert (5, 10) in sizes and sizes[-1] == (10, 10)
+    assert (tmp_path / "download.stderr.log").read_text() == "interrupted\nresumed\n"
+
+
 def test_compact_library_and_calculator_cards_share_installation(home, projects, tmp_path):
     producer, consumer = projects
     library=tmp_path/'library'; library.mkdir()
@@ -662,7 +696,7 @@ def test_release_workspace_keeps_download_source_build_install_and_activation(ho
     result = json.loads(capsys.readouterr().out)
     prefix = Path(result['outputs'][0]['prefix'])
     instance = prefix.parent.parent
-    assert instance.parent == directory / 'instances'
+    assert instance == directory / 'instances/Tiny-1.0'
     assert (instance / 'sources/Tiny/tiny/CMakeLists.txt').is_file()
     assert (instance / 'build/Tiny.install/CMakeCache.txt').is_file()
     assert (instance / 'install/Tiny.install/include/value.h').is_file()
@@ -671,6 +705,8 @@ def test_release_workspace_keeps_download_source_build_install_and_activation(ho
     assert cmake.capture(directory / 'activate.sh')['CMAKE_PREFIX_PATH'].split(':')[0] == str(prefix)
     original = (directory / 'activate.sh').read_bytes()
     current = read_json(directory / '.jforge/current.json')
+    identity = builds.artifact(home, current['artifact_id'])['instance']
+    assert read_json(instance / '.jforge-instance.json')['instance'] == identity
     from jarvis_forge.build_workspace import create
     other = tmp_path / 'other-workspace'
     create(home, build_catalog.resolve(home, 'workspace-tiny'), other)
@@ -681,13 +717,15 @@ def test_release_workspace_keeps_download_source_build_install_and_activation(ho
     (directory / 'scripts/accept.py').write_text('raise RuntimeError("acceptance failed")\n')
     failed = builds.execute(home, str(directory))
     assert failed['status'] == 'failed'
+    assert (directory / 'instances/Tiny-1.0-2').is_dir()
     assert (directory / 'activate.sh').read_bytes() == original
     assert read_json(directory / '.jforge/current.json') == current
     builds.artifact(home, current['artifact_id'])
     assert calls == ['download']  # Local workspaces remain usable without the Release service.
 
 
-def test_workspace_resume_preserves_directory_and_script_snapshot(home, projects, tmp_path):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_workspace_resume_preserves_directory_and_script_snapshot(home, projects, tmp_path, monkeypatch, legacy):
     from jarvis_forge.build_workspace import create
     index = workspace_release(tmp_path, projects)
     build_catalog.update(home, index.as_uri())
@@ -696,7 +734,15 @@ def test_workspace_resume_preserves_directory_and_script_snapshot(home, projects
     marker = tmp_path / 'allow-success'
     script = directory / 'scripts/accept.py'
     script.write_text('from pathlib import Path\nassert Path(' + repr(str(marker)) + ').exists()\n')
-    first = builds.execute(home, str(directory))
+    def legacy_directory(base, config, instance, *, installs=None):
+        directory = base / instance
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    with monkeypatch.context() as patch:
+        if legacy:
+            patch.setattr(builds, "_instance_directory", legacy_directory)
+        first = builds.execute(home, str(directory))
     assert first['status'] == 'failed'
     assert not (directory / 'activate.sh').exists()
     instance = next((directory / 'instances').iterdir())

@@ -225,16 +225,18 @@ def run_command(argv, cwd, environment_script, logs, number, timeout, progress=N
         write_json(probe, record)
 
 
-def verified_archive(home, source, log_path):
+def verified_archive(home, source, log_path, *, progress=None):
     archive = _inside(home, home.root / "cache/downloads" / source["sha256"])
     archive.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if not archive.is_file() or digest(archive) != source["sha256"]:
         temporary = archive.with_name(archive.name + "." + uuid.uuid4().hex + ".part")
         try:
+            options = {}
             if source.get("timeout_seconds"):
-                fetch(source["url"], temporary, log_path, timeout=source["timeout_seconds"])
-            else:
-                fetch(source["url"], temporary, log_path)
+                options["timeout"] = source["timeout_seconds"]
+            if progress is not None:
+                options["progress"] = progress
+            fetch(source["url"], temporary, log_path, **options)
             if digest(temporary) != source["sha256"]:
                 raise ForgeError(
                     f"SHA-256 mismatch for source archive: {source['url']}", code=1

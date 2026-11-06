@@ -527,15 +527,19 @@ def catalog(home, pattern="*", query=None):
     ]
 
 
-def _spec_target(path):
+def _spec_node(path):
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError) as exc:
         raise ForgeError(f"Cannot read installed package spec: {path}") from exc
     spec = data.get("spec", data) if isinstance(data, dict) else None
-    node = spec
     if isinstance(spec, dict) and isinstance(spec.get("nodes"), list) and spec["nodes"]:
-        node = spec["nodes"][0]
+        return spec["nodes"][0]
+    return spec
+
+
+def _spec_target(path):
+    node = _spec_node(path)
     arch = node.get("arch") if isinstance(node, dict) else None
     target = arch.get("target") if isinstance(arch, dict) else None
     if isinstance(target, dict):
@@ -659,6 +663,68 @@ def _name_only_layout(envdir):
     if not isinstance(layout, dict) or layout.get("projections") != {"all": "{name}"}:
         return None
     return layout
+
+
+def _pin_installed_gcc_runtime(plan, envdir):
+    layout = _name_only_layout(envdir)
+    if layout is None:
+        return None
+    runtime_hashes = {
+        package["hash"] for package in plan["packages"]
+        if package["name"] == "gcc-runtime" and not package["external"]
+    }
+    spec_file = Path(layout["root"]) / "gcc-runtime/.spack/spec.json"
+    if not runtime_hashes or not spec_file.is_file():
+        return None
+    node = _spec_node(spec_file)
+    installed = node.get("hash") if isinstance(node, dict) else None
+    if not isinstance(installed, str) or not re.fullmatch(r"[a-z2-7]{32}", installed):
+        return None
+    conflicting = runtime_hashes - {installed}
+    if not conflicting:
+        return None
+    arch = node.get("arch")
+    if node.get("name") != "gcc-runtime" or not isinstance(arch, dict):
+        return None
+    version, platform, os_name = node.get("version"), arch.get("platform"), arch.get("platform_os")
+    if not all(isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]+", value)
+               for value in (version, platform, os_name)):
+        return None
+    target = _spec_target(spec_file)
+    manifest = envdir / "spack.yaml"
+    document = yaml.safe_load(manifest.read_text())
+    packages = document["spack"].setdefault("packages", {})
+    architecture = f"platform={platform} os={os_name} target={target}"
+    # Spack generates runtime dependencies during solving. Constrain their
+    # inputs here and verify the concrete runtime hash in the resulting plan.
+    packages.setdefault("gcc-runtime", {})["require"] = [f"@={version} {architecture}"]
+    # A runtime constraint alone can lead Spack to choose a different compiler.
+    # Keep the GCC languages of the packages that used the conflicting runtime.
+    for package in plan["packages"]:
+        if package["installed"] or package["external"]:
+            continue
+        dependencies = package.get("node", {}).get("dependencies", [])
+        if not any(dep["name"] == "gcc-runtime" and dep["hash"] in conflicting for dep in dependencies):
+            continue
+        languages = sorted({
+            language
+            for dep in dependencies if dep["name"] == "gcc"
+            for language in dep["parameters"]["virtuals"]
+            if language in {"c", "cxx", "fortran"}
+        })
+        if languages:
+            requirement = f"{architecture} %{','.join(languages)}=gcc@={version}"
+            requirements = packages.setdefault(package["name"], {}).setdefault("require", [])
+            if requirement not in requirements:
+                requirements.append(requirement)
+    # Reused binary DAGs can bring their already-fixed runtime dependencies.
+    # The retry resolves against local specs. Installation can still use a
+    # cached binary that matches the resulting concrete hash.
+    document["spack"]["concretizer"]["reuse"] = {
+        "roots": True, "from": [{"type": "local"}, {"type": "external"}],
+    }
+    manifest.write_text(yaml.safe_dump(document, sort_keys=False))
+    return installed
 
 
 def _pending_install_hashes(plan):
@@ -907,14 +973,8 @@ def transact(
         before = current(home)
         roots = _requested_roots(before, action, translated)
         result["roots"] = roots
-        envdir = _candidate(
-            home,
-            op,
-            roots,
-            before.get("environment")
-            if action not in {"upgrade", "full-upgrade"}
-            else None,
-        )
+        previous = before.get("environment") if action not in {"upgrade", "full-upgrade"} else None
+        envdir = _candidate(home, op, roots, previous)
         # In a flat store, validate binary and source work separately. Historical
         # build dependencies of installed/binary packages need no local prefix.
         cache_first = (bool(roots) and action != "remove" and cache == "auto"
@@ -922,6 +982,47 @@ def transact(
         plan_cache = "only" if cache_first or action == "remove" else cache
         overwrite = [name_of(s) for s in translated] if action == "reinstall" else []
         committed = False
+        runtime_retried = False
+
+        def resolve_plan(policy, *, suffix="", omit_cached_build_deps=False):
+            run(home, flags, op, "concretize" + suffix, envdir=envdir,
+                timeout=timeout, progress=progress)
+            dag = _snapshot(home, envdir, op, "dag" + suffix)
+            write_json(op / "dag.json", dag)
+            run(home, ["python", str(Path(__file__).with_name("spack_bridge.py")), "tree"],
+                op, "dependency-tree" + suffix, envdir=envdir, timeout=timeout,
+                progress=progress if getattr(progress, "verbose", False) else None)
+            return _snapshot(home, envdir, op, "plan" + suffix, cache=policy,
+                             overwrite=overwrite, omit_cached_build_deps=omit_cached_build_deps)
+
+        def validate_plan(plan, label, policy, *, omit_cached_build_deps=False):
+            nonlocal runtime_retried
+            write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
+            try:
+                _validate_name_only_plan(plan, envdir)
+            except ForgeError:
+                if runtime_retried or action not in {"install", "check", "reinstall"}:
+                    raise
+                installed = _pin_installed_gcc_runtime(plan, envdir)
+                if installed is None:
+                    raise
+                runtime_retried = True
+                if progress:
+                    progress("Retry dependency resolution with the installed gcc-runtime")
+                (op / f"{label}.json").rename(op / f"{label}-before-runtime-retry.json")
+                lock = envdir / "spack.lock"
+                lock.rename(op / "spack-before-runtime-retry.lock")
+                if previous and (Path(previous) / "spack.lock").is_file():
+                    shutil.copy2(Path(previous) / "spack.lock", lock)
+                plan = resolve_plan(policy, suffix="-runtime-retry",
+                                    omit_cached_build_deps=omit_cached_build_deps)
+                write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
+                _validate_name_only_plan(plan, envdir)
+                if any(p["name"] == "gcc-runtime" and not p["external"] and p["hash"] != installed
+                       for p in plan["packages"]):
+                    raise ForgeError("Spack could not reuse the installed gcc-runtime.", code=1)
+            return plan
+
         try:
             if progress:
                 progress("[1/4] Resolve dependencies")
@@ -938,28 +1039,12 @@ def transact(
                 )
                 if changed and "--force" not in flags:
                     flags.append("--force")
-                run(
-                    home,
-                    flags,
-                    op,
-                    "concretize",
-                    envdir=envdir,
-                    timeout=timeout,
-                    progress=progress,
-                )
-                dag = _snapshot(home, envdir, op, "dag")
-                write_json(op / "dag.json", dag)
-                run(home, ["python", str(Path(__file__).with_name("spack_bridge.py")), "tree"],
-                    op, "dependency-tree", envdir=envdir, timeout=timeout,
-                    progress=progress if getattr(progress, "verbose", False) else None)
-                plan = _snapshot(home, envdir, op, "plan", cache=plan_cache,
-                                 overwrite=overwrite)
+                plan = resolve_plan(plan_cache)
                 if progress:
                     progress(f"[2/4] Check installation plan: {len(plan['packages'])} packages")
             else:
                 plan = {"packages": [], "modifications": []}
-            write_json(op / "plan.json", {**plan, "cache_policy": plan_cache})
-            _validate_name_only_plan(plan, envdir)
+            plan = validate_plan(plan, "plan", plan_cache)
             if action == "check":
                 result.update(
                     backend="spack",
@@ -1017,8 +1102,9 @@ def transact(
                         home, envdir, op, "source-plan", cache="auto", overwrite=overwrite,
                         omit_cached_build_deps=not overwrite,
                     )
-                    write_json(op / "source-plan.json", {**source_plan, "cache_policy": "auto"})
-                    _validate_name_only_plan(source_plan, envdir)
+                    source_plan = validate_plan(
+                        source_plan, "source-plan", "auto", omit_cached_build_deps=not overwrite,
+                    )
                     if show_plan is not None:
                         show_plan(source_plan["packages"], overwrite)
                     if overwrite:

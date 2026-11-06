@@ -174,6 +174,8 @@ Spack 1.2.2 and an engine-compatible recipe commit are bootstrapped from checksu
 
 `--cache auto` reuses compatible binaries and permits source builds; `only` refuses source builds for requested packages/dependencies; `never` requires source builds. Spack's own solver/tool bootstrap is separate. Official cache signing keys are installed from the named official mirror. Custom binary mirrors require the user's trusted key; signature checking stays enabled. Cache availability depends on OS, architecture, compiler and the exact dependency graph. Public cache availability is not guaranteed.
 
+If a plan conflicts with an installed `gcc-runtime` in a one-build-per-package store, Forge retries resolution against that runtime and checks the new plan before installation. Compatible binaries remain eligible for installation.
+
 Each successful operation saves the concrete `spack.lock`, a configuration snapshot, package hashes and prefixes, stdout/stderr logs, and a new activation revision. Forge commits the selected environment only after Spack reports its packages installed. A failure retains the previous selection and logs; successful dependencies may remain in the store for reuse. Spack commands run with noninteractive input so detached processes do not access the calling SSH terminal.
 
 APT shows concise progress and results by default. Interactive terminals display phase and package progress bars; pipes, `--json`, dumb terminals and `NO_COLOR` use plain phase lines. Package counters follow Spack's reported completions, rather than estimating build percentages. Use `jforge apt install eigen --verbose` to stream the complete dependency tree, native Spack commands and raw output; `--debug` also enables detail. These options work before or after commands. Original output is always archived, including the complete tree in `command-dependency-tree.stdout.log`. Errors retain complete messages and copyable paths without shortened duplicate summaries. `--json` keeps stdout to one result object and sends progress/detail to stderr.
@@ -224,7 +226,11 @@ jforge build fetch root-build --directory "$HOME/workshops/root-forge"
 jforge build run "$HOME/workshops/root-forge" --jobs 8
 ```
 
-The directory contains `build.yaml`, companion scripts and `instances/<id>/{downloads,sources,build,install}`. Package dependencies remain in Forge's shared Spack profiles. `runs/<run-id>` links to the retained Forge history. A successful acceptance run updates the workspace's `activate.sh`; failure preserves the previous successful activation and build directories. Resume uses the saved workspace and scripts. Absolute installation paths remain fixed; this is not a relocatable binary bundle.
+The directory contains `build.yaml`, companion scripts and `instances/<name>/{downloads,sources,build,install}`. A build with one exported package uses its package and version as the instance name, for example `ROOT-6.40.04`. Other builds use the recipe ID. Distinct build identities with the same name get a numbered suffix. Each new instance records its full identity in `.jforge-instance.json`. Resume and reuse also support existing directories named by their full hash.
+
+Package dependencies live in Forge's shared Spack profiles. `runs/<run-id>` links to the retained Forge history. A successful acceptance run updates the workspace's `activate.sh`, and a failure leaves the previous successful activation available. Absolute installation paths may be embedded in binaries and build files. Building in a new workspace gives an existing project a new installation path.
+
+In an interactive terminal, `build run` and `build resume` show a progress bar while downloading a source archive. The bar shows the bytes transferred and a percentage when the downloader knows the total size. Raw downloader output stays in the run logs. `--verbose` prints the download log path.
 
 An uncached Release ID is downloaded on explicit `build fetch/run`; cached IDs and existing workspaces remain usable offline. `build update` refreshes the catalog explicitly and never overwrites an editable workspace. The existing `fetch --output file.yaml` still copies only an editable card and its companion scripts; it does not create a workspace. `validate/plan` stay read-only and do not implicitly download missing recipes.
 

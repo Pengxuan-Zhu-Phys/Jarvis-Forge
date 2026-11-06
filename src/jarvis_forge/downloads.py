@@ -2,19 +2,61 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import os
 import subprocess
 import time
 import tarfile
+import tempfile
 from urllib.parse import unquote, urlparse
 import zipfile
 
 from .storage import ForgeError
 
 
-def fetch(url: str, target: Path, logs: Path, *, timeout: float = 300) -> None:
+def _download_total(headers):
+    if headers is None or not headers.is_file():
+        return None
+    response = re.split(rb"\r?\n\r?\n", headers.read_bytes())
+    for block in reversed(response):
+        status = re.match(rb"HTTP/\S+ (\d{3})", block)
+        if status is None:
+            continue
+        if status[1] == b"206":
+            size = re.search(rb"^content-range:[ \t]*bytes \d+-\d+/(\d+)\s*$", block, re.I | re.M)
+        elif status[1] == b"200":
+            size = re.search(rb"^content-length:[ \t]*(\d+)\s*$", block, re.I | re.M)
+        else:
+            return None
+        return int(size[1]) if size and int(size[1]) > 0 else None
+    return None
+
+
+def _watch_download(command, target, headers, out, err, timeout, progress):
+    deadline = time.monotonic() + timeout
+    with subprocess.Popen(command, stdout=out, stderr=err) as process:
+        try:
+            while True:
+                code = process.poll()
+                progress(target.stat().st_size if target.exists() else 0, _download_total(headers))
+                if code is not None:
+                    return code
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                try:
+                    process.wait(timeout=min(remaining, 0.25))
+                except subprocess.TimeoutExpired:
+                    pass
+        finally:
+            if process.poll() is None:
+                process.kill()
+
+
+def fetch(url: str, target: Path, logs: Path, *, timeout: float = 300, progress=None) -> None:
     parsed = urlparse(url)
     if parsed.scheme == "file" and parsed.netloc in {"", "localhost"}:
         source = Path(unquote(parsed.path))
@@ -32,7 +74,10 @@ def fetch(url: str, target: Path, logs: Path, *, timeout: float = 300) -> None:
         argv = [wget, "--https-only", "--timeout=60", "--tries=1", "-O", str(target), url]
     else:
         raise ForgeError("HTTPS downloads require curl or wget on PATH.")
-    with logs.with_suffix(".stdout.log").open("wb") as out, logs.with_suffix(".stderr.log").open("wb") as err:
+    header_directory = tempfile.TemporaryDirectory(prefix="forge-download-") if curl and progress else nullcontext()
+    with (header_directory as directory, logs.with_suffix(".stdout.log").open("wb") as out,
+          logs.with_suffix(".stderr.log").open("wb") as err):
+        headers = Path(directory) / "headers" if directory else None
         deadline = time.monotonic() + timeout
         # Large workflow sources may span multiple interrupted HTTP transfers.
         # Retries resume into the same temporary file; callers verify its hash.
@@ -41,19 +86,25 @@ def fetch(url: str, target: Path, logs: Path, *, timeout: float = 300) -> None:
             if remaining <= 0:
                 raise ForgeError(f"Download timed out: {url}", code=1)
             command = list(argv)
+            if headers is not None:
+                headers.unlink(missing_ok=True)
+                command[1:1] = ["--dump-header", str(headers)]
             if curl and timeout > 300:
                 command[command.index("--max-time") + 1] = str(remaining)
                 if attempt and target.exists() and target.stat().st_size:
                     command[1:1] = ["--continue-at", "-"]
             try:
-                result = subprocess.run(command, stdout=out, stderr=err, timeout=remaining + 30)
+                if progress is not None:
+                    code = _watch_download(command, target, headers, out, err, remaining + 30, progress)
+                else:
+                    code = subprocess.run(command, stdout=out, stderr=err, timeout=remaining + 30).returncode
             except subprocess.TimeoutExpired as exc:
                 raise ForgeError(f"Download timed out: {url}", code=1) from exc
-            if result.returncode == 0 or not curl or result.returncode not in {18, 28, 33, 52, 55, 56}:
+            if code == 0 or not curl or code not in {18, 28, 33, 52, 55, 56}:
                 break
-            if result.returncode == 33:
+            if code == 33:
                 target.unlink(missing_ok=True)  # Server rejected range; retry from zero.
-    if result.returncode:
+    if code:
         raise ForgeError(f"Download failed for {url}; see {logs.with_suffix('.stderr.log')}", code=1)
 
 

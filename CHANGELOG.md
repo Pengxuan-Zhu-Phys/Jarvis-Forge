@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.5 — 2026-11-06
+
+### Changed
+
+- Give new build instances readable package-and-version directories, or recipe names for builds with multiple outputs. Keep the full build identity in a JSON record and assign numbered directories to distinct configurations with the same name. Existing hash-named builds still support reuse and resume.
+- Show source download progress in interactive build runs while retaining the raw downloader logs.
+
+### Fixed
+
+- Retry package installation plans that conflict with the current environment's installed `gcc-runtime`.
+
 ## 1.1.4 — 2026-11-06
 ### Changed
 
