@@ -1,7 +1,6 @@
 # Changelog
 
-## Unreleased
-
+## 1.1.4 — 2026-11-06
 ### Changed
 
 - Show `jforge build` package installation with the same phase and package progress as `jforge apt install`. Raw Spack commands and logs stay in the operation files unless `--verbose` or `--debug` is set.
