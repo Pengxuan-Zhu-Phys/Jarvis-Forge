@@ -3,6 +3,10 @@
 
 No Forge imports, PyPI operations, local Git operations or jfrel invocation.
 Build YAML parsing requires PyYAML; publication requires GitHub CLI.
+A successful publication leaves only the stable index and the current payloads
+on the recipes and builds Releases. Older archives and previous indexes are removed
+after the new catalog is publicly verified. A failed publication keeps the previous
+catalog and its payloads.
 Maintainer documentation: Jarvis-Books/Docs/Jarvis-Forge/RELEASING.md.
 """
 
@@ -237,6 +241,9 @@ class GitHub:
     def rename(self, asset, name):
         self.api(f"{API}/releases/assets/{asset['id']}", {"name": name})
 
+    def delete(self, asset):
+        self.run("api", "--method", "DELETE", f"{API}/releases/assets/{asset['id']}")
+
     def publish(self, release):
         self.api(f"{API}/releases/{release['id']}", {"draft": False, "make_latest": "false"})
 
@@ -282,6 +289,27 @@ def revision_of(manifest, tag):
     if len(versions) != 1:
         raise ValueError("All entries in a build publication must use the same recipe revision")
     return next(iter(versions))
+
+
+def published_names(manifest, tag):
+    """Stable index plus the payloads named by the catalog being published."""
+    base = f"https://github.com/{REPOSITORY}/releases/download/{tag}/"
+    names = {tag + ".json"}
+    for row in payloads(manifest, tag):
+        name = row["url"][len(base):]
+        if not name or "/" in name:
+            raise ValueError("Recipe payload name escaped the Release")
+        names.add(name)
+    return names
+
+
+def prune(state):
+    """Drop every Release asset that the verified catalog no longer names."""
+    keep = published_names(state["manifest"], state["tag"])
+    for asset in state["github"].release()["assets"]:
+        if asset["name"] not in keep:
+            print(f"Removing superseded {state['tag']} asset: {asset['name']}", flush=True)
+            state["github"].delete(asset)
 
 
 def stage(manifest, output, github, tag):
@@ -401,6 +429,9 @@ def publish_all(bundles, verify=public_bytes):
         if failures:
             raise RuntimeError(f"{exc}; catalog recovery needs attention: {'; '.join(failures)}") from exc
         raise
+    # The catalogs are already live. Cleanup must not restore an older index.
+    for state in states:
+        prune(state)
     for state in states:
         print(f"Published {state['tag']} {revision_of(state['manifest'], state['tag'])}", flush=True)
         print(f"Stable index: https://github.com/{REPOSITORY}/releases/download/{state['tag']}/{state['tag']}.json")

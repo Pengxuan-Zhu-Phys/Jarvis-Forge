@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Show `jforge build` package installation with the same phase and package progress as `jforge apt install`. Raw Spack commands and logs stay in the operation files unless `--verbose` or `--debug` is set.
+- Summarize `jforge build show` instead of printing the raw card. `--expanded` adds the resolved steps. `--json` still prints the card data.
+- Configure the ROOT recipe with `-Dall=ON` again. fcgi, dcache, R, Qt6Web, CUDA, and the GPU TMVA options stay off. Acceptance still requires pyroot, roofit, opengl, mathmore, arrow, davix, vecgeom, and pythia8.
+
+### Fixed
+
+- After a binary install leaves packages unbuilt in a package-name store, install the remaining binaries before building anything from source. The one-build-per-name plan keeps a single copy of each build tool, including autoconf, gettext, and zlib-ng.
+
 ## 1.1.3 — 2026-11-06
 
 ### Changed

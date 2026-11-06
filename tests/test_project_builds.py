@@ -246,13 +246,10 @@ def test_compact_root_overrides_and_default_provenance():
     assert 'libbsd' in raw['dependencies']
     assert root['source']['sha256']
     options = root['cmake']['options']
-    assert 'all' not in options
-    assert options['fail-on-missing'] is True
-    assert options['arrow'] is True and options['mathmore'] is True
-    assert options['pythia8'] is True and options['vecgeom'] is True
-    assert options['xrootd'] is False and options['vdt'] is False and options['clad'] is False
-    assert options['roofit_multiprocess'] is False
-    assert options['builtin_ftgl'] is True and options['builtin_xxhash'] is True
+    assert options['all'] is True
+    assert options['fcgi'] is False and options['dcache'] is False and options['cuda'] is False
+    assert options['qt6web'] is False and options['tmva-gpu'] is False and options['tmva-cudnn'] is False
+    assert 'fail-on-missing' not in options and 'xrootd' not in options
     assert 'recipe' not in root and 'home' not in str(raw.keys())
     effective=next(s for s in loaded['ordered'] if s['uses']=='cmake.project')['with']
     assert effective['cache']['CMAKE_BUILD_TYPE']['value']=='Release'
@@ -421,8 +418,30 @@ def test_show_compact_card_does_not_require_library_download(tmp_path,capsys):
     home=tmp_path/'absent'
     assert main(['--home',str(home),'build','show',str(path)])==0
     shown=capsys.readouterr().out
-    assert 'LibDeps:' in shown and 'steps:' not in shown
+    assert 'ROOT' in shown and '6.40.04' in shown and 'recipe: root' in shown
+    assert 'steps:' not in shown and 'LibDeps:' not in shown
     assert not home.exists()
+
+
+def test_build_show_summarizes_root_recipe(tmp_path, capsys):
+    root = Path(__file__).parents[1] / "builds/root-build.yaml"
+    home = tmp_path / "absent"
+    assert main(["--home", str(home), "build", "show", str(root)]) == 0
+    shown = capsys.readouterr().out
+    assert "root-build" in shown and "ROOT 6.40.04" in shown
+    assert "-Dall=ON" in shown and "Off: fcgi, dcache, r, qt6web, cuda, tmva-gpu, tmva-cudnn" in shown
+    assert "Required features: pyroot, roofit, opengl, mathmore, arrow, davix, vecgeom, pythia8" in shown
+    assert "Apt packages (" in shown and "pythia8" in shown
+    assert "name: root-build" not in shown and "fail-on-missing" not in shown
+    assert not home.exists()
+    assert main(["--home", str(home), "build", "show", str(root), "--expanded"]) == 0
+    expanded = capsys.readouterr().out
+    assert "Steps (" in expanded and "apt.install" in expanded and "cmake.project" in expanded
+    assert "-Dall=ON" in expanded and "phases configure, build, install" in expanded
+    assert not home.exists()
+    assert main(["--home", str(home), "--json", "build", "show", str(root)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["build"]["build"]["cmake"]["options"]["all"] is True
 
 
 def test_package_install_uses_active_apt_profile(home, tmp_path, monkeypatch):
@@ -448,6 +467,47 @@ def test_package_install_uses_active_apt_profile(home, tmp_path, monkeypatch):
     assert seen == {"root": home.root / "apt/profiles/spack-default", "action": "install", "specs": ["gsl"]}
     assert read_json(home.root / "apt/selection.json")["id"] == "spack-default"
     assert not list((home.root / "apt/profiles").glob("spack-build-*"))
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_build_package_install_uses_apt_progress_display(home, tmp_path, monkeypatch, capfdbinary, verbose):
+    from jarvis_forge import spack_backend
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setattr(spack_backend, "bootstrap", fake_bootstrap)
+    tree = b"==> Concretized dependency tree: gsl@2.8\n"
+    status = b"[+] abcdefg gsl@2.8 /prefix\n"
+
+    def install(target, action, specs, **kwargs):
+        progress = kwargs["progress"]
+        assert progress.verbose is verbose
+        progress("[1/4] Resolve dependencies")
+        progress("Spack concretize: concretize")
+        progress.output("stdout", tree)
+        progress.output("stdout", status)
+        progress.installation_plan([])
+        progress("[4/4] Save environment")
+        activation = target.root / "activate.sh"
+        activation.write_text(":\n")
+        lock = target.root / "spack.lock"
+        lock.write_text("{}")
+        return {"activation": str(activation), "lockfile": str(lock), "packages": []}
+
+    monkeypatch.setattr(spack_backend, "transact", install)
+    path = tmp_path / "deps.yaml"
+    path.write_text(yaml.safe_dump({"name": "deps", "dependencies": ["gsl"], "checks": {"after": [["true"]]}}))
+    screen = []
+    result = builds.execute(home, path, verbose=verbose, progress=lambda message: screen.append(message))
+    assert result["status"] == "passed", result
+    output = capfdbinary.readouterr()
+    assert b"[1/4] Resolve dependencies" in output.err
+    assert b"[4/4] Save environment" in output.err
+    assert (tree in output.err) is verbose
+    assert (b"Spack concretize: concretize" in output.err) is verbose
+    assert (status in output.err) is verbose
+    assert not any("Spack concretize" in message or "Concretized dependency tree" in message for message in screen)
+    log = next((home.root / "runs").glob("*/attempts/*/build.log"))
+    recorded = log.read_text()
+    assert "Jarvis-Forge.APT" in recorded and "Resolve dependencies" in recorded
 
 
 def test_inline_package_archive_and_cmake_paths(home,projects,tmp_path,monkeypatch):

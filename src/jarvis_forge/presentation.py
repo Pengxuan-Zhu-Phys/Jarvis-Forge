@@ -188,6 +188,203 @@ def apt_transaction(console, command, values):
         line(console, "Package store retained for saved environment revisions.")
 
 
+def _join(values):
+    return ", ".join(str(value) for value in values)
+
+
+def _cmake_flag(name, value):
+    if isinstance(value, bool):
+        return f"-D{name}={'ON' if value else 'OFF'}"
+    if isinstance(value, dict) and "value" in value:
+        shown = value["value"]
+        if value.get("type") == "BOOL" and isinstance(shown, bool):
+            return f"-D{name}={'ON' if shown else 'OFF'}"
+        return f"-D{name}={shown}"
+    return f"-D{name}={value}"
+
+
+def _check_text(value):
+    if not isinstance(value, dict):
+        if isinstance(value, list):
+            return _join(shlex.join(item) if isinstance(item, list) else str(item) for item in value) or "none"
+        return scalar(value)
+    parts = []
+    python = value.get("python") or {}
+    if python:
+        bits = []
+        if python.get("version"):
+            bits.append("Python " + str(python["version"]))
+        if python.get("development"):
+            bits.append("development headers")
+        modules = python.get("modules") or []
+        if modules:
+            bits.append("imports " + _join(modules))
+        if bits:
+            parts.append(", ".join(bits))
+    tools = value.get("tools") or []
+    if tools:
+        parts.append("tools " + _join(tools))
+    for name in _script_paths(value):
+        parts.append(name)
+    return "; ".join(parts) or "none"
+
+
+def _script_paths(value):
+    if not isinstance(value, dict):
+        return []
+    scripts = value.get("scripts") or []
+    if isinstance(scripts, str):
+        scripts = [scripts]
+    names = []
+    for item in scripts:
+        names.append(item.get("path", str(item)) if isinstance(item, dict) else str(item))
+    return names
+
+
+def _step_detail(step):
+    options = step.get("with") or {}
+    if step.get("uses") == "apt.install":
+        specs = options.get("specs") or []
+        return f"{len(specs)} packages into the active apt environment"
+    if step.get("uses") == "cmake.project":
+        bits = []
+        phases = options.get("phases") or []
+        if phases:
+            bits.append("phases " + _join(phases))
+        cache = options.get("cache") or {}
+        for key in ("CMAKE_BUILD_TYPE", "CMAKE_CXX_STANDARD"):
+            if key in cache:
+                bits.append(_cmake_flag(key, cache[key]))
+        return "; ".join(bits)
+    if step.get("uses") == "check":
+        return _check_text(options.get("spec") or {})
+    if step.get("uses") == "command":
+        argv = [str(part) for part in options.get("argv") or []]
+        script = next((part for part in argv if part.endswith(".py")), None)
+        return script or shlex.join(argv)
+    return ""
+
+
+def _show_native_build(console, card):
+    line(console, str(card.get("name", "build")), style="bold")
+    platforms = card.get("platforms") or []
+    if platforms:
+        line(console, "Platform: " + _join(platforms))
+    build = card.get("build") or {}
+    if build:
+        title = " ".join(part for part in (str(build.get("name", "")), str(build.get("version", ""))) if part)
+        if title:
+            line(console, title)
+        source = build.get("source")
+        if isinstance(source, dict):
+            if source.get("url"):
+                line(console, "Source: " + str(source["url"]))
+            if source.get("subdir"):
+                line(console, "Archive directory: " + str(source["subdir"]))
+        elif source:
+            line(console, "Source: " + str(source))
+    dependencies = card.get("dependencies") or []
+    if dependencies:
+        line(console)
+        line(console, f"Apt packages ({len(dependencies)}):", style="bold")
+        line(console, "  " + _join(dependencies))
+    cmake = (build.get("cmake") or {}) if build else {}
+    options = cmake.get("options") or {}
+    if cmake:
+        line(console)
+        line(console, "Build:", style="bold")
+        enabled = [name for name, value in options.items() if value is True]
+        disabled = [name for name, value in options.items() if value is False]
+        if "all" in enabled:
+            line(console, "  Configures with -Dall=ON")
+        for name, value in options.items():
+            if not isinstance(value, bool):
+                line(console, "  " + _cmake_flag(name, value))
+        extras = [name for name in enabled if name != "all"]
+        if extras:
+            line(console, "  Also on: " + _join(extras))
+        if disabled:
+            line(console, "  Off: " + _join(disabled))
+        for label_name, key in (("Headers", "includes"), ("Libraries", "libraries"), ("Runtime", "runtime")):
+            values = cmake.get(key) or []
+            if values:
+                line(console, f"  {label_name}: " + _join(values))
+    features = build.get("features") or []
+    checks = card.get("checks") or {}
+    if checks or features or build.get("required_files"):
+        line(console)
+        line(console, "Acceptance:", style="bold")
+        if checks.get("before") is not None:
+            line(console, "  Before: " + _check_text(checks.get("before")))
+        if checks.get("after") is not None:
+            line(console, "  After: " + _check_text(checks.get("after")))
+        if features:
+            line(console, "  Required features: " + _join(features))
+        required = build.get("required_files") or []
+        if required:
+            line(console, "  Required files: " + _join(required))
+
+
+def _show_legacy_build(console, card):
+    workflow = card.get("Workflow") or {}
+    line(console, str(workflow.get("name", "build")), style="bold")
+    if workflow.get("platforms"):
+        line(console, "Platform: " + _join(workflow["platforms"]))
+    modules = []
+    for group in ("LibDeps", "Calculators"):
+        entries = (card.get(group) or {}).get("Modules") or []
+        if isinstance(entries, list):
+            modules.extend(entries)
+    if modules:
+        line(console)
+        line(console, f"Modules ({len(modules)}):", style="bold")
+        for module in modules:
+            if not isinstance(module, dict):
+                line(console, "  " + str(module))
+                continue
+            title = " ".join(part for part in (str(module.get("name", "module")), str(module.get("version", ""))) if part)
+            line(console, "  " + title)
+            if module.get("recipe"):
+                line(console, "    recipe: " + str(module["recipe"]))
+            if module.get("workflow"):
+                line(console, "    requires: " + str(module["workflow"]))
+
+
+def show_build(console, card, *, path, sha256, ordered=None):
+    """Summarize a build card. JSON output keeps the original mapping."""
+    if isinstance(card, dict) and "name" in card and "Workflow" not in card:
+        _show_native_build(console, card)
+    elif isinstance(card, dict) and "Workflow" in card:
+        _show_legacy_build(console, card)
+    else:
+        line(console, "Build card", style="bold")
+    if ordered:
+        line(console)
+        line(console, f"Steps ({len(ordered)}):", style="bold")
+        scripts = []
+        checks = card.get("checks") if isinstance(card, dict) else None
+        if isinstance(checks, dict):
+            for stage in ("before", "after"):
+                scripts.extend(_script_paths(checks.get(stage)))
+        for index, step in enumerate(ordered, 1):
+            line(console, f"  {index}. {step.get('id', 'step')}  {step.get('uses', '')}")
+            if step.get("uses") == "command" and scripts:
+                detail = scripts.pop(0)
+            else:
+                detail = _step_detail(step)
+            standard = (((card.get("build") or {}).get("cmake") or {}).get("options") or {}).get("CMAKE_CXX_STANDARD") if isinstance(card, dict) else None
+            if detail and standard is not None:
+                detail = detail.replace("${parameters.cxx_standard}", str(standard))
+            if detail:
+                line(console, "     " + detail)
+    line(console)
+    line(console, "Card:")
+    line(console, "  " + str(path))
+    line(console, "SHA-256: " + str(sha256))
+    if ordered is None:
+        line(console, "Details: jforge build show <build> --expanded", style="dim")
+
+
 def apt_update(console, values):
     line(console, "Spack recipes: " + str(values.get("status", "completed")), style="bold")
     for key in ("available", "repository_commit", "updated_at", "note", "operation_id", "path"):

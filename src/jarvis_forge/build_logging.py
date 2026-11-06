@@ -21,9 +21,13 @@ class ProcessLog:
     def __init__(self, path: Path, module: str, progress=None):
         self.path, self.module, self.progress = path, module, progress
 
-    def __call__(self, message, level="INFO", module=None):
+    def write(self, message, level="INFO", module=None):
         text = format_record(message, module=module or self.module, level=level)
         with self.path.open("a", encoding="utf-8") as out:
             out.write(text)
+        return text
+
+    def __call__(self, message, level="INFO", module=None):
+        text = self.write(message, level=level, module=module)
         if self.progress:
             self.progress(text.rstrip("\n"))

@@ -305,8 +305,100 @@ def test_auto_cache_failure_validates_source_plan_before_fallback(managed, monke
         assert (Path(result["path"]) / "source-plan.json").is_file()
     policies = [args[args.index("--use-buildcache") + 1]
                 for args, _ in calls if args[0] == "install"]
-    assert policies == (["only"] if conflict else ["only", "auto"])
-    assert any("installation-plan" in args and args[-2] == "auto" for args, _ in calls)
+    # Conflicts fail validation before another install. A clean plan whose
+    # packages are already installed does not start one either.
+    assert policies == ["only"]
+    assert any(
+        args[-4:] == ["installation-plan", "auto", "[]", "omit-cached-build-deps"]
+        for args, _ in calls
+    )
+
+
+def test_source_fallback_installs_binaries_before_source_builds(managed, monkeypatch):
+    home, calls = managed
+    named_layout(home)
+    run = b.run
+
+    def cache_miss(home, args, op, label, **kwargs):
+        output = run(home, args, op, label, **kwargs)
+        if label == "install-cache":
+            write_json(op / "command-install-cache.json", {"status": "failed", "exit_code": 1})
+            raise ForgeError("fixture cache miss", code=1)
+        if label == "source-plan":
+            data = json.loads(output)
+            for package in data["packages"]:
+                package["cached"] = package["name"] == "fixture-lib"
+            return json.dumps(data)
+        return output
+
+    monkeypatch.setattr(b, "run", cache_miss)
+    result = b.transact(home, "install", ["fixture-app"])
+    assert result["state_committed"]
+    installs = [args for args, _ in calls if args[0] == "install"]
+    assert [item[item.index("--use-buildcache") + 1] for item in installs] == ["only", "only", "auto"]
+    assert "/hash-fixture-lib" in installs[1]
+    assert "/hash-fixture-app" not in installs[1]
+    assert installs[2][-1:] == ["/hash-fixture-app"]
+    assert "/hash-fixture-lib" not in installs[2]
+
+
+def test_binary_remainder_failure_does_not_start_source_build(managed, monkeypatch):
+    home, calls = managed
+    named_layout(home)
+    run = b.run
+
+    def cache_miss(home, args, op, label, **kwargs):
+        output = run(home, args, op, label, **kwargs)
+        if label == "install-cache":
+            write_json(op / "command-install-cache.json", {"status": "failed", "exit_code": 1})
+            raise ForgeError("fixture cache miss", code=1)
+        if label == "source-plan":
+            data = json.loads(output)
+            for package in data["packages"]:
+                package["cached"] = True
+            return json.dumps(data)
+        if label == "install-binaries":
+            raise ForgeError("binary remainder failed", code=1)
+        return output
+
+    monkeypatch.setattr(b, "run", cache_miss)
+    with pytest.raises(ForgeError, match="binary remainder failed"):
+        b.transact(home, "install", ["fixture-app"])
+    installs = [args for args, _ in calls if args[0] == "install"]
+    assert [item[item.index("--use-buildcache") + 1] for item in installs] == ["only", "only"]
+    assert not (home.root / "apt/state.json").exists()
+
+
+def test_pending_install_hashes_reject_option_like_values():
+    with pytest.raises(ForgeError, match="hash"):
+        b._pending_install_hashes(
+            {"packages": [{"name": "gcc", "hash": "--overwrite", "external": False}]}
+        )
+
+
+@pytest.mark.parametrize(
+    ("policy", "external", "installed", "cached", "overwrite", "expected"),
+    [
+        ("only", False, False, False, False, False),
+        ("only", False, False, True, False, False),
+        ("never", False, False, True, False, True),
+        ("never", False, True, False, False, False),
+        ("never", False, True, False, True, True),
+        ("auto", False, False, True, False, False),
+        ("auto", False, False, False, False, True),
+        ("auto", False, True, False, False, False),
+        ("auto", False, False, True, True, True),
+        ("auto", True, False, False, False, False),
+    ],
+)
+def test_cached_specs_do_not_require_their_build_tools(
+    policy, external, installed, cached, overwrite, expected
+):
+    from jarvis_forge.spack_bridge import include_build_dependencies
+
+    assert include_build_dependencies(
+        policy, external=external, installed=installed, cached=cached, overwrite=overwrite
+    ) is expected
 
 
 @pytest.mark.parametrize("status,exit_code", [("timeout", -15), ("interrupted", -2), ("failed", None), ("failed", -15)])

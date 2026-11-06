@@ -76,6 +76,11 @@ class FakeGitHub:
         self.state["draft"] = True
         self.events.append("hide")
 
+    def delete(self, asset):
+        self.state["assets"] = [item for item in self.state["assets"] if item["id"] != asset["id"]]
+        self.payloads.pop(asset["id"], None)
+        self.events.append("delete:" + asset["name"])
+
     def verify(self, url, expected):
         assert not self.state["draft"]
         asset = publisher.asset_named(self.state, url.rsplit("/", 1)[1])
@@ -139,19 +144,23 @@ def test_first_publish_exposes_verified_catalog_and_immutable_archive(source, tm
     assert github.state == old  # Retry is idempotent.
 
 
-def test_update_stages_before_switch_and_keeps_all_old_payloads(source, tmp_path):
+def test_update_stages_before_switch_then_keeps_only_the_latest_assets(source, tmp_path):
     github, first = initial(source, tmp_path)
-    old_payloads = dict(github.payloads)
     old_index = publisher.asset_named(github.state, "recipes.json")
     (source / "spack_repo/jforge/packages/example/package.py").write_text("# updated recipe\n")
     second = tmp_path / "second"
     manifest = publisher.build("r2", source, second)
     publisher.publish(manifest, second, github, github.verify)
-    assert all(github.payloads[k] == v for k, v in old_payloads.items())
-    assert publisher.asset_named(github.state, f"recipes-previous-{old_index['id']}.json")
+    archive = manifest["archive"]["url"].rsplit("/", 1)[1]
+    assert {asset["name"] for asset in github.state["assets"]} == {"recipes.json", archive}
     assert json.loads(github.download(publisher.asset_named(github.state, "recipes.json")))["version"] == "r2"
     upload = next(i for i, event in enumerate(github.events) if event.startswith("upload:recipes-index-r2"))
-    assert upload < github.events.index(f"rename:recipes-previous-{old_index['id']}.json")
+    switched = github.events.index(f"rename:recipes-previous-{old_index['id']}.json")
+    verified = max(i for i, event in enumerate(github.events) if event.startswith("verify:"))
+    removed = min(i for i, event in enumerate(github.events) if event.startswith("delete:"))
+    assert upload < switched < verified < removed
+    assert f"delete:recipes-previous-{old_index['id']}.json" in github.events
+    assert any(event.startswith("delete:jforge-spack-recipes-r1") for event in github.events)
 
 
 @pytest.mark.parametrize("failure", ["stage", "swap", "public"])
@@ -171,6 +180,8 @@ def test_failed_update_restores_previous_stable_index(source, tmp_path, failure)
     with pytest.raises(RuntimeError):
         publisher.publish(manifest, second, github, verify)
     assert github.download(publisher.asset_named(github.state, "recipes.json")) == old
+    assert not any(event.startswith("delete:") for event in github.events)
+    assert any(asset["name"].startswith("jforge-spack-recipes-r1") for asset in github.state["assets"])
 
 
 def test_reusing_revision_with_changed_content_is_rejected(source, tmp_path):
@@ -367,6 +378,31 @@ def test_failure_restores_both_previously_public_catalogs(source, build_source, 
     assert package_github.download(publisher.asset_named(package_github.state, "recipes.json")) == old_package_index
     assert build_github.download(publisher.asset_named(build_github.state, "builds.json")) == old_build_index
     assert not package_github.state["draft"] and not build_github.state["draft"]
+    assert not any(event.startswith("delete:") for event in package_github.events + build_github.events)
+
+
+def test_build_update_keeps_only_the_latest_recipe_files(source, build_source, tmp_path):
+    package_github, build_github = FakeGitHub(), FakeGitHub("builds")
+    first = tmp_path / "first"
+    verify = lambda url, expected: (build_github if "/builds/" in url else package_github).verify(url, expected)
+    publisher.publish_all([
+        ("recipes", publisher.build("r1", source, first / "recipes"), first / "recipes", package_github),
+        ("builds", publisher.build_projects("r1", build_source, first / "builds"), first / "builds", build_github),
+    ], verify)
+    second = tmp_path / "second"
+    (build_source / "scripts/accept.py").write_text("print('accepted again')\n")
+    projects = publisher.build_projects("r2", build_source, second / "builds")
+    publisher.publish_all([
+        ("recipes", publisher.build("r2", source, second / "recipes"), second / "recipes", package_github),
+        ("builds", projects, second / "builds", build_github),
+    ], verify)
+    row = projects["builds"][0]
+    expected = {"builds.json", row["url"].rsplit("/", 1)[1], row["files"][0]["url"].rsplit("/", 1)[1]}
+    assert {asset["name"] for asset in build_github.state["assets"]} == expected
+    assert not any("2026" in asset["name"] or asset["name"].startswith("builds-previous-")
+                   for asset in build_github.state["assets"])
+    assert any(event.startswith("delete:builds-previous-") for event in build_github.events)
+    assert any(event.startswith("delete:") and "r1" in event for event in build_github.events)
 
 
 def test_root_release_bundle_is_accepted_by_current_client(tmp_path, monkeypatch):

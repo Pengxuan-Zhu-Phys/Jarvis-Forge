@@ -626,11 +626,15 @@ def _candidate(home, op, roots, previous):
     return directory
 
 
-def _snapshot(home, envdir, op, label="snapshot", *, cache=None, overwrite=()):
+def _snapshot(home, envdir, op, label="snapshot", *, cache=None, overwrite=(),
+              omit_cached_build_deps=False):
     bridge = Path(__file__).with_name("spack_bridge.py")
-    args = (["installation-plan", cache, json.dumps(list(overwrite))]
-            if cache is not None else
-            ["installed" if label == "installed" else "snapshot"])
+    if cache is not None:
+        args = ["installation-plan", cache, json.dumps(list(overwrite))]
+        if omit_cached_build_deps:
+            args.append("omit-cached-build-deps")
+    else:
+        args = ["installed" if label == "installed" else "snapshot"]
     return _json(
         run(
             home,
@@ -655,6 +659,37 @@ def _name_only_layout(envdir):
     if not isinstance(layout, dict) or layout.get("projections") != {"all": "{name}"}:
         return None
     return layout
+
+
+def _pending_install_hashes(plan):
+    """Split a plan into binary installs and source builds.
+
+    Cached specs are installed from their binaries and must not pull the tools
+    that created those archives. Specs with no binary are built afterwards.
+    """
+    cached, source = [], []
+    for package in plan["packages"]:
+        if package.get("external") or package.get("installed"):
+            continue
+        digest = package["hash"]
+        if not isinstance(digest, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", digest):
+            raise ForgeError(f"Unexpected Spack package hash: {digest!r}")
+        (cached if package.get("cached") else source).append(digest)
+    return cached, source
+
+
+def _install_args(jobs, policy, hashes=()):
+    return [
+        "install",
+        "--only-concrete",
+        "--verbose",
+        "--show-log-on-error",
+        "-j",
+        str(jobs),
+        "--use-buildcache",
+        policy,
+        *[f"/{digest}" for digest in hashes],
+    ]
 
 
 def _validate_name_only_plan(plan, envdir):
@@ -957,16 +992,7 @@ def transact(
                 if cache != "never":
                     _cache_keys(home, op, envdir, progress)
 
-                args = [
-                    "install",
-                    "--only-concrete",
-                    "--verbose",
-                    "--show-log-on-error",
-                    "-j",
-                    str(jobs),
-                    "--use-buildcache",
-                    plan_cache,
-                ]
+                args = _install_args(jobs, plan_cache)
                 if action == "reinstall":
                     args += ["--overwrite", "-y", *[name_of(s) for s in translated]]
                 label = "install-cache" if cache_first else "install"
@@ -984,16 +1010,37 @@ def transact(
                         raise
                     if progress:
                         progress("Binary installation incomplete; validate remaining source dependencies")
-                    source_plan = _snapshot(home, envdir, op, "source-plan",
-                                            cache="auto", overwrite=overwrite)
+                    # Reinstall still asks Spack for build tools of the overwritten specs.
+                    # A normal cache miss installs remaining binaries first, then builds
+                    # only the specs that have no binary.
+                    source_plan = _snapshot(
+                        home, envdir, op, "source-plan", cache="auto", overwrite=overwrite,
+                        omit_cached_build_deps=not overwrite,
+                    )
                     write_json(op / "source-plan.json", {**source_plan, "cache_policy": "auto"})
                     _validate_name_only_plan(source_plan, envdir)
                     if show_plan is not None:
                         show_plan(source_plan["packages"], overwrite)
-                    source_args = list(args)
-                    source_args[source_args.index("--use-buildcache") + 1] = "auto"
-                    run(home, source_args, op, "install", envdir=envdir,
-                        timeout=timeout, progress=progress)
+                    if overwrite:
+                        source_args = list(args)
+                        source_args[source_args.index("--use-buildcache") + 1] = "auto"
+                        run(home, source_args, op, "install", envdir=envdir,
+                            timeout=timeout, progress=progress)
+                    else:
+                        cached_hashes, source_hashes = _pending_install_hashes(source_plan)
+                        if cached_hashes:
+                            if progress:
+                                progress(
+                                    f"Install {len(cached_hashes)} remaining "
+                                    "packages from the binary cache"
+                                )
+                            run(home, _install_args(jobs, "only", cached_hashes), op,
+                                "install-binaries", envdir=envdir, timeout=timeout, progress=progress)
+                        if source_hashes:
+                            if progress:
+                                progress(f"Build {len(source_hashes)} packages from source")
+                            run(home, _install_args(jobs, "auto", source_hashes), op,
+                                "install", envdir=envdir, timeout=timeout, progress=progress)
             final = _snapshot(home, envdir, op, "installed") if roots else plan
             missing = [
                 p["name"]

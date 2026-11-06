@@ -12,8 +12,67 @@ import re
 import sys
 
 
-def installation_specs(environment, roots, policy, overwrite):
-    """Ask the pinned Spack installer which dependencies this request needs."""
+def include_build_dependencies(policy, *, external=False, installed=False, cached=False, overwrite=False):
+    """Return whether installing this spec also requires its build dependencies.
+
+    Binary-only installs never do. A source install does, except for a spec that
+    is already installed and is not being overwritten. An automatic install
+    builds from source only when the spec is not installed and has no binary:
+    a cached spec is installed from that binary and does not need the tools
+    that created the archive.
+    """
+    if policy not in {"only", "never", "auto"}:
+        raise ValueError(policy)
+    if external or policy == "only":
+        return False
+    if overwrite:
+        return True
+    if installed:
+        return False
+    if policy == "never":
+        return True
+    return not cached
+
+
+def installation_specs(environment, roots, policy, overwrite, *, omit_cached_build_deps=False):
+    """Ask the pinned Spack installer which dependencies this request needs.
+
+    With ``omit_cached_build_deps``, a spec that has a binary does not contribute
+    its build dependencies. Spack's automatic policy still queues those tools for
+    every spec that is not installed yet, and a package-name store cannot hold
+    both copies. Forge installs the binaries first, then builds only the specs
+    that have no binary; this walk is that installation.
+    """
+    if omit_cached_build_deps:
+        import spack.binary_distribution as bd
+        import spack.deptypes as dt
+
+        bd.load_buildcache_index()
+        index = bd.BINARY_INDEX
+        overwrite_names = set(overwrite)
+        selected = {}
+
+        def visit(spec):
+            digest = spec.dag_hash()
+            if digest in selected:
+                return
+            selected[digest] = spec
+            depflag = dt.LINK | dt.RUN
+            if include_build_dependencies(
+                policy,
+                external=bool(spec.external),
+                installed=bool(spec.installed),
+                cached=digest in index,
+                overwrite=spec.name in overwrite_names,
+            ):
+                depflag |= dt.BUILD
+            for dep in spec.dependencies(deptype=depflag):
+                visit(dep)
+
+        for root in roots:
+            visit(root)
+        return selected.values()
+
     from spack.installer import BuildRequest
 
     overwrite_hashes = [
@@ -34,7 +93,7 @@ def installation_specs(environment, roots, policy, overwrite):
     return selected.values()
 
 
-def snapshot(runtime_only=False, policy=None, overwrite=()):
+def snapshot(runtime_only=False, policy=None, overwrite=(), omit_cached_build_deps=False):
     import spack.environment as ev
     import spack.traverse
     import spack.store
@@ -46,14 +105,25 @@ def snapshot(runtime_only=False, policy=None, overwrite=()):
     roots = list(environment.concrete_roots())
     root_hashes = {s.dag_hash() for s in roots}
     packages = []
+    binary_index = None
+    if omit_cached_build_deps:
+        import spack.binary_distribution as bd
+
+        bd.load_buildcache_index()
+        binary_index = bd.BINARY_INDEX
     # A binary installation may omit tools used only to build the archive.
     if policy is not None:
-        specs = installation_specs(environment, roots, policy, overwrite)
+        specs = installation_specs(
+            environment, roots, policy, overwrite, omit_cached_build_deps=omit_cached_build_deps
+        )
     else:
         specs = (spack.traverse.traverse_nodes(roots, deptype=("link", "run"))
                  if runtime_only else environment.all_specs())
     for spec in specs:
-        installed = bool(spec.external or spack.store.STORE.db.query_one(spec))
+        if omit_cached_build_deps:
+            installed = bool(spec.external or spec.installed)
+        else:
+            installed = bool(spec.external or spack.store.STORE.db.query_one(spec))
         prefix_matches = False
         if not spec.external and spack.store.STORE.layout.projections == {"all": "{name}"} and (installed or Path(spec.prefix).exists()):
             # Read and verify .spack/spec.json through Spack itself. Forge does
@@ -79,6 +149,8 @@ def snapshot(runtime_only=False, policy=None, overwrite=()):
                 "node": spec.node_dict_with_hashes(),
             }
         )
+        if binary_index is not None:
+            packages[-1]["cached"] = (not spec.external) and spec.dag_hash() in binary_index
     modifications = []
     if all(row["installed"] for row in packages):
         for op in uenv.environment_modifications_for_specs(*roots):
@@ -87,7 +159,10 @@ def snapshot(runtime_only=False, policy=None, overwrite=()):
                 if hasattr(op, field):
                     row[field] = getattr(op, field)
             modifications.append(row)
-    print(json.dumps({"packages": packages, "modifications": modifications}))
+    document = {"packages": packages, "modifications": modifications}
+    if omit_cached_build_deps:
+        document["cached_build_dependencies"] = "omit"
+    print(json.dumps(document))
 
 
 def render(path):
@@ -152,7 +227,13 @@ if __name__ == "__main__":
     if sys.argv[1] in {"snapshot", "installed"}:
         snapshot(runtime_only=sys.argv[1] == "installed")
     elif sys.argv[1] == "installation-plan":
-        snapshot(policy=sys.argv[2], overwrite=json.loads(sys.argv[3]))
+        if len(sys.argv) > 5 or (len(sys.argv) == 5 and sys.argv[4] != "omit-cached-build-deps"):
+            raise SystemExit("Unknown installation-plan option")
+        snapshot(
+            policy=sys.argv[2],
+            overwrite=json.loads(sys.argv[3]),
+            omit_cached_build_deps=len(sys.argv) == 5,
+        )
     elif sys.argv[1] == "tree":
         dependency_tree()
     elif sys.argv[1] == "render":

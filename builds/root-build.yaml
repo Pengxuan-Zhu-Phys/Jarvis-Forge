@@ -19,30 +19,8 @@ build:
     options:
       CMAKE_CXX_STANDARD: 17
       OPENSSL_ROOT_DIR: "${packages.openssl.prefix}"  # Discover SSL/crypto from the same installation.
-      # `all` also enables components that download undeclared sources when they
-      # are missing: XRootD, VDT, Clad, and RooFit MultiProcess (ZeroMQ).
-      fail-on-missing: true
-      arrow: true          # default OFF; required by acceptance
-      mathmore: true       # default OFF; requires the declared GSL
-      pythia8: true        # default OFF; required by acceptance
-      vecgeom: true        # default OFF; required by acceptance
-      fftw3: true          # default OFF; the declared FFTW package
-      gviz: true           # default OFF; the declared Graphviz package
-      # These copies ship in the ROOT tarball. fail-on-missing rejects that
-      # fallback unless the builtin option is on. None of them need a download.
-      builtin_ftgl: true
-      builtin_xxhash: true
-      builtin_civetweb: true
-      xrootd: false        # default ON; otherwise configure downloads builtin XRootD
-      vdt: false           # default ON; otherwise configure downloads builtin VDT
-      clad: false          # default ON; otherwise configure downloads Clad
-      cefweb: false
-      roofit_multiprocess: false
-      unuran: false
-      fortran: false
-      tmva-pymva: false
-      tmva-rmva: false
-      shadowpw: false
+      # Acceptance is an -Dall=ON build. These options need a site service or a GPU.
+      all: true
       fcgi: false
       dcache: false
       r: false
@@ -51,7 +29,7 @@ build:
       tmva-gpu: false
       tmva-cudnn: false
     # Package names resolve to this run's Spack prefixes; no machine paths are hard-coded.
-    # Includes reach CMake discovery and the compilers used by nested builds.
+    # Includes reach CMake discovery and the compilers used by nested builds, including bundled components enabled by -Dall=ON.
     includes:
       - libbsd                         # include/bsd/string.h
       - mesa-glu                       # include/GL/glu.h
@@ -66,6 +44,7 @@ build:
   environment: bin/thisroot.sh
   cmake_dir: cmake
   required_files: [bin/root-config, bin/thisroot.sh, lib/libCore.so, cmake/ROOTConfig.cmake]
+  # root-config --features must report this set for the -Dall=ON build.
   features: [pyroot, roofit, opengl, mathmore, arrow, davix, vecgeom, pythia8]
 checks:
   before:

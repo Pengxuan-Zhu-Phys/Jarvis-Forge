@@ -32,24 +32,26 @@ def update(ctx: typer.Context, source: str = typer.Option(catalog.INDEX_URL, "--
 def show(ctx: typer.Context, build: str = typer.Argument(..., metavar="<build>"),
          expanded: bool = typer.Option(False, "--expanded", help="Show the effective execution card including defaults.")):
     """Show one local or cached build without executing it."""
-    from .cli import emit
+    from .cli import emit, _console
+    from .presentation import show_build
+    from .storage import digest
     source = catalog.resolve(ctx.obj.home, build)
     if not expanded:
         from .suite import UniqueLoader
-        from .storage import digest
         value = yaml.load(source.read_text(), Loader=UniqueLoader)
         if not isinstance(value, dict):
             raise ForgeError("Expected a build card mapping.")
         if ctx.obj.as_json:
             emit(ctx, "build show", path=str(source), sha256=digest(source), build=value)
         else:
-            typer.echo(yaml.safe_dump(value, sort_keys=False), nl=False)
+            show_build(_console(), value, path=source, sha256=digest(source))
         return
     value = builds.load(source, home=ctx.obj.home)
     if ctx.obj.as_json:
         emit(ctx, "build show", path=value["path"], sha256=value["sha256"], build=value["config"])
     else:
-        typer.echo(yaml.safe_dump(value["config"], sort_keys=False), nl=False)
+        show_build(_console(), value["raw_config"], path=value["path"], sha256=value["sha256"],
+                   ordered=value["ordered"])
 
 
 @app.command()
@@ -116,7 +118,8 @@ def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directo
         else:
             build = str(catalog.acquire(ctx.obj.home, build))
     result = builds.execute(ctx.obj.home, build, parameters=parameters(setting), environment_name=env,
-                               jobs=jobs, resume=resume, progress=lambda message: line(_console(stderr=True), message))
+                               jobs=jobs, resume=resume, verbose=ctx.obj.verbose, as_json=ctx.obj.as_json,
+                               progress=lambda message: line(_console(stderr=True), message))
     emit(ctx, "build resume" if resume else "build run", ok=result["status"] == "passed", **builds.summary(result))
     raise typer.Exit(0 if result["status"] == "passed" else 130 if result["status"] == "interrupted" else 1)
 

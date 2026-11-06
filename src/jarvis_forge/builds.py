@@ -263,7 +263,32 @@ def find_artifact(home, request, context):
     return matches[0] if matches else None
 
 
-def execute(home, reference=None, *, parameters=None, environment_name=None, jobs=1, resume=None, progress=None):
+class _AptInstallProgress:
+    """Drive one build package step with the apt install display."""
+
+    def __init__(self, record, display):
+        self.record = record
+        self.display = display
+        self.verbose = display.verbose
+
+    def __call__(self, message):
+        self.record(message, component="APT", echo=False)
+        self.display(message)
+
+    def installation_plan(self, packages, overwrite=()):
+        self.display.installation_plan(packages, overwrite)
+
+    def output(self, stream, data):
+        self.display.output(stream, data)
+
+    def output_finished(self):
+        self.display.output_finished()
+
+    def command_failure(self, number, code, stderr):
+        return self.display.command_failure(number, code, stderr)
+
+
+def execute(home, reference=None, *, parameters=None, environment_name=None, jobs=1, resume=None, progress=None, verbose=False, as_json=False):
     home.require_initialized()
     if jobs < 1:
         raise ForgeError("Jobs must be positive.")
@@ -294,10 +319,13 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
         from .build_logging import ProcessLog
         process_log = ProcessLog(attempts / "build.log", "Jarvis-Forge.Build", progress)
 
-        def event(message, component="Build"):
+        def event(message, component="Build", *, echo=True):
             with (attempts / "events.jsonl").open("a") as out:
                 out.write(json.dumps({"at": now(), "message": message}) + "\n")
-            process_log(message, module="Jarvis-Forge." + component)
+            if echo:
+                process_log(message, module="Jarvis-Forge." + component)
+            else:
+                process_log.write(message, module="Jarvis-Forge." + component)
 
         def run_node(key, policy="reuse-or-build", requirement=None):
             if key in result["nodes"]:
@@ -462,7 +490,8 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     step_dir.mkdir()
                     try:
                         record = _step(home, step, options, work, step_dir, environment, observed,
-                                       context, records, dependencies, jobs, event, row["steps"].get(step_id), workspace=workspace)
+                                       context, records, dependencies, jobs, event, row["steps"].get(step_id),
+                                       workspace=workspace, verbose=verbose, as_json=as_json)
                         records[step_id] = record
                         row["steps"][step_id] = record
                         if record.get("prefix"):
@@ -528,7 +557,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
         return result
 
 
-def _step(home, step, options, work, logs, environment, observed, context, records, dependencies, jobs, progress, previous, *, workspace=None):
+def _step(home, step, options, work, logs, environment, observed, context, records, dependencies, jobs, progress, previous, *, workspace=None, verbose=False, as_json=False):
     used = []
     for name in options.get("dependencies", []):
         used.append(dependencies[name[9:]] if name.startswith("requires.") else records[name])
@@ -578,12 +607,21 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
             return previous
         from . import spack_backend as backend
         from .apt_profiles import ensure_active
+        from .apt_progress import AptProgress
+        from .cli import _console
         # Package dependencies belong in the apt environment. With no apt switch
         # that is spack-default, the same store and compilers as `jforge apt`.
-        with process_environment(environment):
-            target = ensure_active(home, progress=progress)
-            installed = backend.transact(target, "install", options["specs"], jobs=jobs,
-                                         timeout=step.get("timeout_seconds", 86400), progress=progress)
+        # The screen uses the same phase and package display as `jforge apt install`.
+        display = AptProgress(_console(stderr=True), verbose=verbose, as_json=as_json)
+        reporter = _AptInstallProgress(progress, display)
+        try:
+            with process_environment(environment):
+                target = ensure_active(home, progress=reporter)
+                installed = backend.transact(target, "install", options["specs"], jobs=jobs,
+                                             timeout=step.get("timeout_seconds", 86400), progress=reporter)
+            display.close(success=True)
+        finally:
+            display.close()
         lock = Path(installed["lockfile"])
         activation = installed["activation"]
         adapter = Path(activation).parent / "spack-environment.sh"
