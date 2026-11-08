@@ -10,6 +10,7 @@ Options
   --python <version>       Select a CPython patch version (default: 3.13.15).
   --install-build-deps    Install system build dependencies if Python needs
                           building (Homebrew, apt or dnf; apt/dnf may use sudo).
+  --no-shell-config       Leave startup files alone and print a source command.
   -h, --help              Show this message and exit.
 EOF
 }
@@ -26,6 +27,7 @@ usage_error() {
 
 python_version=3.13.15
 install_deps=false
+configure_startup=true
 while (( $# )); do
     case "$1" in
         --python)
@@ -34,6 +36,7 @@ while (( $# )); do
             shift 2
             ;;
         --install-build-deps) install_deps=true; shift ;;
+        --no-shell-config) configure_startup=false; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage_error "Unknown option: $1" ;;
     esac
@@ -43,10 +46,12 @@ done
 
 login_shell=${SHELL:-/bin/bash}
 login_shell=${login_shell##*/}
-case "$login_shell" in
-    zsh|bash) ;;
-    *) usage_error "Unsupported login shell: $login_shell. Run with SHELL=/bin/bash or SHELL=/bin/zsh." ;;
-esac
+if "$configure_startup"; then
+    case "$login_shell" in
+        zsh|bash) ;;
+        *) usage_error "Unsupported login shell: $login_shell. Use --no-shell-config for manual setup." ;;
+    esac
+fi
 case "$(uname -s)" in
     Darwin|Linux) ;;
     *) fail 'This installer supports macOS and Linux, including WSL.' ;;
@@ -123,9 +128,28 @@ if [[ -e "$launcher" && ! -L "$launcher" ]]; then
 fi
 ln -sfn "$venv/bin/jforge" "$launcher"
 
+activation_file="$state_dir/activate.sh"
+[[ ! -d "$activation_file" ]] || fail "Move the existing directory at $activation_file before retrying."
+activation_tmp=$(mktemp "$state_dir/.activate.XXXXXX")
+cat > "$activation_tmp" <<'EOF'
+# Add the Jforge launcher to PATH while keeping the current Python selection.
+case ":${PATH-}:" in
+    ":$HOME/.jarvis-pyenv/jforge-bootstrap/bin:"*) ;;
+    *) export PATH="$HOME/.jarvis-pyenv/jforge-bootstrap/bin${PATH:+:$PATH}" ;;
+esac
+EOF
+mv -f "$activation_tmp" "$activation_file"
+
 # Initialize the default only when pyenv has no saved global selection.
 if [[ ! -e "$PYENV_ROOT/version" && ! -L "$PYENV_ROOT/version" ]]; then
     "$pyenv_bin" global "$python_version"
+fi
+
+if ! "$configure_startup"; then
+    printf '\nAdd this line to ~/.bashrc (or ~/.zshrc for Zsh)\n'
+    printf 'source "%s"\n' "\$HOME/.jarvis-pyenv/jforge-bootstrap/activate.sh"
+    printf 'Then open a new terminal and run: jforge --help\n'
+    exit 0
 fi
 
 # The generated startup block expands its variables in the user's shell.
@@ -153,8 +177,7 @@ configure_shell() {
         printf '            ;;\n'
         printf '    esac\n'
         printf 'fi\n'
-        printf 'case ":$PATH:" in *:%q:*) ;; *) export PATH=%q:"$PATH" ;; esac\n' \
-            "$state_dir/bin" "$state_dir/bin"
+        printf 'if [ -r %q ]; then . %q; fi\n' "$activation_file" "$activation_file"
         if "$interactive_only"; then
             printf ';; esac\n'
         fi
