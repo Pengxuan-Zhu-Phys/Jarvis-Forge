@@ -12,7 +12,7 @@ import yaml
 
 from jarvis_forge.cli import main
 from jarvis_forge.comparison import compare
-from jarvis_forge.environment_registry import add, list_environments, set_python, show
+from jarvis_forge.environment_registry import add, list_environments, show
 from jarvis_forge.runner import execute
 from jarvis_forge.storage import ForgeError, ForgeHome, write_json
 from jarvis_forge.suite import load_suite, make_plan
@@ -70,13 +70,8 @@ def test_managed_copy_survives_source_removal_and_revisions_are_retained(home, s
     assert show(home, "cbs", strict=True)["revision"] == second["revision"]
 
 
-def test_explicit_python_is_shared_and_target_needs_no_forge_install(home, script, target, monkeypatch):
-    add(home, "cbs", script)
-    before = dict(os.environ)
-    selected = set_python(home, "cbs", executable=str(target / "bin/python"))
-    assert selected["python"]["observed"]["prefix"] == str(target)
-    assert selected["python"]["executable"] == str(target / "bin/python")
-    assert os.environ == before
+def test_registry_is_shared_and_target_needs_no_forge_install(home, script, target):
+    selected = add(home, "cbs", script)
     env = {**os.environ, "JFORGE_HOME": str(home.root),
            "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     code = "import json,sys; from jarvis_forge.storage import ForgeHome; from jarvis_forge.environment_registry import list_environments; print(json.dumps({'prefix':sys.prefix,'home':str(ForgeHome.resolve().root),'envs':list_environments(ForgeHome.resolve())}))"
@@ -89,10 +84,9 @@ def test_explicit_python_is_shared_and_target_needs_no_forge_install(home, scrip
 
 
 def test_named_run_and_doctor_use_selected_target_and_keep_controller(home, script, target, tmp_path, capsys):
-    add(home, "cbs", script)
-    assert main(["env", "set-python", "cbs", "--python", str(target / "bin/python"),
-                 "--home", str(home.root), "--json"]) == 0
-    selected = json.loads(capsys.readouterr().out)["environment"]
+    inherited = script.read_text()
+    script.write_text(inherited + "export PATH=" + shlex.quote(str(target / "bin")) + ':"$PATH"\n')
+    selected = add(home, "cbs", script)
     assert main(["doctor", "--env", "cbs", "--home", str(home.root), "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["python"] == sys.executable
@@ -107,9 +101,11 @@ def test_named_run_and_doctor_use_selected_target_and_keep_controller(home, scri
     assert first["status"] == "passed"
     archive = Path(first["path"]) / "environment-profile"
     assert (archive / "source.sh").read_bytes() == script.read_bytes()
-    assert (archive / "bin/python").is_file() and (archive / "manifest.json").is_file()
+    assert not (archive / "bin").exists()
+    assert (archive / "manifest.json").is_file()
     assert first["steps"][0]["environment"]["pythons"]["python"]["prefix"] == str(target)
-    set_python(home, "cbs", inherit=True)
+    script.write_text(inherited)
+    add(home, "cbs", script, replace=True)
     second = execute(home, suite)
     assert second["status"] == "passed"
     assert compare(home, first["run_id"], second["run_id"])["environment_changed"]
@@ -120,9 +116,8 @@ def test_named_run_and_doctor_use_selected_target_and_keep_controller(home, scri
     assert pinned["environment_profile"]["revision"] == selected["revision"]
 
 
-def test_command_line_env_selection_overrides_suite_shell(home, script, target, tmp_path, capsys):
-    add(home, "cbs", script)
-    selected = set_python(home, "cbs", executable=str(target / "bin/python"))
+def test_command_line_env_selection_overrides_suite_shell(home, script, tmp_path, capsys):
+    selected = add(home, "cbs", script)
     suite = tmp_path / "suite.yaml"
     suite.write_text(yaml.safe_dump({"schema_version": 1, "id": "override",
                                     "environment": {"shell": "not-used.sh"},
@@ -135,40 +130,22 @@ def test_command_line_env_selection_overrides_suite_shell(home, script, target, 
     assert json.loads(capsys.readouterr().out)["status"] == "passed"
 
 
-def test_explicit_pyenv_name_is_used_without_global_switch(home, script, target, tmp_path, monkeypatch):
-    add(home, "cbs", script)
-    root = tmp_path / "custom pyenv"
-    (root / "bin").mkdir(parents=True)
-    program = root / "bin/pyenv"
-    program.write_text("#!/bin/sh\n"
-                       'if [ "$PYENV_VERSION" != cbs ]; then echo missing-environment >&2; exit 7; fi\n'
-                       'case "$1" in\nwhich) printf "%s\\n" ' + shlex.quote(str(target / "bin/python")) + ';;\n'
-                       'exec) shift; shift; exec ' + shlex.quote(str(target / "bin/python")) + ' "$@";;\n'
-                       '--version) echo pyenv-test;;\nversion) echo cbs;;\nesac\n')
-    program.chmod(0o755)
-    selected = set_python(home, "cbs", pyenv="cbs", pyenv_root=str(root))
-    assert selected["python"]["mode"] == "pyenv"
-    before = dict(os.environ)
-    result = subprocess.check_output(["bash", "--noprofile", "--norc", "-c",
-                                      "source " + shlex.quote(selected["activation"]) + "; python -c 'import sys; print(sys.prefix)'"], text=True)
-    assert result.strip() == str(target)
-    assert os.environ == before
-    with pytest.raises(ForgeError, match="unavailable"):
-        set_python(home, "cbs", pyenv="missing", pyenv_root=str(root))
-    assert show(home, "cbs")["revision"] == selected["revision"]
-    # A Homebrew-style program can live separately from PYENV_ROOT.
-    separate_root = tmp_path / "versions-only-root"
-    separate_root.mkdir()
-    monkeypatch.setenv("PATH", str(root / "bin") + os.pathsep + os.environ["PATH"])
-    split = set_python(home, "cbs", pyenv="cbs", pyenv_root=str(separate_root))
-    assert split["python"]["program"] == str(program)
-    assert split["python"]["root"] == str(separate_root)
-
-
-def test_failed_binding_or_invalid_syntax_preserves_working_revision(home, script, tmp_path):
+def test_retired_python_override_requires_a_new_script_revision(home, script):
     first = add(home, "cbs", script)
-    with pytest.raises(ForgeError, match="not available"):
-        set_python(home, "cbs", executable=str(tmp_path / "missing-python"))
+    manifest = Path(first["path"]) / "manifest.json"
+    old = json.loads(manifest.read_text())
+    write_json(manifest, {**old, "python": {"mode": "pyenv", "selection": "cbs"}})
+    assert show(home, "cbs")["status"] == "legacy_python"
+    with pytest.raises(ForgeError, match="retired Python override"):
+        show(home, "cbs", strict=True)
+    second = add(home, "cbs", script, replace=True)
+    assert second["parent_revision"] == first["revision"]
+    assert second["status"] == "ready"
+    assert "python" not in second
+
+
+def test_invalid_syntax_preserves_working_revision(home, script):
+    first = add(home, "cbs", script)
     script.write_text("if then\n")
     with pytest.raises(ForgeError, match="Invalid Bash"):
         add(home, "cbs", script, replace=True)
@@ -232,7 +209,7 @@ def test_registry_does_not_write_through_symlinked_environment_directory(home, s
     assert not list(outside.iterdir())
 
 
-@pytest.mark.parametrize("command", [["env"], ["env", "add"], ["env", "list"], ["env", "show"], ["env", "set-python"]])
+@pytest.mark.parametrize("command", [["env"], ["env", "add"], ["env", "list"], ["env", "show"]])
 def test_environment_cli_help(command, capsys):
     assert main([*command, "-h"]) == 0
     assert "Usage:" in capsys.readouterr().out

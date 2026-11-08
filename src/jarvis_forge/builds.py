@@ -733,6 +733,18 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
     build.mkdir(parents=True, exist_ok=True)
     configured = json.loads(json.dumps(options))
     cache = configured.setdefault("cache", {})
+    python_artifacts = {}
+    for dependency in used:
+        python = dependency.get("report", {}).get("python", {})
+        if (python.get("development") and python["path"] == observed.get("python", {}).get("path")
+                and cache.get("Python3_EXECUTABLE", {}).get("value") == python["path"]):
+            for variable, kind, path in (
+                ("Python3_INCLUDE_DIR", "PATH", str(Path(python["header"]).parent)),
+                ("Python3_LIBRARY", "FILEPATH", python["library"]),
+            ):
+                if variable not in cache:
+                    cache[variable] = {"type": kind, "value": path}
+                    python_artifacts[variable] = path
     for key, value in observed.items():
         variable = {"CC": "CMAKE_C_COMPILER", "CXX": "CMAKE_CXX_COMPILER", "FC": "CMAKE_Fortran_COMPILER", "python": "Python3_EXECUTABLE"}.get(key)
         if variable is None:
@@ -773,6 +785,12 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
             for selected, variable in (("CC", "CMAKE_C_COMPILER"), ("CXX", "CMAKE_CXX_COMPILER"), ("FC", "CMAKE_Fortran_COMPILER")):
                 if selected in observed and actual.get(variable) and Path(actual[variable]).resolve() != Path(observed[selected]["path"]).resolve():
                     raise ForgeError(f"CMake selected a different {selected}; select it in the environment instead.", code=1)
+            for variable, resolved in (("Python3_INCLUDE_DIR", "_Python3_INCLUDE_DIR"),
+                                       ("Python3_LIBRARY", "_Python3_LIBRARY_RELEASE")):
+                if variable in python_artifacts:
+                    path = actual.get(resolved) or actual.get(variable)
+                    if path and Path(path).resolve() != Path(python_artifacts[variable]).resolve():
+                        raise ForgeError(f"CMake selected {path} for {variable}, expected {python_artifacts[variable]}.", code=1)
             write_json(logs / "cmake-cache.json", actual)
             shutil.copyfile(build / "CMakeCache.txt", logs / "CMakeCache.txt")
             write_json(marker, {"fingerprint": requested})

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.6 — 2026-11-09
+
+### Changed
+
+- Select Python with pyenv or your shell before running Forge. Named environments now register shell scripts only. The `env set-python` command and `apt switch --python` option have been removed. Re-register scripts with `env add --replace` to retire a saved Python override.
+- New Spack profiles use the active Python as an external dependency. Forge rejects installation plans that need a different Python or a Spack-managed virtual environment. Use a fresh apt profile if an existing lock depends on either.
+- The ROOT recipe uses the interpreter, headers and library verified in its Python preflight.
+
 ## 1.1.5 — 2026-11-06
 
 ### Changed

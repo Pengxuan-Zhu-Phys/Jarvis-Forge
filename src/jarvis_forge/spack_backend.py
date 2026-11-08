@@ -20,6 +20,7 @@ from .storage import ForgeError, digest, now, read_json, write_json
 
 ENGINE_VERSION = "1.2.2"
 INSTALL_PROJECTION = "{name}"
+PYTHON_PACKAGES = ("python", "python-venv")
 ENGINE = {
     "url": "https://github.com/spack/spack/releases/download/v1.2.2/spack-1.2.2.tar.gz",
     "sha256": "ed39d08bc295571cdec23a4566cbd8aa7ef4ebd582013d43874471a2b1257bf5",
@@ -299,6 +300,39 @@ def _json(text, label):
         ) from exc
 
 
+def _python_externals(python):
+    return {
+        "python": {
+            "externals": [{"spec": "python@" + python["version"],
+                           "prefix": python.get("base_prefix", python["prefix"])}],
+            "buildable": False,
+        },
+        # Spack's Python extension recipes require this node. They can use
+        # the existing interpreter without creating a second environment.
+        "python-venv": {
+            "externals": [{"spec": "python-venv@1.0", "prefix": python["prefix"]}],
+            "buildable": False,
+        },
+    }
+
+
+def _check_python_location(home, selected):
+    config = read_json(home.root / "config.json")
+    forge_home = Path(config.get("apt_base_home", home.root)).resolve()
+    prefixes = (selected["prefix"], selected.get("base_prefix", selected["prefix"]))
+    if any(Path(prefix).resolve().is_relative_to(forge_home) for prefix in prefixes):
+        raise ForgeError("The selected Python is inside the Forge data directory.",
+                         hint="Select an external Python with pyenv and initialize a fresh apt profile.")
+
+
+def _python_reuse(*, buildcache=True):
+    exclude = [*PYTHON_PACKAGES, *(f"^{name}" for name in PYTHON_PACKAGES)]
+    sources = [{"type": "local", "exclude": exclude}, {"type": "external"}]
+    if buildcache:
+        sources.append({"type": "buildcache", "exclude": exclude})
+    return {"roots": True, "from": sources}
+
+
 def _config(home, repo, python):
     directory = root(home) / "config"
     directory.mkdir(parents=True, exist_ok=True)
@@ -311,14 +345,7 @@ def _config(home, repo, python):
         },
         "repos": {"builtin": str(repo)},
         "bootstrap": {"root": str(root(home) / "bootstrap")},
-        "packages": {
-            "python": {
-                "externals": [
-                    {"spec": "python@" + python["version"], "prefix": python["prefix"]}
-                ],
-                "buildable": False,
-            }
-        },
+        "packages": _python_externals(python),
     }
     for name, content in data.items():
         (directory / (name + ".yaml")).write_text(
@@ -366,12 +393,12 @@ def _unpack(home, source, directory, op, label):
             shutil.rmtree(temporary)
 
 
-def bootstrap(home, *, python=None, progress=None, extensions=None):
+def bootstrap(home, *, progress=None, extensions=None):
     from .package_operations import locked, operation
 
     with (
         locked(home),
-        operation(home, "spack-bootstrap", {"python": python}) as (op, result),
+        operation(home, "spack-bootstrap", {}) as (op, result),
     ):
         current(home)  # Refuse to overwrite archived source state.
         if not configured(home) and any(
@@ -382,7 +409,7 @@ def bootstrap(home, *, python=None, progress=None, extensions=None):
                 "Source package data is archived; select a Spack profile.",
                 hint="jforge apt switch spack",
             )
-        if configured(home) and python is None and current(home).get("environment"):
+        if configured(home) and current(home).get("environment"):
             value = settings(home)
             _executable(home)
             result.update(
@@ -396,13 +423,15 @@ def bootstrap(home, *, python=None, progress=None, extensions=None):
             return result
         if not shutil.which("bash"):
             raise ForgeError("Spack backend requires Bash on PATH.")
-        executable = python or sys.executable
+        previous = settings(home) if configured(home) else None
+        executable = (previous["python"]["executable"] if previous
+                      else shutil.which("python") or shutil.which("python3") or sys.executable)
         try:
             probe = subprocess.run(
                 [
                     executable,
                     "-c",
-                    'import json,sys;print(json.dumps({"executable":sys.executable,"version":sys.version.split()[0],"prefix":sys.prefix}))',
+                    'import json,sys;print(json.dumps({"executable":sys.executable,"version":sys.version.split()[0],"prefix":sys.prefix,"base_prefix":sys.base_prefix}))',
                 ],
                 capture_output=True,
                 text=True,
@@ -414,15 +443,13 @@ def bootstrap(home, *, python=None, progress=None, extensions=None):
             selected = _json(probe.stdout, "Python selection")
         except (OSError, subprocess.SubprocessError) as exc:
             raise ForgeError(f"Cannot use selected Python: {executable}") from exc
+        _check_python_location(home, selected)
         base = root(home)
         base.mkdir(parents=True, exist_ok=True)
         engine = base / "engine" / ENGINE_VERSION
         repo = base / "repositories" / REPO_COMMIT
         _unpack(home, ENGINE, engine, op, "engine-download")
         _unpack(home, REPOSITORY, repo, op, "repository-download")
-        previous = settings(home) if configured(home) else None
-        if previous and python is None:
-            selected = previous["python"]
         if previous:
             repo_path = Path(previous["repository"])
             pin = previous["repository_archive"]
@@ -609,7 +636,9 @@ def _gcc_runtime_target(home):
 def _candidate(home, op, roots, previous):
     from .recipe_releases import ensure
 
-    if settings(home).get("extension_recipes", True):
+    profile = settings(home)
+    _check_python_location(home, profile["python"])
+    if profile.get("extension_recipes", True):
         ensure(home, op)
     directory = root(home) / "environments" / op.name
     directory.mkdir(parents=True)
@@ -617,7 +646,7 @@ def _candidate(home, op, roots, previous):
         "spack": {
             "specs": roots,
             "view": False,
-            "concretizer": {"unify": True, "reuse": True},
+            "concretizer": {"unify": True, "reuse": _python_reuse()},
         }
     }
     target = _gcc_runtime_target(home)
@@ -625,6 +654,10 @@ def _candidate(home, op, roots, previous):
         document["spack"]["packages"] = {"gcc-runtime": {"require": [f"target={target}"]}}
     (directory / "spack.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
     shutil.copytree(root(home) / "config", directory / ".jforge-config")
+    package_config = directory / ".jforge-config/packages.yaml"
+    config = yaml.safe_load(package_config.read_text()) if package_config.is_file() else {}
+    config.setdefault("packages", {}).update(_python_externals(profile["python"]))
+    package_config.write_text(yaml.safe_dump(config, sort_keys=False))
     if previous and (Path(previous) / "spack.lock").is_file():
         shutil.copy2(Path(previous) / "spack.lock", directory / "spack.lock")
     return directory
@@ -720,9 +753,7 @@ def _pin_installed_gcc_runtime(plan, envdir):
     # Reused binary DAGs can bring their already-fixed runtime dependencies.
     # The retry resolves against local specs. Installation can still use a
     # cached binary that matches the resulting concrete hash.
-    document["spack"]["concretizer"]["reuse"] = {
-        "roots": True, "from": [{"type": "local"}, {"type": "external"}],
-    }
+    document["spack"]["concretizer"]["reuse"] = _python_reuse(buildcache=False)
     manifest.write_text(yaml.safe_dump(document, sort_keys=False))
     return installed
 
@@ -785,12 +816,38 @@ def _validate_name_only_plan(plan, envdir):
                              code=1, hint="jforge apt switch spack --name <new-name>; then install the requested packages there.")
 
 
+def _validate_external_python(home, packages):
+    for package in packages:
+        name = package["name"]
+        if name not in PYTHON_PACKAGES:
+            continue
+        selected = settings(home)["python"]
+        prefix = selected.get("base_prefix", selected["prefix"]) if name == "python" else selected["prefix"]
+        if not package["external"] or Path(package["prefix"]).resolve() != Path(prefix).resolve():
+            raise ForgeError(
+                f"The Spack plan uses {name} from {package['prefix']}. Forge requires the external Python at {prefix}.",
+                code=1,
+                hint="Select Python with pyenv and use a fresh apt profile if the current profile has a locked Python dependency.",
+            )
+
+
 def _publish(home, op, envdir, roots, snapshot):
     from .shell_activation import activation
     from .package_operations import key_for
 
+    _validate_external_python(home, snapshot["packages"])
+    python_prefixes = {Path(row["prefix"]) for row in snapshot["packages"] if row["name"] in PYTHON_PACKAGES}
+    modifications = []
+    for modification in snapshot["modifications"]:
+        if python_prefixes and modification["type"] in {"PrependPath", "AppendPath"}:
+            path = Path(modification["value"])
+            if modification["name"] == "PATH" and path.parent in python_prefixes and path.name in {"bin", "Scripts"}:
+                continue
+            if modification["name"] == "PYTHONPATH" and any(path.is_relative_to(prefix) for prefix in python_prefixes):
+                continue
+        modifications.append(modification)
+    snapshot = {**snapshot, "modifications": modifications}
     # Header-only consumers may inspect these legacy hints before find_package.
-    snapshot = {**snapshot, "modifications": list(snapshot["modifications"])}
     for package in snapshot["packages"]:
         if package["name"] == "eigen":
             prefix = Path(package["prefix"])
@@ -950,6 +1007,8 @@ def transact(
     if jobs < 1 or not math.isfinite(timeout) or timeout <= 0:
         raise ForgeError("Jobs and timeout must be positive.")
     translated = list(dict.fromkeys(normalize(s) for s in specs))
+    if action != "remove" and any(name_of(s) in PYTHON_PACKAGES for s in translated):
+        raise ForgeError("Select Python and virtual environments with pyenv before running Forge.")
     before = current(home)
     roots = _requested_roots(before, action, translated)
     if dry_run:
@@ -998,6 +1057,7 @@ def transact(
         def validate_plan(plan, label, policy, *, omit_cached_build_deps=False):
             nonlocal runtime_retried
             write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
+            _validate_external_python(home, plan["packages"])
             try:
                 _validate_name_only_plan(plan, envdir)
             except ForgeError:
@@ -1017,6 +1077,7 @@ def transact(
                 plan = resolve_plan(policy, suffix="-runtime-retry",
                                     omit_cached_build_deps=omit_cached_build_deps)
                 write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
+                _validate_external_python(home, plan["packages"])
                 _validate_name_only_plan(plan, envdir)
                 if any(p["name"] == "gcc-runtime" and not p["external"] and p["hash"] != installed
                        for p in plan["packages"]):

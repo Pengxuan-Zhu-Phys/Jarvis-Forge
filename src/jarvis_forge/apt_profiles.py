@@ -125,7 +125,7 @@ def ensure_active(base, *, progress=None):
 
 
 def switch(
-    base, origin="spack", *, name="default", python=None, direct=False, progress=None
+    base, origin="spack", *, name="default", direct=False, progress=None
 ):
     from . import spack_backend as backend
 
@@ -139,7 +139,7 @@ def switch(
             raise ForgeError(
                 "--direct selects an existing root Spack environment and cannot use --name."
             )
-        prepared = backend.bootstrap(base, python=python, progress=progress)
+        prepared = backend.bootstrap(base, progress=progress)
         with (
             locked(base),
             operation(base, "switch", {"profile": "direct", "backend": "spack"}) as (
@@ -147,6 +147,7 @@ def switch(
                 result,
             ),
         ):
+            activation = environment_path(base)
             write_json(
                 _inside(base, base.root / "apt/selection.json"),
                 {"schema_version": 1, "id": "direct", "location": "root"},
@@ -158,7 +159,7 @@ def switch(
                 apt_home=str(base.root),
                 user_home=str(base.root),
                 packages=str(backend.store_root(base)),
-                activation=environment_path(base),
+                activation=activation,
                 state_committed=True,
             )
             return result
@@ -176,8 +177,9 @@ def switch(
         config["apt_base_home"] = str(base.root)
         write_json(target.root / "config.json", config)
         result["bootstrap"] = backend.bootstrap(
-            target, python=python, progress=progress
+            target, progress=progress
         )
+        activation = environment_path(target)
         write_json(
             _inside(base, base.root / "apt/selection.json"),
             {"schema_version": 1, "id": profile_id},
@@ -188,7 +190,7 @@ def switch(
             apt_home=str(target.root),
             user_home=str(base.root),
             packages=str(backend.store_root(target)),
-            activation=environment_path(target),
+            activation=activation,
             state_committed=True,
         )
         return result

@@ -2,7 +2,7 @@
 
 Jarvis-Forge is an independent Python package for user-space software environments and command-based acceptance workflows on scientific workstations and HPC systems. Its CLI is `jforge`.
 
-Forge runs local command suites and preserves their evidence. Its `jforge apt` command delegates package recipes, dependency resolution, binary-cache reuse and builds to a pinned, user-local Spack installation. Spack is the only package backend; old source installations remain queryable as archived records. Named environments keep private, versioned shell copies and explicit target Python selections in one shared user directory. Managed services, Slurm submission, scientific comparison policies, and the `Jarvis forge` forwarding command are planned extensions.
+Forge runs local command suites and preserves their evidence. Its `jforge apt` command delegates package recipes, dependency resolution, binary-cache reuse and builds to a pinned, user-local Spack installation. Spack is the only package backend; old source installations remain queryable as archived records. Named environments keep private, versioned shell copies in one shared user directory. Managed services, Slurm submission, scientific comparison policies, and the `Jarvis forge` forwarding command are planned extensions.
 
 ## Install
 
@@ -105,11 +105,11 @@ jforge apt install libeigen3-dev libgsl-dev sqlite3
 jforge info eigen --path
 ```
 
-`jforge paths` reports the selected native store. Old prefixes and installed ROOT references are preserved. Each `build` dependency profile follows the same one-build-per-name rule when newly created. Saved Spack environment revisions are installation history, distinct from the user-selected apt profiles; named shell/Python environments are listed separately by `jforge env list`.
+`jforge paths` reports the selected native store. Old prefixes and installed ROOT references are preserved. Each `build` dependency profile follows the same one-build-per-name rule when newly created. Saved Spack environment revisions are installation history, distinct from the user-selected apt profiles; named shell environments are listed separately by `jforge env list`.
 
 You select and prepare Python environments with pyenv or your existing tools. `doctor --shell` sources your trusted Bash script and reports the resulting CC/CXX/FC selections, compiler and build-tool paths and versions, Python interpreter paths and versions, virtual environment prefixes, installed Python packages, and selected module/pyenv variables. It does not choose an environment or switch to a fallback. Without `--shell`, it inspects the inherited environment. Missing tools and failed version probes are reported individually; activation errors fail the command. `--timeout` limits the complete inspection, including activation. Shell output is kept separate from JSON results. Inspection creates no Forge user state.
 
-## Named environments and target Python
+## Named shell environments
 
 All Forge installations for the same user share the remembered data directory, independently of the Python version running the CLI; the initial fallback is `~/.jarvis-forge`. `JFORGE_HOME` and `--home` can explicitly override it. Target Python environments do not need Forge installed.
 
@@ -118,18 +118,13 @@ jforge env add cbs --shell /path/to/cbs-env.sh
 jforge env list
 jforge env show cbs
 jforge env show cbs --path
-jforge env set-python cbs --python /path/to/existing/venv/bin/python
-# Alternatively, select an existing pyenv environment:
-jforge env set-python cbs --pyenv cbs-python
 jforge doctor --env cbs
 jforge run acceptance.yaml --env cbs
 ```
 
-`env add` copies the script into `environments/<name>/revisions/<revision>/source.sh` and generates `activate.sh`. It checks Bash syntax without sourcing the script. Registration and Python configuration do not activate an environment in your current shell or set a default for later runs. Choose a profile explicitly with `--env`, `environment.name` in YAML, or `source "$(jforge env show cbs --path)"` in your own shell.
+`env add` copies the script into `environments/<name>/revisions/<revision>/source.sh` and generates `activate.sh`. It checks Bash syntax without sourcing the script. Select Python in your shell or in the registered script using pyenv or your existing tools. Choose a profile explicitly with `--env`, `environment.name` in YAML, or `source "$(jforge env show cbs --path)"` in your own shell.
 
-`set-python` changes the target Python for that named environment only. Use `--python` for an existing executable, or `--pyenv` for one existing pyenv version/environment; `--pyenv-root` locates non-default version storage. Forge records the actual pyenv program separately from its storage root, supporting package-manager installations. It does not install Python, change pyenv global/local settings, or switch the interpreter running Forge. `--inherit` removes the Python override and uses the script's PATH again. When overridden, both `python` and `python3` use the chosen interpreter; the configured environment's bin directory is also put on PATH.
-
-Every `env add ... --replace` or `set-python` saves a new revision and preserves previous scripts. Use `env show cbs --revision <revision>` to inspect an older revision. `env list/show` do not execute scripts. Missing or modified managed files are reported and cannot be selected for execution. Runs archive the chosen revision, original script copy and generated wrappers. The reserved `apt` environment appears in the list after package activation and remains managed by `jforge apt`.
+Each `env add ... --replace` saves a new revision. Use `env show cbs --revision <revision>` to inspect a retained revision. If a retained revision contains a Forge Python override, select Python in your shell and re-register the script with `--replace`. Runs archive the selected revision and its script. The reserved `apt` environment appears in the list after package activation and remains managed by `jforge apt`.
 
 Scripts are copied, not relocated together with their dependencies: use stable absolute paths for external files. If the original script changes, register the update with `env add cbs --shell /path/to/cbs-env.sh --replace`. For reproducibility, files in published revisions are not intended for direct editing. Full usage and storage details are in [the environment guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/ENVIRONMENTS.md).
 
@@ -140,7 +135,7 @@ All package operations use Spack. Native Spack extension recipes are downloaded 
 ```bash
 jforge apt import spack
 # Or prepare and select a named package environment:
-jforge apt switch spack --name gambit --python "$(pyenv which python)"
+jforge apt switch spack --name gambit
 jforge apt compilers
 jforge apt compilers --find
 jforge apt list
@@ -154,7 +149,7 @@ jforge info libgsl-dev --path
 
 Maintainers publish all package recipes, project build YAMLs, library cards and companion scripts with one standalone command: `./jfrecipes <recipe-revision>`. `--dry` prepares and checks both catalogs without network access. The script needs Python, PyYAML and an authenticated GitHub CLI; it does not import Forge or read its version. Compatibility comes from `recipes/release.json` and `builds/release.json`. The fixed `recipes/recipes.json` and `builds/builds.json` download entries remain unchanged across recipe and client releases. Clients refresh them with `jforge apt update` and `jforge build update`, respectively. See the [recipe publishing guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/RELEASING.md#%E7%8B%AC%E7%AB%8B%E5%8F%91%E5%B8%83%E6%89%A9%E5%B1%95%E9%85%8D%E6%96%B9).
 
-`import spack` selects `spack-default`. `switch spack --name NAME` selects a separate store, configuration and saved environments under the shared Forge home. Re-selecting an existing environment retains its configuration and installations. `--python` registers an existing interpreter, including pyenv Python, as an external dependency; Forge does not install or switch Python. The interpreter running Forge controls Spack itself. Select compilers/variants explicitly with native quoted specs when needed:
+`import spack` selects `spack-default`. `switch spack --name NAME` selects a separate store, configuration and saved environments under the shared Forge home. Re-selecting an existing environment retains its configuration and installations. Select Python before creating a profile. Forge registers the active interpreter as an external Spack dependency and keeps it for the life of the profile. A package plan that requires a Spack-managed interpreter or virtual environment is rejected. The interpreter running Forge executes Spack itself. Select compilers/variants explicitly with native quoted specs when needed:
 
 ```bash
 jforge apt install 'gsl@2.8 %gcc@13' 'hdf5~mpi' 'root +python'
@@ -195,7 +190,7 @@ jforge apt list --archived
 jforge apt switch --archived
 ```
 
-Archive queries read records without running old shell or recipe commands. Archived records do not satisfy Spack dependencies and cannot be upgraded or removed by the package CLI. Reinstall the packages you need with Spack. Previously named Spack profiles keep working; select an existing root-level Spack store again with `apt switch spack --direct`. Reload `apt shell-init` once after upgrading; subsequent successful package changes automatically refresh the current shell.
+Archive queries read records without running old shell or recipe commands. Archived records do not satisfy Spack dependencies and cannot be upgraded or removed by the package CLI. Reinstall the packages you need with Spack. Use `apt switch spack --direct` to select an existing root-level Spack store that uses external Python. Reload `apt shell-init` once after upgrading; subsequent successful package changes automatically refresh the current shell.
 
 See [APT usage](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md), [backend design](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_DEPENDENCIES.md), and [compatibility](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_COMPATIBILITY.md).
 
@@ -271,7 +266,7 @@ Only engine policy is implicit: Forge home selection, work/build/install/log dir
 
 `build.source` accepts a local source directory or URL/SHA-256/subdir mapping. Use `build.cmake.preset` for a project's native preset, and `requires` to consume another build's installation output. Standard `checks.before/after` declare Python versions/development files, imported modules and executable requirements. Module/tool mappings add constraints, for example `modules: {numpy: ">=1.26"}`. Checks run with the selected Python, which does not need Forge installed. Reports preserve actual versions, paths and failures in `checks.json`. Custom Python belongs in relative companion scripts, with optional argument lists; shell strings, cmd/cwd mappings and literal argv lists remain supported. Previous LibDeps/Calculators spellings remain compatible aliases; new cards do not require HEP-specific keys. Similar log presentation does not add a dependency on Jarvis-HEP.
 
-`hep` is a user-registered environment; omit `--env` to inherit the current compiler/Python selection. The ROOT recipe currently targets Linux, needs an existing CMake/C/C++/Fortran toolchain and Python with NumPy/development headers, and defaults to C++17. It configures ROOT with `-Dall=ON` and turns off fcgi, dcache, R, Qt6Web, CUDA, and the GPU TMVA options. Acceptance requires the declared features, PyROOT, histogram and file I/O, and RooFit. `-Dall=ON` can build bundled XRootD, VDT, Clad, and RooFit MultiProcess when those packages are not already installed. It does not promise GPU support. ROOT's full real build requires separate target-machine validation of this new automation.
+`hep` is a user-registered environment; omit `--env` to inherit the current compiler/Python selection. The ROOT recipe currently targets Linux, needs an existing CMake/C/C++/Fortran toolchain and Python with NumPy/development headers, and defaults to C++17. Select the interpreter with pyenv or your shell before running the recipe. ROOT uses the interpreter, headers and library verified in preflight. It configures ROOT with `-Dall=ON` and turns off fcgi, dcache, R, Qt6Web, CUDA, and the GPU TMVA options. Acceptance requires the declared features, PyROOT, histogram and file I/O, and RooFit. `-Dall=ON` can build bundled XRootD, VDT, Clad, and RooFit MultiProcess when those packages are not already installed. It does not promise GPU support. ROOT's full real build requires separate target-machine validation of this new automation.
 
 User cards declare prerequisite modules with `required_modules`; the expanded execution schema represents external build outputs using `requires` entries. Compatible installed artifacts are reused; missing ones are built first. Recipes, local source digests, parameters, dependency instances and tool observations are locked. Multiple compatible instances require an explicit artifact binding; incompatible compiler/Python/C++ choices fail before consumer configuration. `cmake.project` consumes pinned prefixes and verifies the selected package-config path. History/show remain available; logs support qualified step names such as `root-build.ROOT.install`.
 

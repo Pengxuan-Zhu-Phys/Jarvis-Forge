@@ -164,7 +164,7 @@ def test_check_progress_has_two_phases():
     ("spack_compilers", "compilers", {"find": True}),
     ("import_spack", "switch", {"source": "spack"}),
     ("switch_source", "switch", {"source": "spack", "name": "default",
-                                  "python": None, "direct": False, "archived": False}),
+                                  "direct": False, "archived": False}),
     ("autoremove", "autoremove", {"yes": True, "dry_run": False}),
     ("sources", "sources", {"add": "fixture", "url": "https://example.org/cache",
                              "remove": None, "trust_key": None, "yes": False}),

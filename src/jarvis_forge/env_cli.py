@@ -6,13 +6,13 @@ from typing import Optional
 import typer
 
 from .cli import emit
-from .environment_registry import add, list_environments, set_python, show
+from .environment_registry import add, list_environments, show
 from .storage import ForgeError
 
 
 app = typer.Typer(add_completion=False, pretty_exceptions_enable=False,
                   context_settings={"help_option_names": ["-h", "--help"]},
-                  help="Manage shared, named environment scripts and explicit Python selections.")
+                  help="Manage shared, named environment scripts.")
 
 
 @app.command("add")
@@ -27,11 +27,9 @@ def add_environment(ctx: typer.Context,
 
 @app.command("list")
 def list_environment(ctx: typer.Context):
-    """List registered scripts, Python selections and the apt environment."""
+    """List registered scripts and the apt environment."""
     records = list_environments(ctx.obj.home)
     rows = [{"name": r["name"], "revision": r["revision"], "status": r["status"],
-             "python": ((r["python"].get("selection") or r["python"]["executable"]) if r["python"] else "from script"),
-             "python_version": r["python"]["observed"]["version"] if r["python"] else None,
              "path": r["activation"], "description": r["description"]} for r in records]
     emit(ctx, "env list", environments=rows)
 
@@ -49,17 +47,3 @@ def show_environment(ctx: typer.Context,
         print(result["activation"])
     else:
         emit(ctx, "env show", environment=result)
-
-
-@app.command("set-python")
-def configure_python(ctx: typer.Context,
-                     name: str = typer.Argument(..., help="Registered environment name.", metavar="<name>"),
-                     python: Optional[str] = typer.Option(None, "--python", help="Use this existing Python executable.", metavar="<path>"),
-                     pyenv: Optional[str] = typer.Option(None, "--pyenv", help="Use this existing pyenv version or environment.", metavar="<name>"),
-                     pyenv_root: Optional[Path] = typer.Option(None, "--pyenv-root", help="Locate the selected pyenv installation.", metavar="<path>"),
-                     inherit: bool = typer.Option(False, "--inherit", help="Return Python selection to the script's PATH."),
-                     timeout: float = typer.Option(30, "--timeout", min=0.1, help="Limit each Python lookup and probe.", metavar="<seconds>")):
-    """Save an explicit target Python selection in a new environment revision."""
-    result = set_python(ctx.obj.home, name, executable=python, pyenv=pyenv, pyenv_root=pyenv_root,
-                        inherit=inherit, timeout=timeout)
-    emit(ctx, "env set-python", environment=result)

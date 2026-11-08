@@ -281,6 +281,7 @@ def test_compact_root_overrides_and_default_provenance():
     assert root['source']['sha256']
     options = root['cmake']['options']
     assert options['all'] is True
+    assert options['Python3_EXECUTABLE']['value'] == '${python}'
     assert options['fcgi'] is False and options['dcache'] is False and options['cuda'] is False
     assert options['qt6web'] is False and options['tmva-gpu'] is False and options['tmva-cudnn'] is False
     assert 'fail-on-missing' not in options and 'xrootd' not in options
@@ -360,6 +361,42 @@ def test_failed_standard_preflight_stops_downstream(home, tmp_path):
     assert result['status'] == 'failed'
     assert 'forge_absent_657194' in result['error']
     assert len(list(Path(result['attempt']).rglob('command-*.json'))) <= 1
+
+
+def test_cmake_uses_the_python_development_files_checked_in_preflight(home, tmp_path):
+    from jarvis_forge.standard_checks import probe
+
+    if not shutil.which("cmake") or not shutil.which("cc"):
+        pytest.skip("CMake and a C compiler are required")
+    python = probe({"python": {"development": True}})["python"]
+    if not python["development"]:
+        pytest.skip("Python development files are required")
+    source = tmp_path / "project"
+    source.mkdir()
+    (source / "CMakeLists.txt").write_text(
+        'cmake_minimum_required(VERSION 3.20)\n'
+        'project(CheckPython LANGUAGES C)\n'
+        'find_package(Python3 REQUIRED COMPONENTS Interpreter Development)\n'
+        'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/python.txt" "${Python3_INCLUDE_DIRS}\\n${Python3_LIBRARIES}\\n")\n'
+        'install(FILES "${CMAKE_CURRENT_BINARY_DIR}/python.txt" DESTINATION .)\n'
+    )
+    card = tmp_path / "python.yaml"
+    card.write_text(yaml.safe_dump({
+        "name": "check-python",
+        "build": {"name": "CheckPython", "version": "1.0", "source": str(source),
+                  "cmake": {"options": {"Python3_EXECUTABLE": {"type": "FILEPATH", "value": "${python}"}}}},
+        "checks": {"before": {"python": {"development": True}}},
+    }))
+    result = builds.execute(home, card)
+    assert result["status"] == "passed", result
+    output = next(iter(result["outputs"].values()))
+    include, library = (Path(output["prefix"]) / "python.txt").read_text().splitlines()
+    assert Path(include).resolve() == Path(python["header"]).parent.resolve()
+    assert Path(library).resolve() == Path(python["library"]).resolve()
+    cache, = Path(result["attempt"]).rglob("cmake-cache.json")
+    configured = read_json(cache)
+    assert configured["Python3_INCLUDE_DIR"] == str(Path(python["header"]).parent)
+    assert configured["Python3_LIBRARY"] == python["library"]
 
 
 def test_release_script_update_gets_distinct_snapshot_and_rejects_tampering(home, tmp_path):

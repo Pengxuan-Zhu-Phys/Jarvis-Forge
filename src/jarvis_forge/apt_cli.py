@@ -351,12 +351,6 @@ def switch_source(
     name: str = typer.Option(
         "default", "--name", help="Spack profile name.", metavar="<name>"
     ),
-    python: Optional[str] = typer.Option(
-        None,
-        "--python",
-        help="Existing Python interpreter to register as external.",
-        metavar="<path>",
-    ),
     direct: bool = typer.Option(
         False,
         "--direct",
@@ -368,8 +362,8 @@ def switch_source(
 ):
     """Select a Spack package profile or list saved profiles."""
     if source is None:
-        if python or direct or name != "default":
-            raise ForgeError("Select spack before setting --name or --python.")
+        if direct or name != "default":
+            raise ForgeError("Select spack before setting --name or --direct.")
         _emit(
             ctx, "switch", environments=profiles(ctx.obj.user_home, archived=archived)
         )
@@ -385,7 +379,6 @@ def switch_source(
                 ctx.obj.user_home,
                 source,
                 name=name,
-                python=python,
                 direct=direct,
                 progress=_progress(ctx),
             ),

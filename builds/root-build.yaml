@@ -18,6 +18,8 @@ build:
   cmake:
     options:
       CMAKE_CXX_STANDARD: 17
+      # Use the caller's Python and the development files checked before installation.
+      Python3_EXECUTABLE: {type: FILEPATH, value: "${python}"}
       OPENSSL_ROOT_DIR: "${packages.openssl.prefix}"  # Discover SSL/crypto from the same installation.
       # Acceptance is an -Dall=ON build. These options need a site service or a GPU.
       all: true

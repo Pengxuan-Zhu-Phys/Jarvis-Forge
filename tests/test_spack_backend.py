@@ -157,6 +157,64 @@ def candidate_document(calls):
     return yaml.safe_load((envdir / "spack.yaml").read_text())["spack"]
 
 
+@pytest.mark.parametrize("phase", ["plan", "source-plan"])
+def test_package_plans_reject_a_bundled_python_before_installing_it(managed, monkeypatch, phase):
+    home, calls = managed
+    named_layout(home)
+    run = b.run
+
+    def bundled_python(home, args, op, label, **kwargs):
+        if label == "install-cache" and phase == "source-plan":
+            write_json(op / "command-install-cache.json", {"status": "failed", "exit_code": 1})
+            raise ForgeError("Cache miss", code=1)
+        output = run(home, args, op, label, **kwargs)
+        if label == phase:
+            plan = json.loads(output)
+            plan["packages"].append({"name": "python-venv", "external": False,
+                                     "prefix": str(home.root / "store/python-venv")})
+            return json.dumps(plan)
+        return output
+
+    monkeypatch.setattr(b, "run", bundled_python)
+    with pytest.raises(ForgeError, match="Forge requires the external Python"):
+        b.transact(home, "install", ["fixture-app"])
+    assert not (home.root / "apt/state.json").exists()
+    assert not [args for args, _ in calls if args[0] == "install"]
+
+
+def test_apt_activation_leaves_the_shell_python_on_path(managed, monkeypatch):
+    home, _ = managed
+    run = b.run
+    python = b.settings(home)["python"]
+    prefix = Path(python["prefix"])
+
+    def external_python(home, args, op, label, **kwargs):
+        output = run(home, args, op, label, **kwargs)
+        if label not in {"plan", "installed"}:
+            return output
+        snapshot = json.loads(output)
+        for name in ("python", "python-venv"):
+            snapshot["packages"].append({
+                "name": name, "external": True, "installed": True, "root": False,
+                "prefix": str(prefix), "version": "1", "hash": name, "spec": name,
+            })
+        snapshot["modifications"] = [
+            {"type": "PrependPath", "name": "PATH", "value": str(prefix / "bin")},
+            {"type": "PrependPath", "name": "PYTHONPATH", "value": str(prefix / "lib/site-packages")},
+            {"type": "PrependPath", "name": "PATH", "value": "/fixture-app/bin"},
+        ]
+        return json.dumps(snapshot)
+
+    monkeypatch.setattr(b, "run", external_python)
+    result = b.transact(home, "install", ["fixture-app"], cache="never")
+    environment = Path(result["environment"])
+    config = yaml.safe_load((environment / ".jforge-config/packages.yaml").read_text())["packages"]
+    assert all(config[name]["buildable"] is False for name in ("python", "python-venv"))
+    assert config["python-venv"]["externals"] == [{"prefix": str(prefix), "spec": "python-venv@1.0"}]
+    modifications = json.loads((Path(result["activation"]).parent / "modifications.json").read_text())
+    assert [m["value"] for m in modifications] == ["/fixture-app/bin"]
+
+
 def test_name_only_environment_pins_installed_gcc_runtime(managed):
     home, calls = managed
     named_layout(home)
@@ -218,7 +276,8 @@ def test_runtime_conflict_retries_with_installed_spec_and_original_lock(managed,
                 "platform=linux os=ubuntu22.04 target=x86_64_v3 %c=gcc@=11.4.0",
             ]
             assert document["concretizer"]["reuse"]["from"] == [
-                {"type": "local"}, {"type": "external"},
+                {"type": "local", "exclude": ["python", "python-venv", "^python", "^python-venv"]},
+                {"type": "external"},
             ]
             assert document["specs"] == ["fixture-app", "fixture-other"]
             lock.write_text("retry plan")
