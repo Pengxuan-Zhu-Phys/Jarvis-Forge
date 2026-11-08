@@ -1,7 +1,6 @@
 # Changelog
 
-## Unreleased
-
+## 1.1.7 — 2026-11-09
 ### Added
 
 - Add `CEPC-build` for the 240 GeV WW parton-level baseline, with pinned WHIZARD and MadGraph packages and the CEPC handoff's physics checks.
