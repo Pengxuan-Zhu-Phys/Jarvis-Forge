@@ -27,11 +27,28 @@ def test_build_help_and_reserved_workflow_namespace(command, capsys):
     assert 'jforge workflow' not in output
 
 
-def test_build_json_uses_build_command_and_workflow_is_reserved(capsys):
-    assert main(['build', 'list', '--json']) == 0
+def test_build_list_summarizes_the_catalog_and_preserves_json(tmp_path, capsys):
+    catalog = tmp_path / "builds/catalog/index.json"
+    recipe = {"id": "root-build", "revision": "2026.11.09.1", "description": "",
+              "url": "https://example.org/root-build.yaml", "sha256": "a" * 64,
+              "files": [{"path": "scripts/root_acceptance.py", "url": "https://example.org/root_acceptance.py",
+                         "sha256": "b" * 64}]}
+    libraries = [{"id": "math-libraries", "revision": "2026.11.09.1", "description": "Shared math tools"}]
+    write_json(catalog, {"builds": [recipe], "libraries": libraries})
+    args = ["--home", str(tmp_path), "build", "list"]
+    assert main(args) == 0
+    output = capsys.readouterr().out
+    assert "root-build" in output and "2026.11.09.1" in output and "Scripts" in output
+    assert "math-libraries" in output and "Shared math tools" in output
+    assert "https://" not in output and "root_acceptance.py" not in output
+    assert "sha256" not in output.lower()
+    assert main([*args, "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result['command'] == 'build list'
-    assert 'builds' in result
+    assert result["command"] == "build list"
+    assert result["builds"] == [recipe] and result["libraries"] == libraries
+
+
+def test_workflow_is_reserved(capsys):
     assert main(['workflow', '--json']) == 2
     assert json.loads(capsys.readouterr().out)['ok'] is False
 

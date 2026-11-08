@@ -581,6 +581,68 @@ def test_build_package_install_uses_apt_progress_display(home, tmp_path, monkeyp
     assert "Jarvis-Forge.APT" in recorded and "Resolve dependencies" in recorded
 
 
+def test_build_failure_shows_stage_diagnostic_and_resume_once(home, tmp_path, monkeypatch, capsys):
+    from jarvis_forge import spack_backend
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setattr(spack_backend, "bootstrap", fake_bootstrap)
+    message = "Remaining binary installation failed (exit 3).\n" + "Unavailable package " + "x" * 110
+    operation = tmp_path / ("operation-" + "x" * 100)
+
+    def install(target, action, specs, **kwargs):
+        kwargs["progress"]("[1/4] Resolve dependencies")
+        raise ForgeError(message, code=1, hint=f"Operation logs: {operation}")
+
+    monkeypatch.setattr(spack_backend, "transact", install)
+    path = tmp_path / "failure.yaml"
+    path.write_text(yaml.safe_dump({"name": "sample-build", "dependencies": ["gsl"],
+                                   "checks": {"before": {"python": {"version": ">=3.10"}}}}))
+    argv = ["--home", str(home.root), "build", "run", str(path), "--jobs", "8"]
+    assert main(argv) == 1
+    captured = capsys.readouterr()
+    log, = (home.root / "runs").glob("*/attempts/*/build.log")
+    run_id = log.parents[2].name
+    assert not captured.out
+    assert "[1/2] Preflight checks" in captured.err
+    assert "Checks passed · Python" in captured.err
+    assert "  [1/4] Resolve dependencies" in captured.err
+    assert "sample-build · Failed at step 2/2 · Install dependencies" in captured.err
+    assert captured.err.count(message) == 1
+    assert f"Operation logs: {operation}" in captured.err
+    assert str(log) in captured.err
+    assert f"jforge --home {home.root} build resume {run_id} --jobs 8" in captured.err
+    assert "[INFO]" not in captured.err and "--request" not in captured.err
+    assert "Jarvis-Forge.Checker" in log.read_text() and "--request" in log.read_text()
+    raw, = log.parent.glob("*/preflight.command-1/command-1.stdout.log")
+    assert "Python " in raw.read_text()
+
+    assert main([*argv, "--json"]) == 1
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert not result["ok"] and result["command"] == "build run"
+    assert result["error"]["message"] == message
+    assert result["error"]["hint"] == f"Operation logs: {operation}"
+    assert result["failed_step"]["id"] == "packages.install"
+    assert "Failed at step" not in captured.err
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_build_success_keeps_command_output_for_verbose_and_logs(home, tmp_path, capfd, verbose):
+    path = tmp_path / "success.yaml"
+    path.write_text(yaml.safe_dump({"name": "sample-build", "checks": {"after": [
+        [sys.executable, "-c", "print('raw subprocess output')"],
+    ]}}))
+    argv = ["--home", str(home.root), "build", "run", str(path)]
+    assert main([*argv, "--verbose"] if verbose else argv) == 0
+    captured = capfd.readouterr()
+    assert "sample-build · Passed" in captured.out
+    assert "Outputs: none" not in captured.out and "Nodes:" not in captured.out
+    assert ("Command:" in captured.err) is verbose
+    assert ("raw subprocess output" in captured.err) is verbose
+    raw, = (home.root / "runs").glob("*/attempts/*/*/checks.command-1/stdout.log")
+    assert raw.read_text() == "raw subprocess output\n"
+
+
 def test_inline_package_archive_and_cmake_paths(home,projects,tmp_path,monkeypatch):
     from jarvis_forge import spack_backend
     import tarfile

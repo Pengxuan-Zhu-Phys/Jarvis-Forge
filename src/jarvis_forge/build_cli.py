@@ -1,6 +1,7 @@
 """Project build CLI; package operations remain owned by apt/Spack."""
 
 from pathlib import Path
+import shlex
 from typing import Optional
 
 import typer
@@ -104,6 +105,7 @@ def plan(ctx: typer.Context, build: str = typer.Argument(..., metavar="<build>")
 
 def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directory=None):
     from .cli import emit, line, _console
+    from .presentation import build_result
     if not resume:
         if directory is not None:
             from .build_workspace import create, locate
@@ -117,10 +119,25 @@ def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directo
                 build = str(create(ctx.obj.home, catalog.acquire(ctx.obj.home, build), workspace))
         else:
             build = str(catalog.acquire(ctx.obj.home, build))
+    console = _console(stderr=True)
     result = builds.execute(ctx.obj.home, build, parameters=parameters(setting), environment_name=env,
                                jobs=jobs, resume=resume, verbose=ctx.obj.verbose, as_json=ctx.obj.as_json,
-                               progress=lambda message: line(_console(stderr=True), message))
-    emit(ctx, "build resume" if resume else "build run", ok=result["status"] == "passed", **builds.summary(result))
+                               progress=lambda message: line(console, message))
+    values = builds.summary(result)
+    passed = result["status"] == "passed"
+    if ctx.obj.as_json:
+        if not passed:
+            values["error"] = {"type": "VerificationFailed", "message": values["error"],
+                               "hint": values.pop("hint", None)}
+        emit(ctx, "build resume" if resume else "build run", ok=passed, **values)
+    else:
+        root = ctx.find_root()
+        prog = root.info_name or "jforge"
+        command = [prog]
+        if root.params.get("home") is not None:
+            command += ["--home", str(ctx.obj.home.root)]
+        command += ["build", "resume", result["run_id"], "--jobs", str(jobs)]
+        build_result(_console() if passed else console, values, prog, shlex.join(command))
     raise typer.Exit(0 if result["status"] == "passed" else 130 if result["status"] == "interrupted" else 1)
 
 
@@ -130,7 +147,7 @@ def run(ctx: typer.Context, build: str = typer.Argument(..., metavar="<build>"),
         env: Optional[str] = typer.Option(None, "--env", help="Use this registered compiler/Python environment."),
         jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Maximum concurrent build jobs."),
         directory: Optional[Path] = typer.Option(None, "--directory", help="Fetch and build in this workspace; reuse its editable recipe on later runs.")):
-    """Execute projects, dependencies and acceptance checks with live logs."""
+    """Build projects and run acceptance checks. Use --verbose for raw output."""
     _execute(ctx, build, setting, env, jobs, directory=directory)
 
 

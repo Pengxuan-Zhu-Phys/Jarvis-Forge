@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shlex
+from pathlib import Path
 
 from rich.panel import Panel
 from rich.text import Text
@@ -113,6 +114,20 @@ def package_kind(item):
     return ""
 
 
+def _columns(console, headers, rows):
+    widths = [max(Text(row[i]).cell_len for row in [headers, *rows]) for i in range(len(headers))]
+    if sum(widths) + 2 * len(headers) > console.width:
+        return False
+    for index, row in enumerate([headers, *rows]):
+        text = Text("  ")
+        for column, value in enumerate(row):
+            text.append(value, style="bold" if index == 0 else "cyan" if column == 0 else None)
+            if column < len(headers) - 1:
+                text.append(" " * (widths[column] - Text(value).cell_len + 2))
+        console.print(text, soft_wrap=True)
+    return True
+
+
 def package_rows(console, packages, *, planned=False):
     """One row per instance; never fold or crop a package name or version."""
     rows = []
@@ -126,22 +141,12 @@ def package_rows(console, packages, *, planned=False):
     if not rows:
         line(console, "  No matching packages.")
         return
-    headers = ["Package", "Version", "Kind", "State"]
-    widths = [max(Text(row[i]).cell_len for row in [headers, *rows]) for i in range(4)]
-    if sum(widths) + 8 > console.width:
+    if not _columns(console, ["Package", "Version", "Kind", "State"], rows):
         # Narrow SSH terminals retain complete identifiers on a single logical
         # line; terminal wrapping stays visual, so copying still works.
         for name, version, kind, state in rows:
             tags = "; ".join(v for v in (kind, state) if v != "—")
             line(console, f"  {name} {version} [{tags}]")
-        return
-    for index, row in enumerate([headers, *rows]):
-        text = Text("  ")
-        for column, value in enumerate(row):
-            text.append(value, style="bold" if index == 0 else "cyan" if column == 0 else None)
-            if column < 3:
-                text.append(" " * (widths[column] - Text(value).cell_len + 2))
-        console.print(text, soft_wrap=True)
 
 
 def package_summary(console, packages):
@@ -395,7 +400,111 @@ def apt_update(console, values):
             field(console, key, value, compact=True)
 
 
+def _build_catalog_rows(console, entries, *, libraries=False):
+    headers = ["Library" if libraries else "Recipe", "Revision"]
+    if not libraries:
+        headers.append("Scripts")
+    rows = []
+    descriptions = []
+    for entry in entries:
+        row = [str(entry["id"]), str(entry.get("revision") or "—")]
+        if not libraries:
+            row.append(str(len(entry.get("files") or [])))
+        rows.append(row)
+        descriptions.append(" ".join(str(entry.get("description") or "").split()))
+    if any(descriptions):
+        headers.append("Description")
+        rows = [row + [description or "—"] for row, description in zip(rows, descriptions)]
+    if not _columns(console, headers, rows):
+        for row, description in zip(rows, descriptions):
+            parts = row[:2]
+            if not libraries:
+                count = row[2]
+                parts.append(count + (" script" if count == "1" else " scripts"))
+            line(console, "  " + " · ".join(parts))
+            if description:
+                console.print(Text("    " + description))
+
+
+def build_catalog(console, command, values):
+    builds = values["builds"]
+    libraries = values.get("libraries", [])
+    if command == "build update":
+        noun = "recipe" if len(builds) == 1 else "recipes"
+        line(console, f"Build catalog updated · {len(builds)} {noun}", style="bold")
+    elif builds:
+        line(console, f"Build recipes ({len(builds)})", style="bold")
+    else:
+        line(console, "No cached build recipes.")
+    if builds:
+        _build_catalog_rows(console, builds)
+    if libraries:
+        line(console)
+        line(console, f"Build libraries ({len(libraries)})", style="bold")
+        _build_catalog_rows(console, libraries, libraries=True)
+    if builds:
+        line(console)
+        line(console, "Inspect a recipe with jforge build show <build>.", style="dim")
+    elif command == "build list":
+        line(console)
+        line(console, "Download recipes with jforge build update.", style="dim")
+
+
+def build_artifacts(console, values):
+    artifacts = values["artifacts"]
+    if not artifacts:
+        line(console, "No recorded build artifacts.")
+        return
+    line(console, f"Build artifacts ({len(artifacts)})", style="bold")
+    for item in artifacts:
+        line(console)
+        line(console, f"  {item['build_id']} {item['version']} · {item['output']} · {item['status']}", style="cyan")
+        line(console, "    ID  " + item["artifact_id"])
+        line(console, "    " + item["prefix"])
+    line(console)
+    line(console, "Find the activation script with jforge build env <artifact-id> --path.", style="dim")
+
+
+def build_result(console, values, prog, resume_command):
+    status, suite = values["status"], values["suite_id"]
+    failed_step = values.get("failed_step")
+    if status == "passed":
+        line(console, f"{suite} · Passed", style="bold green")
+    else:
+        heading = f"{suite} · {status.capitalize()}"
+        if failed_step:
+            heading += f" at step {failed_step['index']}/{failed_step['total']}"
+            if failed_step["build"] != suite:
+                heading += f" in {failed_step['build']}"
+            heading += f" · {failed_step['title']}"
+        error(console, prog, heading + "\n" + values["error"])
+        if values.get("hint"):
+            line(console, values["hint"])
+    field(console, "run_id", values["run_id"])
+    outputs = values["outputs"] if status == "passed" else []
+    workspace_activation = (values.get("workspace") and
+                            (len(outputs) == 1 or any(row["name"] == "installation" for row in outputs)))
+    for row in outputs:
+        name = "Installed" if row["name"] == "installation" else f"Installed {row['name']}"
+        line(console, f"{name} · {row['version']}", style="bold")
+        line(console, "  " + row["prefix"])
+        if row.get("activation") and not workspace_activation:
+            line(console, "  " + shlex.join(["source", row["activation"]]))
+    if workspace_activation:
+        line(console, shlex.join(["source", str(Path(values["workspace"]) / "activate.sh")]))
+    field(console, "build_log", str(Path(values["attempt"]) / "build.log"))
+    if failed_step:
+        line(console, "Resume this run:")
+        line(console, "  " + resume_command)
+
+
 def render(console, command, values):
+    if command in {"build list", "build update"}:
+        build_catalog(console, command, values)
+        return
+    if command == "build artifacts":
+        build_artifacts(console, values)
+        return
     if command in {"apt list", "apt search"}:
         apt_packages(console, values)
         return

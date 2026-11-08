@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add `CEPC-build` for the 240 GeV WW parton-level baseline, with pinned WHIZARD and MadGraph packages and the CEPC handoff's physics checks.
+
+### Changed
+
+- Show concise recipe summaries in `build list` and `build update` and highlight installation paths and artifact IDs in `build artifacts`. Use `--json` for complete metadata.
+- Show concise build progress and results, with the failed stage, log paths and a resume command on step failures. Use `--verbose` for command lines and raw output.
+
+### Fixed
+
+- Resolve dependencies against the current environment and fall back to source when `--cache auto` cannot install binaries listed in the Spack cache index.
+
 ## 1.1.6 — 2026-11-09
 
 ### Changed

@@ -495,6 +495,80 @@ def test_binary_remainder_failure_does_not_start_source_build(managed, monkeypat
     assert not (home.root / "apt/state.json").exists()
 
 
+@pytest.mark.parametrize("invalid_retry", [None, "occupied", "python"])
+def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatch, invalid_retry):
+    home, calls = managed
+    named_layout(home)
+    first = b.transact(home, "install", ["fixture-existing"], cache="never")
+    original_lock = Path(first["environment"]) / "spack.lock"
+    original_lock.write_text("committed lock")
+    before = (home.root / "apt/state.json").read_bytes()
+    calls.clear()
+    run = b.run
+
+    def stale_index(home, args, op, label, **kwargs):
+        envdir = kwargs["envdir"]
+        lock = envdir / "spack.lock"
+        if label == "concretize":
+            lock.write_text("binary lock")
+        if label == "concretize-cache-retry":
+            assert lock.read_text() == "committed lock"
+            assert args == ["concretize"]
+            document = yaml.safe_load((envdir / "spack.yaml").read_text())["spack"]
+            assert document["specs"] == ["fixture-existing", "fixture-app", "fixture-source"]
+            assert [item["type"] for item in document["concretizer"]["reuse"]["from"]] == [
+                "local", "external",
+            ]
+            lock.write_text("source lock")
+        output = run(home, args, op, label, **kwargs)
+        if label in {"install-cache", "install-binaries"}:
+            if label == "install-binaries":
+                assert args[-2:] == ["/hash-fixture-app", "/hash-fixture-lib"]
+                (b.root(home) / "store/fixture-lib").mkdir()
+            write_json(op / f"command-{label}.json", {"status": "failed", "exit_code": 3})
+            raise ForgeError("fixture cache miss", code=1)
+        if label in {"source-plan", "plan-cache-retry", "installed"}:
+            plan = json.loads(output)
+            packages = {p["name"]: p for p in plan["packages"]}
+            if label == "source-plan":
+                packages["fixture-app"]["cached"] = True
+                packages["fixture-lib"]["cached"] = True
+            else:
+                packages["fixture-app"]["hash"] = "source-fixture-app"
+            if label == "plan-cache-retry":
+                assert args[-3:] == ["installation-plan", "never", "[]"]
+                assert packages["fixture-lib"]["installed"]
+                if invalid_retry == "occupied":
+                    packages["fixture-lib"].update(hash="other-build", installed=False)
+                if invalid_retry == "python":
+                    plan["packages"].append({**packages["fixture-lib"], "name": "python"})
+            return json.dumps(plan)
+        if label == "install-source-retry":
+            assert args[-2:] == ["--use-buildcache", "never"]
+            assert lock.read_text() == "source lock"
+            assert read_json(op / "source-retry-plan.json")["cache_policy"] == "never"
+        return output
+
+    monkeypatch.setattr(b, "run", stale_index)
+    if invalid_retry:
+        with pytest.raises(ForgeError, match="already occupies|requires the external Python"):
+            b.transact(home, "install", ["fixture-app", "fixture-source"])
+        assert (home.root / "apt/state.json").read_bytes() == before
+    else:
+        result = b.transact(home, "install", ["fixture-app", "fixture-source"])
+        op = Path(result["path"])
+        assert result["state_committed"]
+        assert Path(result["lockfile"]).read_text() == "source lock"
+        assert (op / "spack-before-cache-retry.lock").read_text() == "binary lock"
+        assert read_json(op / "source-plan.json")["cache_policy"] == "auto"
+        assert {p["name"]: p["hash"] for p in result["packages"]}["fixture-app"] == "source-fixture-app"
+    assert original_lock.read_text() == "committed lock"
+    assert (b.root(home) / "store/fixture-lib").is_dir()
+    assert [args[args.index("--use-buildcache") + 1] for args, _ in calls if args[0] == "install"] == (
+        ["only", "only"] if invalid_retry else ["only", "only", "never"]
+    )
+
+
 def test_pending_install_hashes_reject_option_like_values():
     with pytest.raises(ForgeError, match="hash"):
         b._pending_install_hashes(
@@ -528,22 +602,33 @@ def test_cached_specs_do_not_require_their_build_tools(
 
 
 @pytest.mark.parametrize("status,exit_code", [("timeout", -15), ("interrupted", -2), ("failed", None), ("failed", -15)])
-def test_auto_does_not_retry_timeout_interruption_or_launch_failure(managed, monkeypatch, status, exit_code):
+@pytest.mark.parametrize("phase", ["install-cache", "install-binaries"])
+def test_auto_does_not_retry_timeout_interruption_or_launch_failure(managed, monkeypatch, status, exit_code, phase):
     home, calls = managed
     named_layout(home)
     run = b.run
 
     def fail(home, args, op, label, **kwargs):
         output = run(home, args, op, label, **kwargs)
-        if label == "install-cache":
-            write_json(op / "command-install-cache.json", {"status": status, "exit_code": exit_code})
+        if label == phase:
+            write_json(op / f"command-{label}.json", {"status": status, "exit_code": exit_code})
             raise ForgeError("fixture stopped", code=1)
+        if label == "install-cache":
+            write_json(op / "command-install-cache.json", {"status": "failed", "exit_code": 1})
+            raise ForgeError("fixture cache miss", code=1)
+        if label == "source-plan":
+            plan = json.loads(output)
+            for package in plan["packages"]:
+                package["cached"] = True
+            return json.dumps(plan)
         return output
 
     monkeypatch.setattr(b, "run", fail)
     with pytest.raises(ForgeError, match="fixture stopped"):
         b.transact(home, "install", ["fixture-app"])
-    assert len([args for args, _ in calls if args[0] == "install"]) == 1
+    assert len([args for args, _ in calls if args[0] == "install"]) == (
+        1 if phase == "install-cache" else 2
+    )
     assert not (home.root / "apt/state.json").exists()
 
 

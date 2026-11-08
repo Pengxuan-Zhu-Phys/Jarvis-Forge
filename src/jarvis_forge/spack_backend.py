@@ -775,6 +775,21 @@ def _pending_install_hashes(plan):
     return cached, source
 
 
+def _completed_install_failure(op, label):
+    record = op / f"command-{label}.json"
+    failure = read_json(record) if record.is_file() else {}
+    exit_code = failure.get("exit_code")
+    return failure.get("status") == "failed" and isinstance(exit_code, int) and exit_code > 0
+
+
+def _restore_candidate_lock(envdir, previous, archive):
+    lock = envdir / "spack.lock"
+    if lock.is_file():
+        lock.rename(archive)
+    if previous and (Path(previous) / "spack.lock").is_file():
+        shutil.copy2(Path(previous) / "spack.lock", lock)
+
+
 def _install_args(jobs, policy, hashes=()):
     return [
         "install",
@@ -1043,7 +1058,7 @@ def transact(
         committed = False
         runtime_retried = False
 
-        def resolve_plan(policy, *, suffix="", omit_cached_build_deps=False):
+        def resolve_plan(policy, flags, *, suffix="", omit_cached_build_deps=False):
             run(home, flags, op, "concretize" + suffix, envdir=envdir,
                 timeout=timeout, progress=progress)
             dag = _snapshot(home, envdir, op, "dag" + suffix)
@@ -1054,7 +1069,7 @@ def transact(
             return _snapshot(home, envdir, op, "plan" + suffix, cache=policy,
                              overwrite=overwrite, omit_cached_build_deps=omit_cached_build_deps)
 
-        def validate_plan(plan, label, policy, *, omit_cached_build_deps=False):
+        def validate_plan(plan, label, policy, flags, *, omit_cached_build_deps=False):
             nonlocal runtime_retried
             write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
             _validate_external_python(home, plan["packages"])
@@ -1070,11 +1085,8 @@ def transact(
                 if progress:
                     progress("Retry dependency resolution with the installed gcc-runtime")
                 (op / f"{label}.json").rename(op / f"{label}-before-runtime-retry.json")
-                lock = envdir / "spack.lock"
-                lock.rename(op / "spack-before-runtime-retry.lock")
-                if previous and (Path(previous) / "spack.lock").is_file():
-                    shutil.copy2(Path(previous) / "spack.lock", lock)
-                plan = resolve_plan(policy, suffix="-runtime-retry",
+                _restore_candidate_lock(envdir, previous, op / "spack-before-runtime-retry.lock")
+                plan = resolve_plan(policy, flags, suffix="-runtime-retry",
                                     omit_cached_build_deps=omit_cached_build_deps)
                 write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
                 _validate_external_python(home, plan["packages"])
@@ -1084,15 +1096,13 @@ def transact(
                     raise ForgeError("Spack could not reuse the installed gcc-runtime.", code=1)
             return plan
 
+        flags = ["concretize"]
         try:
             if progress:
                 progress("[1/4] Resolve dependencies")
             if roots:
-                flags = ["concretize"] + (
-                    ["--fresh", "--force"]
-                    if action in {"upgrade", "full-upgrade"}
-                    else []
-                )
+                if action in {"upgrade", "full-upgrade"}:
+                    flags += ["--fresh", "--force"]
                 previous_roots = {name_of(r): r for r in before["roots"]}
                 changed = any(
                     name_of(r) in previous_roots and previous_roots[name_of(r)] != r
@@ -1100,12 +1110,12 @@ def transact(
                 )
                 if changed and "--force" not in flags:
                     flags.append("--force")
-                plan = resolve_plan(plan_cache)
+                plan = resolve_plan(plan_cache, flags)
                 if progress:
                     progress(f"[2/4] Check installation plan: {len(plan['packages'])} packages")
             else:
                 plan = {"packages": [], "modifications": []}
-            plan = validate_plan(plan, "plan", plan_cache)
+            plan = validate_plan(plan, "plan", plan_cache, flags)
             if action == "check":
                 result.update(
                     backend="spack",
@@ -1148,11 +1158,7 @@ def transact(
                 except ForgeError:
                     # Timeouts, interruptions and launch failures must propagate.
                     # Only a completed failed Spack cache attempt can fall back.
-                    record = op / "command-install-cache.json"
-                    failure = read_json(record) if record.is_file() else {}
-                    exit_code = failure.get("exit_code")
-                    if (not cache_first or failure.get("status") != "failed"
-                            or not isinstance(exit_code, int) or exit_code <= 0):
+                    if not cache_first or not _completed_install_failure(op, label):
                         raise
                     if progress:
                         progress("Binary installation incomplete; validate remaining source dependencies")
@@ -1164,7 +1170,7 @@ def transact(
                         omit_cached_build_deps=not overwrite,
                     )
                     source_plan = validate_plan(
-                        source_plan, "source-plan", "auto", omit_cached_build_deps=not overwrite,
+                        source_plan, "source-plan", "auto", flags, omit_cached_build_deps=not overwrite,
                     )
                     if show_plan is not None:
                         show_plan(source_plan["packages"], overwrite)
@@ -1175,19 +1181,41 @@ def transact(
                             timeout=timeout, progress=progress)
                     else:
                         cached_hashes, source_hashes = _pending_install_hashes(source_plan)
-                        if cached_hashes:
+                        try:
+                            if cached_hashes:
+                                if progress:
+                                    progress(
+                                        f"Install {len(cached_hashes)} remaining "
+                                        "packages from the binary cache"
+                                    )
+                                run(home, _install_args(jobs, "only", cached_hashes), op,
+                                    "install-binaries", envdir=envdir, timeout=timeout, progress=progress)
+                        except ForgeError:
+                            if not _completed_install_failure(op, "install-binaries"):
+                                raise
                             if progress:
-                                progress(
-                                    f"Install {len(cached_hashes)} remaining "
-                                    "packages from the binary cache"
-                                )
-                            run(home, _install_args(jobs, "only", cached_hashes), op,
-                                "install-binaries", envdir=envdir, timeout=timeout, progress=progress)
-                        if source_hashes:
-                            if progress:
-                                progress(f"Build {len(source_hashes)} packages from source")
-                            run(home, _install_args(jobs, "auto", source_hashes), op,
-                                "install", envdir=envdir, timeout=timeout, progress=progress)
+                                progress("Binary cache install incomplete; resolve again for source builds")
+                            # The index can outlive an archive. Its frozen build DAG
+                            # can also require tools incompatible with the local store.
+                            manifest = envdir / "spack.yaml"
+                            document = yaml.safe_load(manifest.read_text())
+                            document["spack"]["concretizer"]["reuse"] = _python_reuse(buildcache=False)
+                            manifest.write_text(yaml.safe_dump(document, sort_keys=False))
+                            _restore_candidate_lock(envdir, previous, op / "spack-before-cache-retry.lock")
+                            # Keep completed binaries eligible for local reuse, even on upgrade.
+                            retry_flags = [flag for flag in flags if flag != "--fresh"]
+                            source_plan = resolve_plan("never", retry_flags, suffix="-cache-retry")
+                            source_plan = validate_plan(source_plan, "source-retry-plan", "never", retry_flags)
+                            if show_plan is not None:
+                                show_plan(source_plan["packages"], overwrite)
+                            run(home, _install_args(jobs, "never"), op, "install-source-retry",
+                                envdir=envdir, timeout=timeout, progress=progress)
+                        else:
+                            if source_hashes:
+                                if progress:
+                                    progress(f"Build {len(source_hashes)} packages from source")
+                                run(home, _install_args(jobs, "auto", source_hashes), op,
+                                    "install", envdir=envdir, timeout=timeout, progress=progress)
             final = _snapshot(home, envdir, op, "installed") if roots else plan
             missing = [
                 p["name"]

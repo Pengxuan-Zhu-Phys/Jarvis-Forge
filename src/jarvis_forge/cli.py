@@ -69,7 +69,7 @@ def root(ctx: typer.Context,
          home: Optional[str] = typer.Option(None, "--home", help="Use this Forge user directory; init remembers it.", metavar="<path>"),
          as_json: bool = typer.Option(False, "--json", help="Output one JSON object."),
          version: bool = typer.Option(False, "--version", "-v", help="Show the version and exit.", is_eager=True),
-         verbose: bool = typer.Option(False, "--verbose", help="Show raw Spack commands and output for apt operations."),
+         verbose: bool = typer.Option(False, "--verbose", help="Show commands and raw output for apt and build operations."),
          debug: bool = typer.Option(False, "--debug", "-d", help="Show diagnostic tracebacks.")):
     # Version queries must remain available even if a saved preference is corrupt.
     ctx.obj = Settings(ForgeHome.resolve(home, read_default=not version), as_json,

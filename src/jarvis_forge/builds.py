@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import sys
 
@@ -358,6 +359,22 @@ class _AptInstallProgress:
         return self.display.command_failure(number, code, stderr)
 
 
+def _step_title(step):
+    name, _, action = step["id"].partition(".")
+    if action.startswith("command-"):
+        if name == "preflight":
+            return "Preflight checks" if step["uses"] == "check" else "Preflight command"
+        if name in {"checks", "acceptance"} or f"{name}.install" in step.get("needs", ()):
+            return "Acceptance checks" if step["uses"] == "check" else "Acceptance command"
+    if step["uses"] == "apt.install":
+        return "Install dependencies" if name == "packages" else f"Install {name} dependencies"
+    if step["uses"] == "cmake.project":
+        return "Build " + step["id"].removesuffix(".install")
+    if step["uses"] == "check":
+        return f"Check {name}"
+    return "Run " + step["id"]
+
+
 def execute(home, reference=None, *, parameters=None, environment_name=None, jobs=1, resume=None, progress=None, verbose=False, as_json=False):
     home.require_initialized()
     if jobs < 1:
@@ -387,17 +404,21 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
         state_path = directory / "graph.lock.json"
         state = read_json(state_path) if resume and state_path.exists() else {"schema_version": 1, "nodes": {}}
         from .build_logging import ProcessLog
-        process_log = ProcessLog(attempts / "build.log", "Jarvis-Forge.Build", progress)
+        process_log = ProcessLog(attempts / "build.log", "Jarvis-Forge.Build", progress if verbose else None)
+        active_step = None
 
-        def event(message, component="Build", *, echo=True):
+        def event(message, component="Build", *, echo=True, display=None):
             with (attempts / "events.jsonl").open("a") as out:
                 out.write(json.dumps({"at": now(), "message": message}) + "\n")
             if echo:
                 process_log(message, module="Jarvis-Forge." + component)
+                if progress and not verbose:
+                    progress(display if display is not None else message)
             else:
                 process_log.write(message, module="Jarvis-Forge." + component)
 
         def run_node(key, policy="reuse-or-build", requirement=None):
+            nonlocal active_step
             if key in result["nodes"]:
                 return result["nodes"][key]
             node = selected_graph["nodes"][key]
@@ -483,7 +504,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
             if workspace:
                 from .build_workspace import link_run
                 link_run(workspace, directory)
-                event(f"Workspace: {workspace}; instance: {work}")
+                event(f"Workspace: {workspace}; instance: {work}", echo=verbose)
             with file_lock(work / "instance.lock"):
                 existing_outputs = {}
                 for name in config.get("outputs", {}):
@@ -533,7 +554,13 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                 records = {}
                 for index, step in enumerate(node["ordered"], 1):
                     step_id = step["id"]
-                    event(f"[{index}/{len(node['ordered'])}] {config['id']} / {step_id}")
+                    total = len(node["ordered"])
+                    title = _step_title(step)
+                    active_step = {"build": config["id"], "id": step_id, "title": title,
+                                   "index": index, "total": total}
+                    project = config["id"] + " · " if config["id"] != request["suite_id"] else ""
+                    event(f"[{index}/{total}] {config['id']} / {step_id}",
+                          display=f"[{index}/{total}] {project}{title}")
                     # Download sources only when the first consuming step is ready;
                     # ROOT preflight and apt dependencies run before its large archive.
                     for name, (source_spec, target) in list(pending_archives.items()):
@@ -588,6 +615,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                         row["steps"].pop(step_id, None)
                         write_json(state_path, state)
                         raise
+                    active_step = None
                 outputs = {}
                 for name, spec in config.get("outputs", {}).items():
                     producer = records[spec["step"]]
@@ -616,6 +644,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                 return finished
 
         try:
+            event(("Resume " if resume else "Build ") + request["suite_id"], echo=not verbose)
             final = run_node(selected_graph["root"])
             result.update(status="passed", outputs=final["outputs"])
             if request.get("workspace"):
@@ -625,10 +654,14 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
             result.update(status="interrupted", error="Interrupted.")
         except (ForgeError, OSError, ValueError) as exc:
             result.update(status="failed", error=str(exc))
+            if isinstance(exc, ForgeError) and exc.hint:
+                result["hint"] = exc.hint
         finally:
+            if active_step is not None and result["status"] in {"failed", "interrupted"}:
+                result["failed_step"] = active_step
             result["finished_at"] = now()
-            process_log("Build " + result["status"] + (": " + result["error"] if result.get("error") else ""),
-                        level="ERROR" if result["status"] == "failed" else "WARNING" if result["status"] == "interrupted" else "INFO")
+            process_log.write("Build " + result["status"] + (": " + result["error"] if result.get("error") else ""),
+                              level="ERROR" if result["status"] == "failed" else "WARNING" if result["status"] == "interrupted" else "INFO")
             write_json(attempts / "result.json", result)
             write_json(directory / "result.json", result)
         return result
@@ -657,17 +690,32 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
         paths.setdefault("CMAKE_PREFIX_PATH", []).extend(prefix_paths)
     if step["uses"] == "cmake.project":
         write_json(logs / "dependency-paths.json", {key: list(dict.fromkeys(values)) for key, values in paths.items()})
-        progress("Dependency paths: " + str(logs / "dependency-paths.json"), component="CMake")
+        progress("Dependency paths: " + str(logs / "dependency-paths.json"), component="CMake", echo=verbose)
     script = cmake.write_environment(logs / "environment.sh", base=environment, scripts=scripts, paths=paths)
     number = 0
 
-    def invoke(argv, cwd):
+    def invoke(argv, cwd, title="Command"):
         nonlocal number
         number += 1
-        progress("Command: " + __import__("shlex").join(argv),
+        progress("Command: " + shlex.join(argv), echo=verbose,
                  component="CMake" if step["uses"] == "cmake.project" else "Checker" if step["uses"] == "check" else "Calculator")
         try:
-            run_command(argv, cwd, script, logs, str(number), step.get("timeout_seconds", 86400), progress=progress, process_env=environment)
+            run_command(argv, cwd, script, logs, str(number), step.get("timeout_seconds", 86400),
+                        progress=progress if verbose else None, process_env=environment)
+        except ForgeError as exc:
+            command_record = logs / f"command-{number}.json"
+            if not command_record.is_file():
+                raise
+            command = read_json(command_record)
+            code = command.get("exit_code")
+            if command["status"] != "failed" or not isinstance(code, int) or code <= 0:
+                raise
+            message = f"{title} failed (exit {code})."
+            if not verbose:
+                detail = (logs / f"command-{number}.stderr.log").read_text(errors="replace").strip()
+                if detail:
+                    message += "\n" + detail
+            raise ForgeError(message, code=exc.code) from exc
         finally:
             for stream in ("stdout", "stderr"):
                 source_log = logs / f"command-{number}.{stream}.log"
@@ -689,7 +737,7 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
         # Package dependencies belong in the apt environment. With no apt switch
         # that is spack-default, the same store and compilers as `jforge apt`.
         # The screen uses the same phase and package display as `jforge apt install`.
-        display = AptProgress(_console(stderr=True), verbose=verbose, as_json=as_json)
+        display = AptProgress(_console(stderr=True), verbose=verbose, as_json=as_json, indent="  ")
         reporter = _AptInstallProgress(progress, display)
         try:
             with process_environment(environment):
@@ -711,7 +759,10 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
                 "profile": str(target.root)}
     if step["uses"] == "check":
         from .standard_checks import execute
-        report = execute(options["spec"], observed["python"]["path"], lambda argv: invoke(argv, work), logs)
+        report = execute(options["spec"], observed["python"]["path"], lambda argv: invoke(argv, work, "Check"), logs)
+        if not verbose:
+            detail = f" · Python {report['python']['version']}" if options["spec"].get("python") else ""
+            progress("  Checks passed" + detail, component="Checker")
         return {"status": "passed", "report": report, "artifacts": {str(logs / "checks.json"): digest(logs / "checks.json")}}
     if step["uses"] == "command":
         cwd = Path(options.get("cwd", str(work)))
@@ -772,7 +823,9 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
             query.mkdir(parents=True, exist_ok=True)
             for kind in ("codemodel-v2", "cache-v2", "toolchains-v1"):
                 (query / kind).touch()
-        invoke(invocation[phase], source)
+        title = f"CMake {phase}"
+        progress("  " + title, component="CMake", echo=not verbose)
+        invoke(invocation[phase], source, title)
         if phase == "configure":
             actual = cmake.cache_values(build)
             for dep in used:

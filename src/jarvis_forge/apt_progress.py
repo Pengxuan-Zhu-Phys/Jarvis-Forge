@@ -15,10 +15,11 @@ from .presentation import line
 
 
 class AptProgress:
-    def __init__(self, console, *, verbose=False, as_json=False, check=False):
+    def __init__(self, console, *, verbose=False, as_json=False, check=False, indent=""):
         self.console = console
         self.verbose = verbose
         self.as_json = as_json
+        self.indent = indent
         self.total = 2 if check else 4
         self.stage = 0
         self.preparing = False
@@ -50,16 +51,16 @@ class AptProgress:
                 self.live.update(self.task, completed=self.stage - 1,
                                  description=Text(stage[3]))
             else:
-                line(self.console, f"[{self.stage}/{self.total}] {stage[3]}")
+                line(self.console, f"{self.indent}[{self.stage}/{self.total}] {stage[3]}")
         elif message.startswith("Spack "):
             if self.verbose:
                 line(self.console, message,
                      style=None if self.as_json or os.environ.get("NO_COLOR") else "dim")
             elif not self.stage and not self.preparing:
-                line(self.console, "Preparing Spack environment...")
+                line(self.console, self.indent + "Preparing Spack environment...")
                 self.preparing = True
         else:
-            line(self.console, message)
+            line(self.console, self.indent + message)
 
     def installation_plan(self, packages, overwrite=()):
         self.pending = {p["hash"] for p in packages
@@ -118,8 +119,14 @@ class AptProgress:
                          description=Text("Installing " + status[3]))
 
     def command_failure(self, number, code, stderr):
-        title = {"concretize": "Dependency resolution", "install": "Package installation",
-                 "install-cache": "Binary installation"}.get(str(number), "Spack " + str(number))
+        title = {
+            "concretize": "Dependency resolution",
+            "concretize-cache-retry": "Source dependency resolution",
+            "install": "Package installation",
+            "install-cache": "Binary installation",
+            "install-binaries": "Remaining binary installation",
+            "install-source-retry": "Source installation",
+        }.get(str(number), "Spack " + str(number))
         message = f"{title} failed (exit {code})."
         if not self.verbose:
             # Keep the complete original line; full stdout/stderr stay in files.

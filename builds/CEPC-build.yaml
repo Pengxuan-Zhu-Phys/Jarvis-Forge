@@ -1,0 +1,23 @@
+# Parton-level CEPC baseline. The physics inputs live in the project's server_setup bundle.
+name: CEPC-build
+platforms: [linux]
+dependencies:
+  - "cepc-whizard@=3.2.0 hepmc=off ~pythia8~lcio~lhapdf~fastjet~openmp~openloops~gosam %c,cxx,fortran=gcc@11.1:"
+  - "cepc-madgraph@=3.8.1"
+  - "ocaml@=4.14.3"
+checks:
+  before:
+    python:
+      version: ">=3.10"
+    tools:
+      cc: ">=11.1"
+      c++: ">=11.1"
+      gfortran: ">=11.1"
+    scripts:
+      - path: scripts/cepc_acceptance.py
+        args: [preflight, "${build_dir}"]
+  after:
+    scripts:
+      - path: scripts/cepc_acceptance.py
+        args: [validate, "${build_dir}", "${work}", "${packages.cepc-whizard.prefix}",
+               "${packages.cepc-madgraph.prefix}", "${packages.ocaml.prefix}"]
