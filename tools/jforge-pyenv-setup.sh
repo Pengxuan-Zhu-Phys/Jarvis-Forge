@@ -133,9 +133,30 @@ activation_file="$state_dir/activate.sh"
 activation_tmp=$(mktemp "$state_dir/.activate.XXXXXX")
 cat > "$activation_tmp" <<'EOF'
 # Add the Jforge launcher to PATH while keeping the current Python selection.
-case ":${PATH-}:" in
-    ":$HOME/.jarvis-pyenv/jforge-bootstrap/bin:"*) ;;
-    *) export PATH="$HOME/.jarvis-pyenv/jforge-bootstrap/bin${PATH:+:$PATH}" ;;
+_jforge_bootstrap_bin="$HOME/.jarvis-pyenv/jforge-bootstrap/bin"
+_jforge_bootstrap_path=${PATH:+":$PATH:"}
+case "$_jforge_bootstrap_path" in
+    ":$_jforge_bootstrap_bin:"*) ;;
+    *)
+        # Re-sourcing after package activation can find the launcher later in PATH.
+        while [ "${_jforge_bootstrap_path#*":$_jforge_bootstrap_bin:"}" != "$_jforge_bootstrap_path" ]; do
+            _jforge_bootstrap_path="${_jforge_bootstrap_path%%":$_jforge_bootstrap_bin:"*}:${_jforge_bootstrap_path#*":$_jforge_bootstrap_bin:"}"
+        done
+        export PATH="$_jforge_bootstrap_bin${_jforge_bootstrap_path%:}"
+        ;;
+esac
+unset _jforge_bootstrap_bin _jforge_bootstrap_path
+
+# Load the selected package environment and refresh it after interactive apt changes.
+case "${0##*/}:$-" in
+    sh:*|-sh:*) ;;
+    *:*i*)
+        if [ -n "${BASH_VERSION-}${ZSH_VERSION-}" ] &&
+            _jforge_bootstrap_hook=$(command jforge apt shell-init); then
+            eval "$_jforge_bootstrap_hook"
+        fi
+        unset _jforge_bootstrap_hook
+        ;;
 esac
 EOF
 mv -f "$activation_tmp" "$activation_file"
