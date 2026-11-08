@@ -4,12 +4,12 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage: bash jforge-pyenv-setup.sh [OPTIONS]
-Install pyenv, CPython and Jarvis-Forge under ~/.jarvis-pyenv.
+Install Jarvis-Forge under ~/.jarvis-pyenv using an existing pyenv when available.
 
 Options
   --python <version>       Select a CPython patch version (default: 3.13.15).
-  --install-build-deps    Install system build dependencies if Python needs
-                          building (Homebrew, apt or dnf; apt/dnf may use sudo).
+  --install-build-deps    Install Python build dependencies through Homebrew
+                          or the Linux package manager if Python needs building.
   --no-shell-config       Leave startup files alone and print a source command.
   -h, --help              Show this message and exit.
 EOF
@@ -52,25 +52,34 @@ if "$configure_startup"; then
         *) usage_error "Unsupported login shell: $login_shell. Use --no-shell-config for manual setup." ;;
     esac
 fi
-case "$(uname -s)" in
+platform=$(uname -s)
+case "$platform" in
     Darwin|Linux) ;;
     *) fail 'This installer supports macOS and Linux, including WSL.' ;;
 esac
 
-export PYENV_ROOT="$HOME/.jarvis-pyenv"
-[[ "$PYENV_ROOT" == /* ]] || fail 'PYENV_ROOT must be an absolute path.'
-[[ ! -L "$PYENV_ROOT" ]] || fail "Use a directory at $PYENV_ROOT. This path is a symbolic link."
-state_dir="$PYENV_ROOT/jforge-bootstrap"
-# Keep the lock outside PYENV_ROOT so a first-time git clone has an empty target.
-lock_dir="${PYENV_ROOT%/}.jforge-bootstrap.lock"
+bootstrap_root="$HOME/.jarvis-pyenv"
+[[ "$bootstrap_root" == /* ]] || fail 'HOME must be an absolute path.'
+[[ ! -L "$bootstrap_root" ]] || fail "Use a directory at $bootstrap_root. This path is a symbolic link."
+state_dir="$bootstrap_root/jforge-bootstrap"
+# Serialize installers that share the launcher and activation file.
+lock_dir="$bootstrap_root.jforge-bootstrap.lock"
 mkdir -p "$(dirname "$lock_dir")"
 mkdir "$lock_dir" || fail "Another installation may be running. If it was interrupted, remove $lock_dir and retry."
 trap 'rmdir "$lock_dir"' EXIT
 
 install_build_deps() {
-    if [[ "$(uname -s)" == Darwin ]]; then
+    if [[ "$platform" == Darwin ]]; then
         xcode-select -p >/dev/null 2>&1 || fail 'Run xcode-select --install, then retry.'
-        command -v brew >/dev/null || fail 'Install Homebrew from https://brew.sh/ and retry.'
+        if ! command -v brew >/dev/null; then
+            if [[ -x /opt/homebrew/bin/brew ]]; then
+                export PATH="/opt/homebrew/bin:$PATH"
+            elif [[ -x /usr/local/bin/brew ]]; then
+                export PATH="/usr/local/bin:$PATH"
+            else
+                fail 'Install Homebrew from https://brew.sh/ and retry.'
+            fi
+        fi
         brew install openssl@3 readline sqlite xz tcl-tk@8 pkgconf >&2
         return
     fi
@@ -80,41 +89,142 @@ install_build_deps() {
         command -v sudo >/dev/null || fail 'Ask your administrator to install Python build dependencies.'
         admin=(sudo)
     fi
+    local fetch_tools=(git)
+    if ! command -v curl >/dev/null && ! command -v wget >/dev/null; then
+        fetch_tools+=(curl)
+    fi
     if command -v apt-get >/dev/null; then
         "${admin[@]}" apt-get update >&2
-        "${admin[@]}" apt-get install -y build-essential curl git libssl-dev zlib1g-dev \
+        "${admin[@]}" apt-get install -y build-essential patch libssl-dev zlib1g-dev \
             libbz2-dev libreadline-dev libsqlite3-dev libncurses-dev xz-utils tk-dev \
-            libffi-dev liblzma-dev >&2
-    elif command -v dnf >/dev/null; then
-        "${admin[@]}" dnf install -y gcc make patch curl git openssl-devel zlib-devel \
+            libffi-dev liblzma-dev "${fetch_tools[@]}" >&2
+    elif command -v dnf >/dev/null || command -v yum >/dev/null; then
+        local rpm_manager
+        rpm_manager=$(type -P dnf || type -P yum)
+        "${admin[@]}" "$rpm_manager" install -y gcc make patch tar xz openssl-devel zlib-devel \
             bzip2-devel readline-devel sqlite-devel ncurses-devel xz-devel \
-            libffi-devel >&2
+            libffi-devel "${fetch_tools[@]}" >&2
+    elif command -v zypper >/dev/null; then
+        "${admin[@]}" zypper --non-interactive install gcc make patch xz openssl-devel \
+            zlib-devel libbz2-devel readline-devel sqlite3-devel ncurses-devel xz-devel \
+            libffi-devel "${fetch_tools[@]}" >&2
+    elif command -v pacman >/dev/null; then
+        "${admin[@]}" pacman -S --needed --noconfirm base-devel openssl zlib bzip2 \
+            readline sqlite ncurses xz libffi "${fetch_tools[@]}" >&2
+    elif command -v apk >/dev/null; then
+        "${admin[@]}" apk add --no-cache build-base linux-headers patch xz openssl-dev zlib-dev \
+            bzip2-dev readline-dev sqlite-dev ncurses-dev xz-dev libffi-dev \
+            "${fetch_tools[@]}" >&2
     else
         fail 'Install Python build dependencies for your system and retry.'
     fi
 }
 
-base_python="$PYENV_ROOT/versions/$python_version/bin/python"
+pyenv_bin=
+pyenv_root=
+base_python=
+private_pyenv="$bootstrap_root/bin/pyenv"
+if [[ ! -x "$private_pyenv" ]]; then
+    private_pyenv="$bootstrap_root/pyenv/bin/pyenv"
+fi
+
+# Remember the first working pyenv, but prefer one that already has the requested Python.
+consider_pyenv() {
+    local candidate=$1 root_hint=$2 candidate_root candidate_python
+    [[ -x "$candidate" ]] || return 1
+    candidate_root=$(PYENV_ROOT="$root_hint" "$candidate" root) || return 1
+    [[ "$candidate_root" == /* ]] || return 1
+    candidate_root=${candidate_root%/}
+    candidate_python="$candidate_root/versions/$python_version/bin/python"
+    if [[ -z "$pyenv_bin" || -x "$candidate_python" ]]; then
+        pyenv_bin=$candidate
+        pyenv_root=$candidate_root
+        base_python=$candidate_python
+    fi
+    [[ -x "$candidate_python" ]]
+}
+
+configured_root=${PYENV_ROOT-}
+configured_root=${configured_root%/}
+if [[ "$configured_root" == "$bootstrap_root" ]]; then
+    configured_root=
+fi
+if [[ -n "$configured_root" ]]; then
+    consider_pyenv "$configured_root/bin/pyenv" "$configured_root" || :
+fi
+if [[ ! -x "$base_python" ]]; then
+    while IFS= read -r candidate; do
+        [[ "$candidate" -ef "$private_pyenv" ]] && continue
+        if consider_pyenv "$candidate" "$configured_root"; then
+            break
+        fi
+    done < <(
+        type -aP pyenv || :
+        printf '%s\n' "$HOME/.local/bin/pyenv" /usr/local/bin/pyenv /usr/bin/pyenv
+        if [[ "$platform" == Darwin ]]; then
+            printf '%s\n' /opt/homebrew/bin/pyenv
+        else
+            printf '%s\n' /home/linuxbrew/.linuxbrew/bin/pyenv "$HOME/.linuxbrew/bin/pyenv"
+        fi
+    )
+fi
+if [[ ! -x "$base_python" ]]; then
+    consider_pyenv "$HOME/.pyenv/bin/pyenv" "$HOME/.pyenv" || :
+fi
+if [[ ! -x "$base_python" && -n "$pyenv_bin" && "$pyenv_root" != "$HOME/.pyenv" ]]; then
+    consider_pyenv "$pyenv_bin" "$HOME/.pyenv" || :
+fi
+if [[ ! -x "$base_python" ]]; then
+    consider_pyenv "$private_pyenv" "$bootstrap_root" || :
+fi
+
 if [[ ! -x "$base_python" ]] && "$install_deps"; then
     install_build_deps
 fi
-pyenv_bin="$PYENV_ROOT/bin/pyenv"
-if [[ ! -x "$pyenv_bin" ]]; then
-    printf 'Installing pyenv in %s\n' "$PYENV_ROOT" >&2
+new_pyenv=false
+if [[ -z "$pyenv_bin" ]]; then
+    pyenv_root=$bootstrap_root
+    pyenv_bin=$private_pyenv
+    base_python="$pyenv_root/versions/$python_version/bin/python"
+    printf 'Installing pyenv in %s\n' "$pyenv_root" >&2
     command -v git >/dev/null || fail 'Install Git and retry.'
     git -c advice.detachedHead=false clone --depth 1 --branch v2.8.14 --single-branch \
-        https://github.com/pyenv/pyenv.git "$PYENV_ROOT" >&2
+        https://github.com/pyenv/pyenv.git "$pyenv_root/pyenv" >&2
+    new_pyenv=true
+else
+    printf 'Using pyenv at %s (root %s)\n' "$pyenv_bin" "$pyenv_root" >&2
 fi
 
 if [[ ! -x "$base_python" ]]; then
     printf 'Building CPython %s with pyenv\n' "$python_version" >&2
-    "$pyenv_bin" install "$python_version" >&2 ||
-        fail "If build dependencies are missing, retry with --install-build-deps. If pyenv does not know $python_version, update pyenv or choose an available version with --python."
+    PYENV_ROOT="$pyenv_root" "$pyenv_bin" install --skip-existing "$python_version" >&2 ||
+        fail "Could not install $python_version in $pyenv_root. For missing build dependencies, retry with --install-build-deps. If pyenv does not know this version, update pyenv or choose an installed version with --python."
 fi
-"$base_python" -I -c 'import bz2, ctypes, lzma, sqlite3, ssl, zlib' ||
-    fail "The pyenv Python at $base_python is missing standard modules. Install the build dependencies and rebuild it with pyenv, or choose another version with --python."
+python_id=$("$base_python" -I - "$python_version" <<'PY'
+import hashlib
+import os
+import sys
+
+if sys.implementation.name != "cpython" or ".".join(map(str, sys.version_info[:3])) != sys.argv[1]:
+    sys.exit(f"Expected CPython {sys.argv[1]}, found {sys.version.split()[0]}.")
+try:
+    import bz2, ctypes, lzma, sqlite3, ssl, zlib
+except ImportError as error:
+    sys.exit(str(error))
+print(hashlib.sha256(os.fsencode(os.path.realpath(sys.executable))).hexdigest()[:16])
+PY
+) || fail "Python validation failed at $base_python. For an incomplete build, install the missing development libraries and rebuild that version with pyenv, or select a working version with --python."
+
+# Set a default only for a new, private pyenv. Existing selections belong to the user.
+if "$new_pyenv" && [[ ! -e "$pyenv_root/version" && ! -L "$pyenv_root/version" ]]; then
+    PYENV_ROOT="$pyenv_root" "$pyenv_bin" global "$python_version"
+fi
 
 venv="$state_dir/venvs/$python_version"
+if [[ "$pyenv_root" != "$bootstrap_root" ]]; then
+    # Keep venvs separate when the same Python version comes from different roots.
+    venv="$venv-$python_id"
+fi
 mkdir -p "$state_dir/bin"
 if ! "$venv/bin/python" -I -m pip --version >/dev/null 2>&1; then
     "$base_python" -I -m venv "$venv"
@@ -161,11 +271,6 @@ esac
 EOF
 mv -f "$activation_tmp" "$activation_file"
 
-# Initialize the default only when pyenv has no saved global selection.
-if [[ ! -e "$PYENV_ROOT/version" && ! -L "$PYENV_ROOT/version" ]]; then
-    "$pyenv_bin" global "$python_version"
-fi
-
 if ! "$configure_startup"; then
     printf '\nAdd this line to ~/.bashrc (or ~/.zshrc for Zsh)\n'
     printf 'source "%s"\n' "\$HOME/.jarvis-pyenv/jforge-bootstrap/activate.sh"
@@ -186,18 +291,22 @@ configure_shell() {
         if "$interactive_only"; then
             printf 'case $- in *i*)\n'
         fi
-        printf 'if [ -n "${BASH_VERSION-}${ZSH_VERSION-}" ] &&\n'
-        printf '    { [ -z "${PYENV_ROOT-}" ] || [ "$PYENV_ROOT" = %q ]; } &&\n' "$PYENV_ROOT"
-        printf '    ! typeset -f pyenv >/dev/null 2>&1; then\n'
-        printf '    case "${0##*/}:$PATH:" in\n'
-        printf '        sh:*|-sh:*|*:"$HOME/.pyenv/shims":*) ;;\n'
-        printf '        *)\n'
-        printf '            export PYENV_ROOT=%q\n' "$PYENV_ROOT"
-        printf '            export PATH=%q:"$PATH"\n' "$PYENV_ROOT/bin"
-        printf '            eval "$(pyenv init - %s)"\n' "$login_shell"
-        printf '            ;;\n'
-        printf '    esac\n'
-        printf 'fi\n'
+        if "$new_pyenv" ||
+            { [[ -x "$private_pyenv" && -f "$rc" ]] &&
+                grep -Fqx "$(printf '            export PYENV_ROOT=%q' "$bootstrap_root")" "$rc"; }; then
+            printf 'if [ -n "${BASH_VERSION-}${ZSH_VERSION-}" ] &&\n'
+            printf '    { [ -z "${PYENV_ROOT-}" ] || [ "$PYENV_ROOT" = %q ]; } &&\n' "$bootstrap_root"
+            printf '    ! typeset -f pyenv >/dev/null 2>&1; then\n'
+            printf '    case "${0##*/}:$PATH:" in\n'
+            printf '        sh:*|-sh:*|*:"$HOME/.pyenv/shims":*) ;;\n'
+            printf '        *)\n'
+            printf '            export PYENV_ROOT=%q\n' "$bootstrap_root"
+            printf '            export PATH=%q:"$PATH"\n' "$(dirname "$private_pyenv")"
+            printf '            eval "$(pyenv init - %s)"\n' "$login_shell"
+            printf '            ;;\n'
+            printf '    esac\n'
+            printf 'fi\n'
+        fi
         printf 'if [ -r %q ]; then . %q; fi\n' "$activation_file" "$activation_file"
         if "$interactive_only"; then
             printf ';; esac\n'
