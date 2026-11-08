@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage: bash jforge-pyenv-setup.sh [OPTIONS]
-Install pyenv, CPython and Jarvis-Forge for the current user.
+Install pyenv, CPython and Jarvis-Forge under ~/.jarvis-pyenv.
 
 Options
   --python <version>       Select a CPython patch version (default: 3.13.15).
@@ -52,8 +52,9 @@ case "$(uname -s)" in
     *) fail 'This installer supports macOS and Linux, including WSL.' ;;
 esac
 
-export PYENV_ROOT=${PYENV_ROOT:-"$HOME/.pyenv"}
+export PYENV_ROOT="$HOME/.jarvis-pyenv"
 [[ "$PYENV_ROOT" == /* ]] || fail 'PYENV_ROOT must be an absolute path.'
+[[ ! -L "$PYENV_ROOT" ]] || fail "Use a directory at $PYENV_ROOT. This path is a symbolic link."
 state_dir="$PYENV_ROOT/jforge-bootstrap"
 # Keep the lock outside PYENV_ROOT so a first-time git clone has an empty target.
 lock_dir="${PYENV_ROOT%/}.jforge-bootstrap.lock"
@@ -92,16 +93,13 @@ base_python="$PYENV_ROOT/versions/$python_version/bin/python"
 if [[ ! -x "$base_python" ]] && "$install_deps"; then
     install_build_deps
 fi
-if [[ -x "$PYENV_ROOT/bin/pyenv" ]]; then
-    pyenv_bin="$PYENV_ROOT/bin/pyenv"
-elif ! pyenv_bin=$(type -P pyenv); then
+pyenv_bin="$PYENV_ROOT/bin/pyenv"
+if [[ ! -x "$pyenv_bin" ]]; then
     printf 'Installing pyenv in %s\n' "$PYENV_ROOT" >&2
     command -v git >/dev/null || fail 'Install Git and retry.'
     git -c advice.detachedHead=false clone --depth 1 --branch v2.8.14 --single-branch \
         https://github.com/pyenv/pyenv.git "$PYENV_ROOT" >&2
-    pyenv_bin="$PYENV_ROOT/bin/pyenv"
 fi
-pyenv_bin="$(cd "$(dirname "$pyenv_bin")" && pwd -P)/pyenv"
 
 if [[ ! -x "$base_python" ]]; then
     printf 'Building CPython %s with pyenv\n' "$python_version" >&2
@@ -137,24 +135,23 @@ configure_shell() {
     local interactive_only=${2:-false}
     local start_marker='# >>> jforge pyenv setup >>>'
     local end_marker='# <<< jforge pyenv setup <<<'
-    local root_line
-    printf -v root_line 'export PYENV_ROOT=${PYENV_ROOT:-%q}' "$PYENV_ROOT"
-    if [[ -f "$rc" ]] && grep -Fxq "$start_marker" "$rc"; then
-        if ! grep -Fxq "$end_marker" "$rc" || ! grep -Fxq "$root_line" "$rc"; then
-            fail "Remove the incomplete or differently configured jforge pyenv setup block in $rc and retry."
-        fi
-        return
-    fi
-    mkdir -p "$(dirname "$rc")"
-    {
-        printf '\n%s\n' "$start_marker"
+    local block
+    block=$(
+        printf '%s\n' "$start_marker"
         if "$interactive_only"; then
             printf 'case $- in *i*)\n'
         fi
-        printf '%s\n' "$root_line"
-        printf 'if ! typeset -f pyenv >/dev/null; then\n'
-        printf '    export PATH=%q:"$PATH"\n' "$(dirname "$pyenv_bin")"
-        printf '    eval "$(pyenv init - %s)"\n' "$login_shell"
+        printf 'if [ -n "${BASH_VERSION-}${ZSH_VERSION-}" ] &&\n'
+        printf '    { [ -z "${PYENV_ROOT-}" ] || [ "$PYENV_ROOT" = %q ]; } &&\n' "$PYENV_ROOT"
+        printf '    ! typeset -f pyenv >/dev/null 2>&1; then\n'
+        printf '    case "${0##*/}:$PATH:" in\n'
+        printf '        sh:*|-sh:*|*:"$HOME/.pyenv/shims":*) ;;\n'
+        printf '        *)\n'
+        printf '            export PYENV_ROOT=%q\n' "$PYENV_ROOT"
+        printf '            export PATH=%q:"$PATH"\n' "$PYENV_ROOT/bin"
+        printf '            eval "$(pyenv init - %s)"\n' "$login_shell"
+        printf '            ;;\n'
+        printf '    esac\n'
         printf 'fi\n'
         printf 'case ":$PATH:" in *:%q:*) ;; *) export PATH=%q:"$PATH" ;; esac\n' \
             "$state_dir/bin" "$state_dir/bin"
@@ -162,7 +159,39 @@ configure_shell() {
             printf ';; esac\n'
         fi
         printf '%s\n' "$end_marker"
-    } >> "$rc"
+    )
+    "$base_python" -I - "$rc" "$block" "$start_marker" "$end_marker" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+from tempfile import NamedTemporaryFile
+
+rc = Path(sys.argv[1]).resolve()
+block, start, end = map(os.fsencode, sys.argv[2:])
+current = rc.read_bytes() if rc.exists() else b""
+lines = current.splitlines(keepends=True)
+starts = [index for index, line in enumerate(lines) if line.rstrip(b"\r\n") == start]
+ends = [index for index, line in enumerate(lines) if line.rstrip(b"\r\n") == end]
+if not starts and not ends:
+    updated = current + (b"\n" if current else b"") + block + b"\n"
+elif len(starts) == len(ends) == 1 and starts[0] < ends[0]:
+    updated = b"".join(lines[:starts[0]] + [block + b"\n"] + lines[ends[0] + 1:])
+else:
+    sys.exit(f"Remove the incomplete or duplicated jforge pyenv setup block in {rc} and retry.")
+
+if updated != current:
+    rc.parent.mkdir(parents=True, exist_ok=True)
+    mode = stat.S_IMODE(rc.stat().st_mode) if rc.exists() else 0o600
+    with NamedTemporaryFile(dir=rc.parent, delete=False) as temp:
+        replacement = Path(temp.name)
+    try:
+        replacement.write_bytes(updated)
+        replacement.chmod(mode)
+        replacement.replace(rc)
+    finally:
+        replacement.unlink(missing_ok=True)
+PY
 }
 
 if [[ "$login_shell" == zsh ]]; then
