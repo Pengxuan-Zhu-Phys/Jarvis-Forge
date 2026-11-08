@@ -67,6 +67,7 @@ def execute(home: ForgeHome, suite_path: Path, progress=None, *, environment_nam
     write_json(run_dir / "request.json", request)
     records = []
     result = {**request, "status": "running", "steps": records, "path": str(run_dir)}
+    write_json(run_dir / "result.json", result)
 
     def event(kind: str, **values) -> None:
         with (run_dir / "events.jsonl").open("a", encoding="utf-8") as stream:

@@ -123,13 +123,9 @@ case "$PATH" in *forge-app*) exit 13 ;; esac
             timeout=120,
         )
     assert (home.root / "apt/state.json").read_bytes() == before
-    changed = b.transact(
-        home, "install", ["forge-app@=2.0"], cache="never", timeout=120
-    )
-    assert (
-        next(p for p in changed["packages"] if p["name"] == "forge-app")["version"]
-        == "2.0"
-    )
+    with pytest.raises(ForgeError, match="forge-app already occupies"):
+        b.transact(home, "install", ["forge-app@=2.0"], cache="never", timeout=120)
+    assert (home.root / "apt/state.json").read_bytes() == before
     removed = b.transact(home, "remove", ["forge-app"], timeout=120)
     assert [p["name"] for p in removed["packages"]] == ["forge-lib"]
     assert removed["store_retained"]

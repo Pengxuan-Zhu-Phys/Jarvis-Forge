@@ -10,6 +10,7 @@ Options
   --python <version>       Select a CPython patch version (default: 3.13.15).
   --install-build-deps    Install Python build dependencies through Homebrew
                           or the Linux package manager if Python needs building.
+  --upgrade               Upgrade Jarvis-Forge in the selected virtual environment.
   --no-shell-config       Leave startup files alone and print a source command.
   -h, --help              Show this message and exit.
 EOF
@@ -27,6 +28,7 @@ usage_error() {
 
 python_version=3.13.15
 install_deps=false
+upgrade_package=false
 configure_startup=true
 while (( $# )); do
     case "$1" in
@@ -36,6 +38,7 @@ while (( $# )); do
             shift 2
             ;;
         --install-build-deps) install_deps=true; shift ;;
+        --upgrade) upgrade_package=true; shift ;;
         --no-shell-config) configure_startup=false; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage_error "Unknown option: $1" ;;
@@ -229,14 +232,24 @@ mkdir -p "$state_dir/bin"
 if ! "$venv/bin/python" -I -m pip --version >/dev/null 2>&1; then
     "$base_python" -I -m venv "$venv"
 fi
-"$venv/bin/python" -I -m pip --require-virtualenv install Jarvis-Forge >&2
-"$venv/bin/jforge" --version
+pip_args=(install)
+if "$upgrade_package"; then
+    pip_args+=(--upgrade)
+fi
+"$venv/bin/python" -I -m pip --require-virtualenv "${pip_args[@]}" Jarvis-Forge >&2
 
 launcher="$state_dir/bin/jforge"
 if [[ -e "$launcher" && ! -L "$launcher" ]]; then
     fail "Move the existing file at $launcher before retrying."
 fi
-ln -sfn "$venv/bin/jforge" "$launcher"
+launcher_target="$venv/bin/jforge-isolated"
+launcher_tmp=$(mktemp "$venv/bin/.jforge.XXXXXX")
+printf '#!/bin/bash\nif [ "${1-}" = __jforge_controller_python ]; then\n    shift\n    exec %q -I -B "$@"\nfi\nexport JFORGE_CONTROLLER_LAUNCHER=%q\nexec %q -I -m jarvis_forge "$@"\n' \
+    "$venv/bin/python" "$launcher" "$venv/bin/python" > "$launcher_tmp"
+chmod u+x "$launcher_tmp"
+"$launcher_tmp" --version
+mv -f "$launcher_tmp" "$launcher_target"
+ln -sfn "$launcher_target" "$launcher"
 
 activation_file="$state_dir/activate.sh"
 [[ ! -d "$activation_file" ]] || fail "Move the existing directory at $activation_file before retrying."

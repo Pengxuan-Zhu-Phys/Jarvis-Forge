@@ -16,7 +16,7 @@ import uuid
 
 import yaml
 
-from .storage import ForgeError, digest, now, read_json, write_json
+from .storage import ForgeError, ForgeHome, digest, now, read_json, write_json, write_text
 
 ENGINE_VERSION = "1.2.2"
 INSTALL_PROJECTION = "{name}"
@@ -241,6 +241,8 @@ def _executable(home):
 def command(home, args, envdir=None):
     result = [
         sys.executable,
+        "-I",
+        "-B",
         str(_executable(home)),
         "--color=never",
         "-C",
@@ -285,6 +287,7 @@ def run(home, args, op, label, *, envdir=None, timeout=3600, progress=None):
         label,
         timeout,
         progress,
+        combined_logs=getattr(progress, "combined_logs", None),
     )
     return (op / f"command-{label}.stdout.log").read_text(
         encoding="utf-8", errors="replace"
@@ -323,6 +326,10 @@ def _check_python_location(home, selected):
     if any(Path(prefix).resolve().is_relative_to(forge_home) for prefix in prefixes):
         raise ForgeError("The selected Python is inside the Forge data directory.",
                          hint="Select an external Python with pyenv and initialize a fresh apt profile.")
+    controller_venvs = Path.home() / ".jarvis-pyenv/jforge-bootstrap/venvs"
+    if Path(selected["prefix"]).resolve().is_relative_to(controller_venvs.resolve()):
+        raise ForgeError("The selected Python belongs to the JForge launcher.",
+                         hint="Select a project Python with pyenv and initialize a fresh apt profile.")
 
 
 def _python_reuse(*, buildcache=True):
@@ -393,6 +400,45 @@ def _unpack(home, source, directory, op, label):
             shutil.rmtree(temporary)
 
 
+def _missing_system_pyenv_python(executable):
+    pyenv = shutil.which("pyenv")
+    shim = Path(executable).resolve()
+    if not pyenv or shim.parent.name != "shims":
+        return False
+    options = dict(capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3)
+    try:
+        root = subprocess.run([pyenv, "root"], check=True, **options).stdout.strip()
+        if not Path(root).is_absolute() or shim != (Path(root) / "shims/python").resolve():
+            return False
+        version = subprocess.run([pyenv, "version-name"], check=True, **options).stdout.strip()
+        return version == "system" and subprocess.run([pyenv, "which", "python"], **options).returncode == 127
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _probe_external_python(executable, *, system_python3=None):
+    try:
+        probe = subprocess.run(
+            [
+                executable,
+                "-c",
+                'import json,sys;print(json.dumps({"executable":sys.executable,"version":sys.version.split()[0],"prefix":sys.prefix,"base_prefix":sys.base_prefix}))',
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=True,
+        )
+        return _json(probe.stdout, "Python selection")
+    except (OSError, subprocess.SubprocessError) as exc:
+        if (system_python3 and isinstance(exc, subprocess.CalledProcessError)
+                and exc.returncode == 127 and _missing_system_pyenv_python(executable)):
+            return _probe_external_python(system_python3)
+        raise ForgeError(f"Cannot use selected Python: {executable}") from exc
+
+
 def bootstrap(home, *, progress=None, extensions=None):
     from .package_operations import locked, operation
 
@@ -424,25 +470,17 @@ def bootstrap(home, *, progress=None, extensions=None):
         if not shutil.which("bash"):
             raise ForgeError("Spack backend requires Bash on PATH.")
         previous = settings(home) if configured(home) else None
-        executable = (previous["python"]["executable"] if previous
-                      else shutil.which("python") or shutil.which("python3") or sys.executable)
-        try:
-            probe = subprocess.run(
-                [
-                    executable,
-                    "-c",
-                    'import json,sys;print(json.dumps({"executable":sys.executable,"version":sys.version.split()[0],"prefix":sys.prefix,"base_prefix":sys.base_prefix}))',
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-                check=True,
+        if previous:
+            selected = _probe_external_python(previous["python"]["executable"])
+        else:
+            python = shutil.which("python")
+            python3 = shutil.which("python3")
+            if not (python or python3):
+                raise ForgeError("No external Python is available on PATH.",
+                                 hint="Select a project Python with pyenv before creating this apt profile.")
+            selected = _probe_external_python(
+                python or python3, system_python3=python3 if python else None,
             )
-            selected = _json(probe.stdout, "Python selection")
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise ForgeError(f"Cannot use selected Python: {executable}") from exc
         _check_python_location(home, selected)
         base = root(home)
         base.mkdir(parents=True, exist_ok=True)
@@ -581,18 +619,18 @@ def _generic_host_target(home):
     vendor = root(home) / "engine" / ENGINE_VERSION / "lib/spack/spack/vendor"
     if not (vendor / "archspec/cpu").is_dir():
         return None
-    env = os.environ.copy()
-    env.pop("PYTHONHOME", None)
-    env["PYTHONPATH"] = str(vendor)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
     try:
         probe = subprocess.run(
             [
                 sys.executable,
+                "-I",
+                "-B",
                 "-c",
+                "import sys; sys.path.insert(0, sys.argv[1])\n"
                 "import archspec.cpu as cpu\n"
                 "host = cpu.host()\n"
                 "print((host.generic or host).name)\n",
+                str(vendor),
             ],
             capture_output=True,
             text=True,
@@ -600,7 +638,6 @@ def _generic_host_target(home):
             errors="replace",
             timeout=30,
             check=False,
-            env=env,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise ForgeError("Cannot detect the host CPU target for this Spack store.") from exc
@@ -846,6 +883,95 @@ def _validate_external_python(home, packages):
             )
 
 
+def validate_project_python(home, packages, roots, executable):
+    """Check the runtime closure of this build's requested package roots."""
+    if executable is None:
+        return
+    names = {name_of(spec) for spec in roots}
+    by_hash = {package["hash"]: package for package in packages}
+    pending = [package["hash"] for package in packages if package.get("root") and package["name"] in names]
+    seen = set()
+    while pending:
+        digest = pending.pop()
+        if digest in seen or digest not in by_hash:
+            continue
+        seen.add(digest)
+        package = by_hash[digest]
+        if package["name"] in PYTHON_PACKAGES:
+            project = _probe_external_python(executable)
+            selected = settings(home)["python"]
+            if (project["version"] != selected["version"] or any(
+                    Path(project[key]).resolve() != Path(selected.get(key, selected["prefix"])).resolve()
+                    for key in ("prefix", "base_prefix"))):
+                raise ForgeError(
+                    f"Project Python {project['executable']} ({project['version']}, {project['prefix']}) "
+                    f"does not match apt Python {selected['executable']} ({selected['version']}, {selected['prefix']}).",
+                    code=1, hint="Select an apt profile created with the project Python before running this build.",
+                )
+            return
+        pending.extend(dep["hash"] for dep in package.get("node", {}).get("dependencies", [])
+                       if {"link", "run"}.intersection(dep["parameters"]["deptypes"]))
+
+
+def _adapter_script(home, envdir, revision):
+    bridge = revision / "spack_bridge.py"
+    mods = revision / "modifications.json"
+    argv = command(home, ["python", str(bridge), "render", str(mods)], envdir)
+    launcher = os.environ.get("JFORGE_CONTROLLER_LAUNCHER")
+    if launcher and Path(launcher).is_absolute():
+        argv = [launcher, "__jforge_controller_python", *argv[3:]]
+    values = _process_environment(home)
+    exports = ["SPACK_USER_CACHE_PATH", "SPACK_USER_CONFIG_PATH", "SPACK_SYSTEM_CONFIG_PATH", "SPACK_GNUPGHOME"]
+    # Render against the invoking shell's environment at source time.
+    invoke = ["env", "-u", "SPACK_ENV", "-u", "SPACK_ENV_VIEW", "-u", "SPACK_ROOT",
+              "-u", "SPACK_DISABLE_LOCAL_CONFIG", *[f"{key}={values[key]}" for key in exports], *argv]
+    return ("_JFORGE_SPACK_CODE=$(" + shlex.join(invoke)
+            + ') || return $?\neval "$_JFORGE_SPACK_CODE"\nunset _JFORGE_SPACK_CODE\n')
+
+
+def refresh_runtime_adapter(path):
+    """Regenerate a legacy adapter from its frozen inputs for a stable launcher."""
+    launcher = os.environ.get("JFORGE_CONTROLLER_LAUNCHER")
+    if not launcher or not Path(launcher).is_absolute():
+        return path
+    revision = path.parent
+    revisions = revision.parent
+    if tuple(item.name for item in (revisions, revisions.parent, revisions.parent.parent)) != (
+            "revisions", "apt", "environments"):
+        return path
+    home = ForgeHome(revisions.parent.parent.parent)
+    envdir = root(home) / "environments" / revision.name
+    if not all(file.is_file() for file in (envdir / "spack.lock", revision / "spack_bridge.py",
+                                            revision / "modifications.json")):
+        return path
+    content = _adapter_script(home, envdir, revision)
+    if path.read_text() == content:
+        return path
+    from .package_operations import _inside
+    refreshed = _inside(home, revision / "controller" / path.name)
+    if not refreshed.is_file() or refreshed.read_text() != content:
+        write_text(refreshed, content)
+    return refreshed
+
+
+def refresh_runtime_environment(path):
+    adapter = path.with_name("spack-environment.sh")
+    if not adapter.is_file():
+        return path
+    refreshed = refresh_runtime_adapter(adapter)
+    if refreshed == adapter:
+        return path
+    original = "source " + shlex.quote(str(adapter)) + " || return $?"
+    text = path.read_text()
+    if original not in text:
+        return path
+    content = text.replace(original, "source " + shlex.quote(str(refreshed)) + " || return $?", 1)
+    activation = refreshed.with_name(path.name)
+    if not activation.is_file() or activation.read_text() != content:
+        write_text(activation, content)
+    return activation
+
+
 def _publish(home, op, envdir, roots, snapshot):
     from .shell_activation import activation
     from .package_operations import key_for
@@ -885,34 +1011,7 @@ def _publish(home, op, envdir, roots, snapshot):
     write_json(revision / "snapshot.json", snapshot)
     mods.write_text(json.dumps(snapshot["modifications"], indent=2) + "\n")
     adapter = revision / "spack-environment.sh"
-    argv = command(home, ["python", str(bridge), "render", str(mods)], envdir)
-    values = _process_environment(home)
-    exports = [
-        "SPACK_USER_CACHE_PATH",
-        "SPACK_USER_CONFIG_PATH",
-        "SPACK_SYSTEM_CONFIG_PATH",
-        "SPACK_GNUPGHOME",
-    ]
-    # Render against the invoking shell's environment at source time. Never
-    # capture the install-time PATH in a persistent activation file.
-    invoke = [
-        "env",
-        "-u",
-        "SPACK_ENV",
-        "-u",
-        "SPACK_ENV_VIEW",
-        "-u",
-        "SPACK_ROOT",
-        "-u",
-        "SPACK_DISABLE_LOCAL_CONFIG",
-        *["%s=%s" % (k, values[k]) for k in exports],
-        *argv,
-    ]
-    adapter.write_text(
-        "_JFORGE_SPACK_CODE=$("
-        + shlex.join(invoke)
-        + ') || return $?\neval "$_JFORGE_SPACK_CODE"\nunset _JFORGE_SPACK_CODE\n'
-    )
+    adapter.write_text(_adapter_script(home, envdir, revision))
     variables = {m["name"] for m in snapshot["modifications"]}
     paths = {m["name"] for m in snapshot["modifications"] if "Path" in m["type"]}
     destination = revision / "activate.sh"
@@ -1014,6 +1113,7 @@ def transact(
     cache="auto",
     dry_run=False,
     progress=None,
+    project_python=None,
 ):
     from .package_operations import locked, operation
 
@@ -1094,6 +1194,8 @@ def transact(
                 if any(p["name"] == "gcc-runtime" and not p["external"] and p["hash"] != installed
                        for p in plan["packages"]):
                     raise ForgeError("Spack could not reuse the installed gcc-runtime.", code=1)
+            if project_python is not None and translated:
+                validate_project_python(home, read_json(op / "dag.json")["packages"], translated, project_python)
             return plan
 
         flags = ["concretize"]

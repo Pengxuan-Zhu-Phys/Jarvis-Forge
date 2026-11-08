@@ -90,6 +90,9 @@ def _transact(
 
 @app.callback()
 def apt(ctx: typer.Context):
+    if ctx.invoked_subcommand == "shell-init":
+        return
+
     from .apt_progress import AptProgress
     from .cli import _console
 
@@ -496,6 +499,8 @@ def shell_init(ctx: typer.Context):
     """Print a Bash/Zsh hook for automatic activation after package changes."""
     if ctx.obj.as_json:
         raise ForgeError("shell-init cannot be used with --json.")
+    explicit_home = ctx.find_root().params.get("home")
+    home_args = " " + shlex.join(["--home", explicit_home]) if explicit_home is not None else ""
     print(r"""# Add eval "$(command jforge apt shell-init)" to your shell startup file.
 jforge() {
     local _jf_arg _jf_next=0 _jf_home='' _jf_apt=0 _jf_change=0 _jf_path _jf_command='' _jf_action='' _jf_skip=0 _jf_target=0
@@ -505,8 +510,8 @@ jforge() {
             --) break ;;
             --home) _jf_next=1 ;;
             --home=*) _jf_home=${_jf_arg#--home=} ;;
-            --help|-h|--dry-run|-s|--version|-v|-V) _jf_skip=1 ;;
-            --json|--debug|-d) ;;
+            --help|-h|--dry-run|-s|--version|-v|-V|--json) _jf_skip=1 ;;
+            --debug|-d) ;;
             --*) ;;
 
             *)
@@ -523,17 +528,21 @@ jforge() {
     if command jforge "$@"; then
         if [ "$_jf_change" = 1 ]; then
             if [ -n "$_jf_home" ]; then
-                _jf_path=$(command jforge --home "$_jf_home" apt env --path 2>/dev/null) || _jf_path=''
+                _jf_path=$(command jforge --home "$_jf_home" apt env --path) || _jf_path=''
             else
-                _jf_path=$(command jforge apt env --path 2>/dev/null) || _jf_path=''
+                _jf_path=$(command jforge apt env --path) || _jf_path=''
             fi
-            [ -z "$_jf_path" ] || source "$_jf_path"
+            if [ -z "$_jf_path" ] || ! source "$_jf_path" >&2; then
+                printf '%s\n' 'jforge: Package command succeeded. Could not refresh the shell environment.' >&2
+            fi
         fi
     else
         return $?
     fi
 }
-_jforge_apt_initial=$(command jforge apt env --path 2>/dev/null) || _jforge_apt_initial=''
-if [ -n "$_jforge_apt_initial" ]; then source "$_jforge_apt_initial"; fi
+_jforge_apt_initial=$(command jforge__JFORGE_HOME_ARGS__ apt env --path 2>/dev/null) || _jforge_apt_initial=''
+if [ -n "$_jforge_apt_initial" ] && ! source "$_jforge_apt_initial" >&2; then
+    printf '%s\n' 'jforge: Could not load the selected package environment.' >&2
+fi
 unset _jforge_apt_initial
-""")
+""".replace("__JFORGE_HOME_ARGS__", home_args))

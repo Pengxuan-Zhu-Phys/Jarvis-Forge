@@ -19,6 +19,22 @@ from jarvis_forge.package_operations import (
 from jarvis_forge.storage import ForgeError, ForgeHome, read_json
 
 
+def test_step_logs_are_visible_while_command_is_running(tmp_path):
+    environment = tmp_path / "env.sh"
+    environment.write_text(":\n")
+    seen = []
+
+    class Observer:
+        def output(self, stream, data):
+            seen.append(data)
+            assert (tmp_path / f"{stream}.log").read_bytes().endswith(data)
+
+    run_command([sys.executable, "-c", "print('live stdout')"], tmp_path, environment,
+                tmp_path, "1", 5, progress=Observer(), combined_logs=tmp_path)
+    assert b"".join(seen) == b"live stdout\n"
+    assert (tmp_path / "command-1.stdout.log").read_bytes() == (tmp_path / "stdout.log").read_bytes()
+
+
 @pytest.mark.parametrize("kind", ["traversal", "symlink", "hardlink", "fifo"])
 def test_archive_escape_and_special_files_are_rejected(tmp_path, kind):
     file = tmp_path / "unsafe.tar"

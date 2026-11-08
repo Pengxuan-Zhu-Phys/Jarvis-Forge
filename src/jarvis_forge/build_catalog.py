@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import shutil
+from tempfile import NamedTemporaryFile
 
 from packaging.specifiers import SpecifierSet, InvalidSpecifier
 from packaging.version import Version
@@ -75,6 +76,23 @@ def libraries(home):
     return read_json(path).get("libraries", []) if path.is_file() else []
 
 
+def _cache_asset(source, destination, sha256, kind):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        if digest(destination) != sha256:
+            raise ForgeError(f"Modified {kind} cache: {destination}")
+        return
+    with NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
+        staged = Path(stream.name)
+    try:
+        shutil.copyfile(source, staged)
+        if digest(staged) != sha256:
+            raise ForgeError(f"{kind.capitalize()} cache copy SHA-256 mismatch: {destination}")
+        staged.replace(destination)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
 def update(home, url=INDEX_URL):
     from .builds import load
     home.require_initialized()
@@ -108,10 +126,7 @@ def update(home, url=INDEX_URL):
             template_file.write_text(yaml.safe_dump(template))
             load(template_file)
             destination = home.root / "builds/recipes" / row["sha256"] / "library.yaml"
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists() and digest(destination) != row["sha256"]:
-                raise ForgeError(f"Modified library cache: {destination}")
-            shutil.copyfile(asset, destination)
+            _cache_asset(asset, destination, row["sha256"], "library")
             library_files[name] = destination
         for row in index["builds"]:
             name = identifier(row.get("id", ""))
@@ -140,16 +155,10 @@ def update(home, url=INDEX_URL):
             if declared != required:
                 raise ForgeError(f"Companion files do not match build scripts: {name}")
             destination = home.root / "builds/recipes" / snapshot_id(row) / "build.yaml"
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists() and digest(destination) != row["sha256"]:
-                raise ForgeError(f"Modified build cache: {destination}")
-            shutil.copyfile(asset, destination)
+            _cache_asset(asset, destination, row["sha256"], "build")
             for item in resources(row):
                 target = destination.parent / item["path"]
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if target.exists() and digest(target) != item["sha256"]:
-                    raise ForgeError(f"Modified companion script cache: {target}")
-                shutil.copyfile(bundle / item["path"], target)
+                _cache_asset(bundle / item["path"], target, item["sha256"], "companion script")
         write_json(home.root / "builds/catalog/index.json", index)
         return {"builds": index["builds"], "source": url}
     finally:

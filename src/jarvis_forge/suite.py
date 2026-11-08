@@ -88,7 +88,8 @@ def expand(text: str, bindings: dict[str, str]) -> str:
 def make_plan(suite: dict, run_dir: Path, home: ForgeHome | None = None, environment_name: str | None = None) -> dict:
     source = Path(suite["path"]).parent
     config = suite["config"]
-    bindings = {"python": sys.executable, "suite_dir": str(source),
+    bindings = {"python": sys.executable, "controller_python": sys.executable, "project_python": "python3",
+                "suite_dir": str(source),
                 "run_dir": str(run_dir)}
     inputs = {}
     for key, value in config.get("inputs", {}).items():

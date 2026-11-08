@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shlex
 import sys
 
 import pytest
@@ -30,6 +31,24 @@ def suite(tmp_path, steps, **extra):
 
 def command(step_id="produce", code="print('hello')", **extra):
     return {"id": step_id, "argv": [sys.executable, "-c", code], **extra}
+
+
+def test_suite_can_explicitly_select_project_or_controller_python(home, tmp_path):
+    bin_dir = tmp_path / "project-bin"
+    bin_dir.mkdir()
+    python = bin_dir / "python3"
+    python.write_text("#!/bin/sh\nexport FIXTURE_PROJECT=selected\nexec " + shlex.quote(sys.executable) + ' "$@"\n')
+    python.chmod(0o700)
+    script = tmp_path / "environment.sh"
+    script.write_text("export PATH=" + shlex.quote(str(bin_dir)) + ':"$PATH"\n')
+    source = suite(tmp_path, [
+        {"id": name, "argv": ["${" + name + "}", "-c", "import os; print(os.getenv('FIXTURE_PROJECT', 'controller'))"]}
+        for name in ("python", "controller_python", "project_python")
+    ], environment={"shell": script.name})
+    result = execute(home, source)
+    assert result["status"] == "passed", result
+    assert [(Path(result["path"]) / "steps" / name / "stdout.log").read_text().strip()
+            for name in ("python", "controller_python", "project_python")] == ["controller", "controller", "selected"]
 
 
 def test_two_runs_archive_outputs_and_compare(home, tmp_path):

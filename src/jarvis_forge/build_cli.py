@@ -175,10 +175,12 @@ def artifact_environment(ctx: typer.Context, artifact_id: str = typer.Argument(.
                          path: bool = typer.Option(False, "--path", help="Print only the verified activation script path.")):
     """Locate the runtime environment exported by a verified installation."""
     from .cli import emit
+    from .cmake import runtime_activation
+    if path and ctx.obj.as_json:
+        raise ForgeError("--path and --json are mutually exclusive.")
     value = builds.artifact(ctx.obj.home, artifact_id)
+    activation = str(runtime_activation(Path(value["activation"])))
     if path:
-        if ctx.obj.as_json:
-            raise ForgeError("--path and --json are mutually exclusive.")
-        print(value["activation"])
+        print(activation)
     else:
-        emit(ctx, "build env", artifact_id=artifact_id, activation=value["activation"])
+        emit(ctx, "build env", artifact_id=artifact_id, activation=activation)

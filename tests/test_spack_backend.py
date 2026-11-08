@@ -63,6 +63,37 @@ def test_legacy_data_is_not_a_backend(tmp_path):
         b.current(home)
 
 
+@pytest.mark.parametrize(
+    "selection,which_status,uses_python3",
+    [("system", "127", True), ("system", "0", False), ("3.13.15", "127", False)],
+)
+def test_python3_fallback_only_for_missing_system_pyenv_python(
+    tmp_path, monkeypatch, selection, which_status, uses_python3,
+):
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    shim = shims / "python"
+    shim.write_text("#!/bin/sh\nexit 127\n")
+    shim.chmod(0o755)
+    pyenv = tmp_path / "pyenv"
+    pyenv.write_text(
+        '#!/bin/sh\ncase "$1" in\n'
+        '    root) printf "%s\\n" "$PYENV_ROOT" ;;\n'
+        '    version-name) printf "%s\\n" "$PYENV_VERSION" ;;\n'
+        '    which) exit "$TEST_PYENV_WHICH_STATUS" ;;\nesac\n'
+    )
+    pyenv.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("PYENV_ROOT", str(tmp_path))
+    monkeypatch.setenv("PYENV_VERSION", selection)
+    monkeypatch.setenv("TEST_PYENV_WHICH_STATUS", which_status)
+    if uses_python3:
+        assert b._probe_external_python(str(shim), system_python3=sys.executable)["executable"] == sys.executable
+    else:
+        with pytest.raises(ForgeError, match="Cannot use selected Python"):
+            b._probe_external_python(str(shim), system_python3=sys.executable)
+
+
 @pytest.fixture
 def managed(tmp_path, monkeypatch):
     home = ForgeHome(tmp_path / "forge")
@@ -213,6 +244,79 @@ def test_apt_activation_leaves_the_shell_python_on_path(managed, monkeypatch):
     assert config["python-venv"]["externals"] == [{"prefix": str(prefix), "spec": "python-venv@1.0"}]
     modifications = json.loads((Path(result["activation"]).parent / "modifications.json").read_text())
     assert [m["value"] for m in modifications] == ["/fixture-app/bin"]
+
+
+def test_bootstrap_requires_a_python_on_the_users_path(tmp_path, monkeypatch):
+    home = ForgeHome(tmp_path / "forge")
+    home.initialize()
+    monkeypatch.setattr(b.shutil, "which", lambda command: "/bin/bash" if command == "bash" else None)
+    with pytest.raises(ForgeError, match="No external Python"):
+        b.bootstrap(home)
+    assert not b.configured(home)
+
+
+def test_project_python_guard_checks_only_requested_runtime_dependencies(managed, monkeypatch):
+    home, calls = managed
+    selected = b.settings(home)["python"]
+    python = {"name": "python", "hash": "external-python", "external": True,
+              "prefix": selected["prefix"], "installed": True, "root": False, "version": selected["version"],
+              "spec": "python", "node": {}}
+    run = b.run
+    link_type = "run"
+
+    def snapshot(home, args, op, label, **kwargs):
+        value = run(home, args, op, label, **kwargs)
+        if label in {"dag", "plan", "installed"}:
+            plan = json.loads(value)
+            if label != "installed" or link_type == "run":
+                plan["packages"].append(python)
+            app = next(p for p in plan["packages"] if p["name"] == "fixture-app")
+            app["node"]["dependencies"] = [{"hash": python["hash"], "parameters": {"deptypes": [link_type]}}]
+            return json.dumps(plan)
+        return value
+
+    monkeypatch.setattr(b, "run", snapshot)
+    monkeypatch.setattr(b, "_probe_external_python", lambda executable: {
+        **selected, "executable": executable, "prefix": "/other-project-python", "base_prefix": "/other-project-python",
+    })
+    with pytest.raises(ForgeError, match="does not match apt Python"):
+        b.transact(home, "install", ["fixture-app"], cache="never", project_python="/target/python")
+    assert not [args for args, _ in calls if args[0] == "install"]
+    link_type = "build"
+    assert b.transact(home, "install", ["fixture-app"], cache="never", project_python="/target/python")["state_committed"]
+
+
+def test_apt_adapter_uses_stable_isolated_bootstrap_launcher(managed, monkeypatch, tmp_path):
+    home, _ = managed
+    launcher = tmp_path / "jforge"
+    monkeypatch.setenv("JFORGE_CONTROLLER_LAUNCHER", str(launcher))
+    result = b.transact(home, "install", ["fixture-app"], cache="never")
+    adapter = Path(result["activation"]).with_name("spack-environment.sh")
+    assert f"{launcher} __jforge_controller_python" in adapter.read_text()
+    assert sys.executable not in adapter.read_text()
+    assert b.command(home, ["--version"])[:2] == [sys.executable, "-I"]
+
+
+def test_legacy_apt_activation_refreshes_without_modifying_evidence(managed, monkeypatch, tmp_path):
+    from jarvis_forge.package_operations import environment_path
+
+    home, _ = managed
+    monkeypatch.delenv("JFORGE_CONTROLLER_LAUNCHER", raising=False)
+    result = b.transact(home, "install", ["fixture-app"], cache="never")
+    (Path(result["environment"]) / "spack.lock").write_text("{}")
+    original = Path(result["activation"])
+    old_adapter = original.with_name("spack-environment.sh")
+    old_bytes = old_adapter.read_bytes()
+    launcher = tmp_path / "jforge"
+    launcher.write_text(f'#!/bin/bash\nshift\nexec "{sys.executable}" -I "$@"\n')
+    launcher.chmod(0o700)
+    b._executable(home).write_text('print("export FIXTURE_ACTIVATION=ok")\n')
+    monkeypatch.setenv("JFORGE_CONTROLLER_LAUNCHER", str(launcher))
+    refreshed = Path(environment_path(home))
+    assert refreshed != original and old_adapter.read_bytes() == old_bytes
+    output = subprocess.check_output(["bash", "-c", 'source "$1" && printf "%s" "$FIXTURE_ACTIVATION"',
+                                      "fixture", str(refreshed)], text=True)
+    assert output == "ok"
 
 
 def test_name_only_environment_pins_installed_gcc_runtime(managed):

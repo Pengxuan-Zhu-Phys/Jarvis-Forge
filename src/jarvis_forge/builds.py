@@ -229,6 +229,8 @@ def process_environment(values):
     previous = os.environ.copy()
     os.environ.clear()
     os.environ.update(values)
+    if "JFORGE_CONTROLLER_LAUNCHER" in previous:
+        os.environ["JFORGE_CONTROLLER_LAUNCHER"] = previous["JFORGE_CONTROLLER_LAUNCHER"]
     try:
         yield
     finally:
@@ -240,7 +242,7 @@ def safe_environment(values, extra=()):
     # Store explicit build context, not SSH agent sockets, tokens or passwords.
     keys = {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "CC", "CXX", "FC",
             "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "LIBRARY_PATH", "LD_LIBRARY_PATH",
-            "CMAKE_PREFIX_PATH", "CMAKE_INCLUDE_PATH", "CMAKE_LIBRARY_PATH", "PKG_CONFIG_PATH", "PYTHONPATH", "PYENV_ROOT", "PYENV_VERSION",
+            "CMAKE_PREFIX_PATH", "CMAKE_INCLUDE_PATH", "CMAKE_LIBRARY_PATH", "PKG_CONFIG_PATH", "PYTHONHOME", "PYTHONPATH", "PYENV_ROOT", "PYENV_VERSION",
             "VIRTUAL_ENV", "LOADEDMODULES", "MODULEPATH", *extra}
     return {k: v for k, v in values.items() if k in keys}
 
@@ -252,11 +254,31 @@ def source_identity(source, parent):
     if not path.is_dir():
         raise ForgeError(f"Local source directory missing: {path}")
     rows = []
-    for directory, dirs, names in os.walk(path):
-        dirs[:] = sorted(d for d in dirs if d not in {".git", "build", "__pycache__", ".venv"})
-        for name in sorted(names):
-            file = Path(directory) / name
-            rows.append((str(file.relative_to(path)), os.readlink(file) if file.is_symlink() else digest(file)))
+    excluded = {".git", "build", "__pycache__", ".venv"}
+
+    def visit(directory, ancestors):
+        resolved = directory.resolve()
+        if resolved in ancestors:
+            raise ForgeError(f"Cyclic local source directory link: {directory}")
+        subdirectories = []
+        for file in sorted(directory.iterdir()):
+            relative = str(file.relative_to(path))
+            if file.is_dir():
+                if file.name in excluded:
+                    continue
+                subdirectories.append(file)
+                if file.is_symlink():
+                    rows.append((relative, os.readlink(file), "directory"))
+            elif file.is_symlink():
+                rows.append((relative, os.readlink(file), digest(file) if file.is_file() else None))
+            elif file.is_file():
+                rows.append((relative, digest(file)))
+            else:
+                raise ForgeError(f"Unsupported local source file: {file}")
+        for child in subdirectories:
+            visit(child, ancestors | {resolved})
+
+    visit(path, set())
     return {"path": str(path), "sha256": fingerprint(rows)}
 
 
@@ -279,6 +301,7 @@ def artifact(home, artifact_id):
 
 def compatible(value, request, context):
     return (value["output"] == request["output"] and value["build_id"] == request["build_id"]
+            and (not request.get("artifact") or value["artifact_id"] == request["artifact"])
             and value.get("contract") == request.get("contract", "cmake-prefix/v1")
             and Version(value["version"]) in SpecifierSet(request.get("version", ""))
             and set(request.get("features", [])) <= set(value.get("features", []))
@@ -337,10 +360,11 @@ def _source_archive(home, source, log, name, *, show_progress):
 class _AptInstallProgress:
     """Drive one build package step with the apt install display."""
 
-    def __init__(self, record, display):
+    def __init__(self, record, display, logs):
         self.record = record
         self.display = display
         self.verbose = display.verbose
+        self.combined_logs = logs
 
     def __call__(self, message):
         self.record(message, component="APT", echo=False)
@@ -406,6 +430,8 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
         from .build_logging import ProcessLog
         process_log = ProcessLog(attempts / "build.log", "Jarvis-Forge.Build", progress if verbose else None)
         active_step = None
+        built_nodes = {}
+        bindings_by_parent = state.setdefault("dependency_bindings", {})
 
         def event(message, component="Build", *, echo=True, display=None):
             with (attempts / "events.jsonl").open("a") as out:
@@ -417,17 +443,15 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
             else:
                 process_log.write(message, module="Jarvis-Forge." + component)
 
-        def run_node(key, policy="reuse-or-build", requirement=None):
+        def run_node(key, policy="reuse-or-build", requirement=None, locked_artifact=None):
             nonlocal active_step
-            if key in result["nodes"]:
-                return result["nodes"][key]
             node = selected_graph["nodes"][key]
             config = node["config"]
             if config.get("platforms") and sys.platform not in config["platforms"]:
                 raise ForgeError(f"Build {config['id']} does not support {sys.platform}.")
             old = state["nodes"].get(key, {})
             node_dir = attempts / key[:16]
-            node_dir.mkdir()
+            node_dir.mkdir(exist_ok=True)
             (node_dir / "build.yaml").write_text(node["text"])
             if old.get("environment"):
                 environment = old["environment"]
@@ -457,33 +481,41 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                 if context["cxx_standard"] != requirement["context"]["cxx_standard"] or context["tools"] != requirement["context"]["tools"]:
                     raise ForgeError(f"Incompatible compiler/Python/C++ standard for dependency {config['id']}.")
                 req = {**requirement, "build_id": config["id"]}
-                if old.get("outputs"):
-                    outputs = {n: artifact(home, v["artifact_id"]) for n, v in old["outputs"].items()}
-                    selected = outputs.get(req["output"])
-                    if not selected or not compatible(selected, req, context):
+                existing = None
+                if locked_artifact:
+                    existing = artifact(home, locked_artifact)
+                    if not compatible(existing, req, context):
                         raise ForgeError("Locked artifact is incompatible with its consumer.")
-                    result["nodes"][key] = {"outputs": outputs, "status": "reused"}
-                    return result["nodes"][key]
-                if policy != "rebuild":
+                elif req.get("artifact"):
                     existing = find_artifact(home, req, context)
-                    if existing:
-                        row = {"outputs": {req["output"]: existing}, "status": "reused"}
-                        state["nodes"][key] = row
-                        write_json(state_path, state)
-                        result["nodes"][key] = row
-                        event(f"Reuse {config['id']}: {existing['artifact_id']}")
-                        return row
+                elif key in built_nodes:
+                    return built_nodes[key]
+                elif req["output"] in old.get("outputs", {}):
+                    existing = artifact(home, old["outputs"][req["output"]]["artifact_id"])
+                    if not compatible(existing, req, context):
+                        raise ForgeError("Locked artifact is incompatible with its consumer.")
+                elif policy != "rebuild":
+                    existing = find_artifact(home, req, context)
+                if existing:
+                    row = {"outputs": {req["output"]: existing}, "status": "reused"}
+                    result["nodes"].setdefault(key, row)
+                    event(f"Reuse {config['id']}: {existing['artifact_id']}")
+                    return row
                 if policy == "reuse-only":
                     raise ForgeError(f"No compatible installed artifact for {config['id']}.")
             dependencies = {}
+            locked = bindings_by_parent.setdefault(key, {})
             for name, child in node["requirements"].items():
                 req = config["requires"][name]
-                provided = run_node(child, req.get("policy", "reuse-or-build"), {**req, "context": context})
+                provided = run_node(child, req.get("policy", "reuse-or-build"), {**req, "context": context},
+                                    locked_artifact=locked.get(name))
                 if req["output"] not in provided["outputs"]:
                     raise ForgeError(f"Dependency does not export {req['output']}.")
                 dependencies[name] = provided["outputs"][req["output"]]
                 if not compatible(dependencies[name], {**req, "build_id": selected_graph["nodes"][child]["config"]["id"]}, context):
                     raise ForgeError(f"Dependency {name} is incompatible with this consumer.")
+                locked[name] = dependencies[name]["artifact_id"]
+                write_json(state_path, state)
             parent = Path(node["path"]).parent
             sources = {n: source_identity(v, parent) for n, v in config.get("sources", {}).items()}
             identity = {"recipe": key, "parameters": node["parameters"], "sources": sources, "context": context,
@@ -516,12 +548,15 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     state["nodes"][key] = {**old, **row}
                     write_json(state_path, state)
                     result["nodes"][key] = row
+                    built_nodes[key] = row
                     return row
                 row = {"instance": instance, "environment": environment, "tools": observed, "steps": old.get("steps", {}),
                        "outputs": old.get("outputs", {}), "rebuild": identity.get("rebuild"), "environment_origin": environment_origin}
                 state["nodes"][key] = row
                 write_json(state_path, state)
-                bindings = {"build_dir": str(parent), "workflow_dir": str(parent), "work": str(work), "python": observed.get("python", {}).get("path", "python3")}
+                python = observed.get("python", {}).get("path", "python3")
+                bindings = {"build_dir": str(parent), "workflow_dir": str(parent), "work": str(work),
+                            "python": python, "project_python": python, "controller_python": sys.executable}
                 for resource in node.get("card_sources", []):
                     if "script_id" not in resource:
                         continue
@@ -641,12 +676,15 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                 write_json(state_path, state)
                 finished = {"status": "passed", "outputs": outputs, "instance": instance}
                 result["nodes"][key] = finished
+                built_nodes[key] = finished
                 return finished
 
         try:
             event(("Resume " if resume else "Build ") + request["suite_id"], echo=not verbose)
             final = run_node(selected_graph["root"])
-            result.update(status="passed", outputs=final["outputs"])
+            outputs = {name: {**value, "activation": str(cmake.runtime_activation(Path(value["activation"])))}
+                       for name, value in final["outputs"].items()}
+            result.update(status="passed", outputs=outputs)
             if request.get("workspace"):
                 from .build_workspace import publish
                 publish(Path(request["workspace"]), result)
@@ -683,6 +721,7 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
                 raise ForgeError(f"Conflicting dependency instances for {name}; select a compatible dependency environment.")
             selected_packages[name] = identities
     scripts = [v["activation"] for v in used if v.get("activation")]
+    exported_dependencies = [path for v in used if (path := v.get("runtime_activation", v.get("activation")))]
     paths = {k: list(v) for k, v in options.get("paths", {}).items()}
     prefix_paths = [v["prefix"] for v in used if v.get("prefix")]
     prefix_paths.extend(package["prefix"] for dependency in used for package in dependency.get("packages", []))
@@ -691,7 +730,12 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
     if step["uses"] == "cmake.project":
         write_json(logs / "dependency-paths.json", {key: list(dict.fromkeys(values)) for key, values in paths.items()})
         progress("Dependency paths: " + str(logs / "dependency-paths.json"), component="CMake", echo=verbose)
-    script = cmake.write_environment(logs / "environment.sh", base=environment, scripts=scripts, paths=paths)
+    archived_script = cmake.write_environment(logs / "environment.sh", base=environment, scripts=scripts, paths=paths)
+    runtime_scripts = [str(cmake.runtime_activation(Path(path)))
+                       if Path(path).name not in cmake.CHILD_ENVIRONMENT_FILES else path for path in scripts]
+    script = archived_script
+    if runtime_scripts != scripts:
+        script = cmake.write_environment(logs / "runtime-environment.sh", base=environment, scripts=runtime_scripts, paths=paths)
     number = 0
 
     def invoke(argv, cwd, title="Command"):
@@ -701,7 +745,7 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
                  component="CMake" if step["uses"] == "cmake.project" else "Checker" if step["uses"] == "check" else "Calculator")
         try:
             run_command(argv, cwd, script, logs, str(number), step.get("timeout_seconds", 86400),
-                        progress=progress if verbose else None, process_env=environment)
+                        progress=progress if verbose else None, process_env=environment, combined_logs=logs)
         except ForgeError as exc:
             command_record = logs / f"command-{number}.json"
             if not command_record.is_file():
@@ -716,21 +760,18 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
                 if detail:
                     message += "\n" + detail
             raise ForgeError(message, code=exc.code) from exc
-        finally:
-            for stream in ("stdout", "stderr"):
-                source_log = logs / f"command-{number}.{stream}.log"
-                if source_log.exists():
-                    with (logs / (stream + ".log")).open("ab") as combined:
-                        combined.write(source_log.read_bytes())
-        return (logs / f"command-{number}.stdout.log").read_text(errors="replace")
-
     if step["uses"] == "apt.install":
+        from . import spack_backend as backend
+
+        project_python = observed.get("python", {}).get("path", "python3")
         if previous:
             for file, sha in previous["evidence"].items():
                 if not Path(file).is_file() or digest(Path(file)) != sha:
                     raise ForgeError(f"Locked apt dependency changed: {file}")
+            with process_environment(environment):
+                backend.validate_project_python(ForgeHome(Path(previous["profile"])), previous["packages"],
+                                                options["specs"], project_python)
             return previous
-        from . import spack_backend as backend
         from .apt_profiles import ensure_active
         from .apt_progress import AptProgress
         from .cli import _console
@@ -738,12 +779,13 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
         # that is spack-default, the same store and compilers as `jforge apt`.
         # The screen uses the same phase and package display as `jforge apt install`.
         display = AptProgress(_console(stderr=True), verbose=verbose, as_json=as_json, indent="  ")
-        reporter = _AptInstallProgress(progress, display)
+        reporter = _AptInstallProgress(progress, display, logs)
         try:
             with process_environment(environment):
                 target = ensure_active(home, progress=reporter)
                 installed = backend.transact(target, "install", options["specs"], jobs=jobs,
-                                             timeout=step.get("timeout_seconds", 86400), progress=reporter)
+                                             timeout=step.get("timeout_seconds", 86400), progress=reporter,
+                                             project_python=project_python)
             display.close(success=True)
         finally:
             display.close()
@@ -775,7 +817,12 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
             if not file.resolve().is_relative_to(cwd.resolve()) or not file.is_file():
                 raise ForgeError(f"Required command artifact missing or outside cwd: {file}", code=1)
             artifacts[str(file)] = digest(file)
-        return {"status": "passed", "artifacts": artifacts, "activation": str(script)}
+        exported = None
+        if exported_dependencies:
+            exported = str(cmake.write_environment(logs / "command-activate.sh", scripts=[
+                cmake.runtime_activation(Path(path)) for path in exported_dependencies
+            ]))
+        return {"status": "passed", "artifacts": artifacts, "activation": str(script), "runtime_activation": exported}
     build = work / "build" / step["id"]
     prefix = work / "install" / step["id"] if workspace else home.root / "builds/installs" / step["id"] / work.name
     source = Path(options["source"])
@@ -810,7 +857,7 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
         raise ForgeError("CMake C++ standard must match the declared cxx_standard parameter.")
     invocation = cmake.commands(configured, source, build, prefix, jobs=jobs)
     requested = fingerprint({"configure": invocation["configure"],
-                             "environment": digest(script)})
+                             "environment": digest(archived_script)})
     marker = build / ".jforge-configure.json"
     for phase in options.get("phases", ["configure", "build", "install"]):
         if phase == "configure":
@@ -862,9 +909,9 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
             raise ForgeError("Exported CMake projects must declare a matching cxx_standard parameter.")
     exported_paths = {k: [str(prefix / v) if not Path(v).is_absolute() else v for v in values]
                       for k, values in metadata.get("paths", {}).items()}
-    activation_scripts = [*scripts]
+    activation_scripts = [cmake.runtime_activation(Path(path)) for path in exported_dependencies]
     if metadata.get("activation"):
-        activation_scripts.append(str(prefix / metadata["activation"]))
+        activation_scripts.append(prefix / metadata["activation"])
     for name in [metadata.get("cmake_dir"), metadata.get("activation")]:
         if name and not (prefix / name).exists():
             raise ForgeError(f"Export path missing: {prefix / name}", code=1)
@@ -874,6 +921,9 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
     activation = work / (step["id"] + "-activate.sh")
     cmake.write_environment(activation, scripts=activation_scripts, paths=exported_paths)
     evidence = {str(activation): digest(activation)}
+    for exported in activation_scripts:
+        if exported.is_file():
+            evidence[str(exported)] = digest(exported)
     for dep in used:
         evidence.update(dep.get("evidence", {}))
     runtime_names = set(metadata.get("runtime_packages", []))
@@ -891,7 +941,7 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
             "export": metadata, "evidence": evidence}
 
 
-def step_path(home, run_id, step_name):
+def step_path(home, run_id, step_name, *, pending=False):
     """Resolve a step in the latest attempt; qualify duplicates as build.step."""
     directory = home.run_path(run_id)
     result = read_json(directory / "result.json")
@@ -902,7 +952,7 @@ def step_path(home, run_id, step_name):
         for step in node["ordered"]:
             if step_name in {step["id"], node["config"]["id"] + "." + step["id"]}:
                 candidate = attempt / key[:16] / step["id"]
-                if candidate.is_dir():
+                if candidate.is_dir() or pending:
                     matches.append(candidate)
     if len(matches) != 1:
         raise ForgeError("Step unavailable or ambiguous; use --step WORKFLOW.STEP.")

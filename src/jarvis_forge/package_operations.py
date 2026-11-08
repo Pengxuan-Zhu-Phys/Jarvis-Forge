@@ -4,7 +4,7 @@ This module does not resolve dependencies or build packages; Spack owns those.
 """
 
 from __future__ import annotations
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import fcntl
 import json
 import os
@@ -115,7 +115,8 @@ def operation(home, action, request):
         write_json(directory / "result.json", {**result, "finished_at": now()})
 
 
-def run_command(argv, cwd, environment_script, logs, number, timeout, progress=None, *, process_env=None):
+def run_command(argv, cwd, environment_script, logs, number, timeout, progress=None, *, process_env=None,
+                combined_logs=None):
     from .runner import _stop
 
     script = logs / f"command-{number}.sh"
@@ -144,9 +145,14 @@ def run_command(argv, cwd, environment_script, logs, number, timeout, progress=N
     started = time.monotonic()
     try:
         with (
+            ExitStack() as stack,
             (logs / f"command-{number}.stdout.log").open("wb") as out,
             (logs / f"command-{number}.stderr.log").open("wb") as err,
         ):
+            combined = {} if combined_logs is None else {
+                out: stack.enter_context((combined_logs / "stdout.log").open("ab")),
+                err: stack.enter_context((combined_logs / "stderr.log").open("ab")),
+            }
             # Separate pipes preserve the original log files; display both on stderr
             # so the final --json result on stdout remains machine-readable.
             process = subprocess.Popen(
@@ -176,6 +182,9 @@ def run_command(argv, cwd, environment_script, logs, number, timeout, progress=N
                                 continue
                             key.data.write(data)
                             key.data.flush()
+                            if combined:
+                                combined[key.data].write(data)
+                                combined[key.data].flush()
                             if progress is not None:
                                 output = getattr(progress, "output", None)
                                 if output is not None:
@@ -259,7 +268,7 @@ def environment_path(home):
         raise ForgeError(
             "The Spack activation script is missing.", hint="jforge apt import spack"
         )
-    from .spack_backend import _validate_external_python
+    from .spack_backend import _validate_external_python, refresh_runtime_environment
 
     _validate_external_python(home, state["spack"].get("packages", ()))
-    return str(Path(path))
+    return str(refresh_runtime_environment(Path(path)))

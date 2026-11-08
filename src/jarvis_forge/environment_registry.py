@@ -74,6 +74,10 @@ def show(home, name, revision=None, *, strict=False):
         if not state.get("activation"):
             raise ForgeError("No apt environment has been published.", hint="jforge apt install PACKAGE")
         activation = _inside(home, Path(state["activation"]))
+        if strict and activation.is_file():
+            from .package_operations import environment_path
+
+            activation = Path(environment_path(home))
         record = {"schema_version": 1, "managed_by": "jforge-apt", "home": str(home.root),
                   "name": "apt", "revision": state["last_operation_id"], "path": str(activation.parent),
                   "activation": str(activation), "description": "Active user-local packages",
@@ -107,10 +111,6 @@ def show(home, name, revision=None, *, strict=False):
         except ForgeError:
             record["status"] = "modified_or_missing"
     if strict:
-        if name == "apt" and record["status"] == "ready":
-            from .package_operations import environment_path
-
-            environment_path(home)
         if record["status"] == "legacy_python":
             raise ForgeError(f"Environment {name!r} has a retired Python override.",
                              hint="Select Python with pyenv and register the shell script again with env add --replace.")

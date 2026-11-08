@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import math
 import shutil
+import sys
 
 import yaml
 
@@ -183,7 +184,9 @@ def run(home, path, *, full=False, selected=(), environment_name=None, jobs=1, p
                             child_result = Path(child["path"]) / "result.json"
                             evidence[str(child_result)] = digest(child_result)
                         else:
-                            bindings = {"project": str(project), "python": observed.get("python", {}).get("path", "python3"),
+                            python = observed.get("python", {}).get("path", "python3")
+                            bindings = {"project": str(project), "python": python,
+                                        "project_python": python, "controller_python": sys.executable,
                                         "run_dir": str(directory), "step_dir": str(step_dir)}
                             def invoke(argv):
                                 return run_command(argv, project, env_script, step_dir, "1", check.get("timeout_seconds", 3600), progress=progress, process_env=environment)

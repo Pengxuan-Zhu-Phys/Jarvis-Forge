@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 from importlib.resources import files
 import json
 import os
@@ -41,10 +42,14 @@ app = typer.Typer(add_completion=False, pretty_exceptions_enable=False,
 
 @dataclass
 class Settings:
-    home: ForgeHome
+    explicit_home: str | None
     as_json: bool
     user_home: ForgeHome | None = None
     verbose: bool = False
+
+    @cached_property
+    def home(self) -> ForgeHome:
+        return ForgeHome.resolve(self.explicit_home)
 
 
 def _console(stderr=False) -> Console:
@@ -71,9 +76,7 @@ def root(ctx: typer.Context,
          version: bool = typer.Option(False, "--version", "-v", help="Show the version and exit.", is_eager=True),
          verbose: bool = typer.Option(False, "--verbose", help="Show commands and raw output for apt and build operations."),
          debug: bool = typer.Option(False, "--debug", "-d", help="Show diagnostic tracebacks.")):
-    # Version queries must remain available even if a saved preference is corrupt.
-    ctx.obj = Settings(ForgeHome.resolve(home, read_default=not version), as_json,
-                       verbose=verbose or debug)
+    ctx.obj = Settings(home, as_json, verbose=verbose or debug)
     if version:
         if as_json:
             emit(ctx, "version", name="Jarvis-Forge", version=__version__)
@@ -278,11 +281,14 @@ def logs(ctx: typer.Context,
         raise ForgeError("Use --stream stdout|stderr; --follow and --json are mutually exclusive.")
     identifier(step)
     run_dir = ctx.obj.home.run_path(run_id)
-    if ctx.obj.home.show(run_id).get("kind") in {"build", "workflow"}:
+    run = ctx.obj.home.show(run_id)
+    if run.get("kind") in {"build", "workflow"}:
         from .builds import step_path
-        path = step_path(ctx.obj.home, run_id, step) / f"{stream}.log"
+        path = step_path(ctx.obj.home, run_id, step, pending=follow and run["status"] == "running") / f"{stream}.log"
     else:
         path = run_dir / "steps" / step / f"{stream}.log"
+    while follow and not path.is_file() and ctx.obj.home.show(run_id)["status"] == "running":
+        time.sleep(0.2)
     if not path.is_file():
         raise ForgeError(f"Log is not available: {path}")
     if ctx.obj.as_json:
@@ -296,6 +302,9 @@ def logs(ctx: typer.Context,
                 sys.stdout.write(text)
                 sys.stdout.flush()
             if not follow or ctx.obj.home.show(run_id)["status"] in {"passed", "failed", "interrupted"}:
+                if follow:
+                    sys.stdout.write(log.read())
+                    sys.stdout.flush()
                 break
             time.sleep(0.2)
 

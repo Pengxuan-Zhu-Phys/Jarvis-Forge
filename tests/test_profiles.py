@@ -150,33 +150,65 @@ def test_switch_recovers_missing_or_corrupt_selection(base, capsys):
     assert json.loads(capsys.readouterr().out)["profile"] == "spack-default"
 
 
+def test_shell_hook_is_available_with_invalid_preferences(base, tmp_path, monkeypatch, capsys):
+    (base.root / "apt/selection.json").write_text("{broken")
+    config = tmp_path / "config"
+    preference = config / "jarvis-forge/default-home.json"
+    preference.parent.mkdir(parents=True)
+    preference.write_text("{broken")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
+    monkeypatch.delenv("JFORGE_HOME", raising=False)
+    for options in [[], ["--home", str(base.root)]]:
+        assert main([*options, "apt", "shell-init"]) == 0
+        assert "jforge() {" in capsys.readouterr().out
+
+
+def test_shell_hook_initial_activation_uses_explicit_home(tmp_path, capsys):
+    home = tmp_path / "explicit home"
+    assert main(["--home", str(home), "apt", "shell-init"]) == 0
+    hook = capsys.readouterr().out
+    fake = tmp_path / "jforge"
+    fake.write_text('#!/bin/bash\n[ "$1" = --home ] && [ "$2" = "$EXPECTED_HOME" ] && printf "%s\\n" "$ACTIVATION"\n')
+    fake.chmod(0o700)
+    activation = tmp_path / "activate.sh"
+    activation.write_text('export FIXTURE_HOME=selected\n')
+    result = subprocess.run(["bash", "-c", 'export PATH="$1:$PATH" EXPECTED_HOME="$2" ACTIVATION="$3"; eval "$4"; printf "%s" "$FIXTURE_HOME"',
+                             "fixture", str(tmp_path), str(home), str(activation), hook], capture_output=True, text=True)
+    assert result.returncode == 0 and result.stdout == "selected"
+
+
 @pytest.mark.parametrize(
-    "arguments,expected",
+    "arguments,expected,activation_status",
     [
-        ("apt search install", False),
-        ("apt install toy --dry-run", False),
-        ("apt switch --help", False),
-        ("apt switch", False),
-        ("apt switch spack --name gambit", True),
-        ("apt import spack", True),
-        ("apt install toy", True),
+        ("apt search install", False, 0),
+        ("apt install toy --dry-run", False, 0),
+        ("apt switch --help", False, 0),
+        ("apt switch", False, 0),
+        ("apt switch spack --name gambit", True, 0),
+        ("apt import spack", True, 0),
+        ("apt install toy", True, 0),
+        ("apt install toy", True, 7),
+        ("--json apt install toy", False, 7),
+        ("apt install toy --json", False, 7),
     ],
 )
-def test_shell_hook_only_refreshes_after_changes(tmp_path, capsys, arguments, expected):
+def test_shell_hook_only_refreshes_after_changes(tmp_path, capsys, arguments, expected, activation_status):
     assert main(["--home", str(tmp_path / "home"), "apt", "shell-init"]) == 0
     hook = capsys.readouterr().out
     fake = tmp_path / "jforge"
     fake.write_text(
-        '#!/bin/bash\nif [ "$1 $2 $3" = "apt env --path" ]; then printf "%s\\n" "$ACTIVATION"; fi\n'
+        '#!/bin/bash\n'
+        'if [ "$1 $2 $3" = "apt env --path" ]; then printf "%s\\n" "$ACTIVATION";\n'
+        'elif [[ " $* " == *" --json "* ]]; then printf \'{"ok":true}\\n\'; fi\n'
     )
     fake.chmod(0o755)
     file = tmp_path / "activate.sh"
-    file.write_text('printf "activated\\n"\n')
+    file.write_text(f'printf "activated\\n"\nreturn {activation_status}\n')
     result = subprocess.run(
         [
             "bash",
             "-c",
-            'export PATH="$1:$PATH" ACTIVATION="$2"; eval "$3" >/dev/null; jforge '
+            'export PATH="$1:$PATH" ACTIVATION="$2"; eval "$3" >/dev/null 2>&1; jforge '
             + arguments,
             "test",
             str(tmp_path),
@@ -187,7 +219,9 @@ def test_shell_hook_only_refreshes_after_changes(tmp_path, capsys, arguments, ex
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert ("activated" in result.stdout) == expected
+    assert ("activated" in result.stderr) == expected
+    assert ("Could not refresh" in result.stderr) == (expected and activation_status != 0)
+    assert result.stdout == ('{"ok":true}\n' if "--json" in arguments else "")
 
 
 @pytest.mark.parametrize("shell", ["bash", "zsh"])

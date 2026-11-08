@@ -61,6 +61,17 @@ def write_json(path: Path, value: dict) -> None:
         Path(name).unlink(missing_ok=True)
 
 
+def write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=".write-")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(content)
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
 def identifier(value: str) -> str:
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", value):
         raise ForgeError(f"Invalid identifier: {value!r}.")
