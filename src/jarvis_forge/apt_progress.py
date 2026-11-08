@@ -8,10 +8,15 @@ from pathlib import Path
 import re
 import sys
 
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.text import Text
 
 from .presentation import line
+
+
+class _KnownTotalColumn(MofNCompleteColumn):
+    def render(self, task):
+        return Text() if task.total is None else super().render(task)
 
 
 class AptProgress:
@@ -26,6 +31,7 @@ class AptProgress:
         self.closed = False
         self.pending = set()
         self.done = set()
+        self.in_flight = {}
         self.decoders = {}
         self.buffers = {}
         self.live = None
@@ -34,8 +40,8 @@ class AptProgress:
         if (console.is_terminal and not console.is_dumb_terminal
                 and not as_json and not verbose and not os.environ.get("NO_COLOR")):
             self.live = Progress(
-                SpinnerColumn(), TextColumn("{task.description}"),
-                BarColumn(bar_width=None), TextColumn("{task.completed:.0f}/{task.total:.0f}"),
+                SpinnerColumn(), TextColumn("{task.description}", markup=False),
+                BarColumn(bar_width=None), _KnownTotalColumn(),
                 TimeElapsedColumn(), console=console, transient=True,
                 redirect_stdout=False, redirect_stderr=False,
             )
@@ -49,7 +55,7 @@ class AptProgress:
                     self.task = self.live.add_task("", total=self.total)
                     self.live.start()
                 self.live.update(self.task, completed=self.stage - 1,
-                                 description=Text(stage[3]))
+                                 description=stage[3])
             else:
                 line(self.console, f"{self.indent}[{self.stage}/{self.total}] {stage[3]}")
         elif message.startswith("Spack "):
@@ -65,13 +71,21 @@ class AptProgress:
     def installation_plan(self, packages, overwrite=()):
         self.pending = {p["hash"] for p in packages
                         if not p["external"] and (not p["installed"] or p["name"] in overwrite)}
-        self.done = set()
-        if self.live and self.pending:
-            if self.packages_task is None:
-                self.packages_task = self.live.add_task("Packages", total=len(self.pending))
-            else:
-                self.live.update(self.packages_task, completed=0, total=len(self.pending),
-                                 description="Packages")
+        self.done.clear()
+        if self.live and self.pending and self.packages_task is None:
+            self.packages_task = self.live.add_task("Packages", total=len(self.pending))
+        self._clear_in_flight()
+
+    def _update_packages(self):
+        if self.packages_task is not None:
+            self.live.update(self.packages_task, completed=len(self.done), total=len(self.pending),
+                             description=f"Packages · {len(self.in_flight)} in flight", visible=bool(self.pending))
+
+    def _clear_in_flight(self):
+        for task in self.in_flight.values():
+            self.live.remove_task(task)
+        self.in_flight.clear()
+        self._update_packages()
 
     def output(self, stream, data):
         if self.verbose:
@@ -103,20 +117,38 @@ class AptProgress:
                 self._package_status(self.buffers.get(stream, "") + remaining)
         self.decoders.clear()
         self.buffers.clear()
+        self._clear_in_flight()
 
     def _package_status(self, message):
         # Spack's status lines are a display hint only, never installation evidence.
         message = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", message)
-        status = re.match(r"\[([ +])\]\s+([a-z0-9]+)\s+(\S+@\S+)", message)
+        status = re.fullmatch(r"\[([ +x])\]\s+([a-z0-9]+)\s+(\S+@\S+)(?:\s+(.*))?", message)
         if not status or self.packages_task is None:
             return
-        matches = {h for h in self.pending if h.startswith(status[2])}
-        if not matches:
+        marker, short_hash, package, detail = status.groups()
+        matches = [h for h in self.pending if h.startswith(short_hash)]
+        if len(matches) != 1:
             return
-        if status[1] == "+":
-            self.done.update(matches)
-        self.live.update(self.packages_task, completed=len(self.done),
-                         description=Text("Installing " + status[3]))
+        digest = matches[0]
+        if marker == " ":
+            phase = re.sub(r"\s+\([^()]*\)$", "", detail or "")
+            if not phase or digest in self.done:
+                return
+            if phase != "no binary available" and not phase.startswith("stopped "):
+                description = f"  {package} · {phase}"
+                if digest in self.in_flight:
+                    self.live.update(self.in_flight[digest], description=description)
+                else:
+                    # Spack's piped status reports phases without a completion fraction.
+                    self.in_flight[digest] = self.live.add_task(description, total=None)
+                    self._update_packages()
+                return
+        if marker == "+":
+            self.done.add(digest)
+        task = self.in_flight.pop(digest, None)
+        if task is not None:
+            self.live.remove_task(task)
+        self._update_packages()
 
     def command_failure(self, number, code, stderr):
         title = {
@@ -153,6 +185,7 @@ class AptProgress:
             return
         self.closed = True
         if self.live and self.task is not None:
+            self._clear_in_flight()
             if success:
                 self.live.update(self.task, completed=self.stage)
                 if self.packages_task is not None:

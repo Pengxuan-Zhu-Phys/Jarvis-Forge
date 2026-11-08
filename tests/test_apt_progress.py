@@ -122,20 +122,64 @@ def test_terminal_bar_uses_reported_package_completions_and_stops(monkeypatch):
         progress("[3/4] Install packages")
         progress.installation_plan([
             {"hash": "abcdefg123", "name": "fixture", "installed": False, "external": False},
+            {"hash": "qwertyu456", "name": "other", "installed": False, "external": False},
             {"hash": "old", "name": "existing", "installed": True, "external": False},
         ])
         task = progress.live.tasks[progress.packages_task]
-        assert task.total == 1 and task.completed == 0
+        assert task.total == 2 and task.completed == 0
+        progress.output("stdout", b"[ ] abcdefg fixture@1.0 staging (0s)\r[ ] qwertyu other@2.0 build (2s)\n")
+        assert task.description == "Packages · 2 in flight"
+        first, second = progress.live.tasks[-2:]
+        assert (first.description, second.description) == ("  fixture@1.0 · staging", "  other@2.0 · build")
+        assert first.total is None and second.total is None
+        progress.live.refresh()
+        progress.output("stdout", b"[ ] abcdefg fixture@1.0 configure (3s)\n")
+        assert progress.live.tasks[-2:] == [first, second]
+        assert first.description == "  fixture@1.0 · configure"
+        assert task.completed == 0
         # Pipe chunks may split Unicode, ANSI sequences and status lines.
         for chunk in [b"[+] ignored other@1.0 /prefix\n", b"\x1b[32m[+] abc",
                       b"defg fixture@1.0 /prefix\x1b[0m", b"\n"]:
             progress.output("stdout", chunk)
-        assert task.completed == 1
+        assert task.completed == 1 and task.description == "Packages · 1 in flight"
+        assert first not in progress.live.tasks and second in progress.live.tasks
         progress.output("stderr", b"[+] abcdefg fixture@1.0 /prefix\n")
-        assert task.completed == 1
+        progress.output("stdout", b"[x] qwertyu other@2.0 failed: /log (3s)\n")
+        assert task.completed == 1 and task.description == "Packages · 0 in flight"
+        assert second not in progress.live.tasks
     finally:
         progress.close()
     assert not progress.live.live.is_started
+
+
+def test_in_flight_rows_clear_on_cache_miss_command_end_and_replan(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    progress = AptProgress(Console(file=io.StringIO(), force_terminal=True, width=90))
+    fixture = {"hash": "abcdefg123", "name": "fixture", "installed": False, "external": False}
+    try:
+        progress("[3/4] Install packages")
+        progress.installation_plan([fixture])
+        task = progress.live.tasks[progress.packages_task]
+        progress.output("stdout", b"[ ] abcdefg fixture@1.0 fetching from build cache (0s)\n")
+        assert task.description == "Packages · 1 in flight"
+        progress.output("stdout", b"[ ] abcdefg fixture@1.0 no binary available (2s)\n")
+        assert task.description == "Packages · 0 in flight" and task.completed == 0
+        progress.output("stdout", b"[ ] abcdefg fixture@1.0 staging (0s)\n")
+        progress.output("stdout", b"[+] abcdefg fixture@1.0 /prefix (2s)")
+        progress.output_finished()
+        assert task.description == "Packages · 0 in flight" and task.completed == 1
+
+        progress.installation_plan([fixture])
+        progress.output("stdout", b"[ ] abcdefg fixture@1.0 build (0s)\n")
+        progress.output_finished()
+        assert task.description == "Packages · 0 in flight" and task.completed == 0
+
+        progress.output("stdout", b"[ ] abcdefg fixture@1.0 staging (0s)\n")
+        progress.installation_plan([])
+        assert not task.visible and not progress.in_flight
+    finally:
+        progress.close()
 
 
 @pytest.mark.parametrize("kwargs", [{"as_json": True}, {"verbose": True}, {}])
