@@ -128,6 +128,8 @@ Each `env add ... --replace` saves a new revision. Use `env show cbs --revision 
 
 Scripts are copied, not relocated together with their dependencies: use stable absolute paths for external files. If the original script changes, register the update with `env add cbs --shell /path/to/cbs-env.sh --replace`. For reproducibility, files in published revisions are not intended for direct editing. Full usage and storage details are in [the environment guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/ENVIRONMENTS.md).
 
+Run `jforge env repair --dry-run` in a workspace to preview invalid paths in `./activate.sh`. Omit `--dry-run` to save a JSON report and apply the repair. Pass `--shell PATH` to check a specific file, a registered name to publish a repaired revision, or `apt` to repair the selected package environment. The report lists checked paths and settings that require manual review. Repair checks literal paths without executing the activation script.
+
 ## User-local packages with Spack
 
 All package operations use Spack. Native Spack extension recipes are downloaded from a dedicated recipe Release and refreshed with apt update, independently of Python package releases. Existing source installations are retained as read-only history; the first package write prepares the default Spack profile:

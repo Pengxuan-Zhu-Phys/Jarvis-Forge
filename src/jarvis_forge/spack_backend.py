@@ -16,7 +16,7 @@ import uuid
 
 import yaml
 
-from .storage import ForgeError, ForgeHome, digest, now, read_json, write_json, write_text
+from .storage import ForgeError, ForgeHome, digest, identifier, now, read_json, write_json, write_text
 
 ENGINE_VERSION = "1.2.2"
 INSTALL_PROJECTION = "{name}"
@@ -913,9 +913,9 @@ def validate_project_python(home, packages, roots, executable):
                        if {"link", "run"}.intersection(dep["parameters"]["deptypes"]))
 
 
-def _adapter_script(home, envdir, revision):
+def _adapter_script(home, envdir, revision, *, modifications=None):
     bridge = revision / "spack_bridge.py"
-    mods = revision / "modifications.json"
+    mods = modifications or revision / "modifications.json"
     argv = command(home, ["python", str(bridge), "render", str(mods)], envdir)
     launcher = os.environ.get("JFORGE_CONTROLLER_LAUNCHER")
     if launcher and Path(launcher).is_absolute():
@@ -970,6 +970,43 @@ def refresh_runtime_environment(path):
     if not activation.is_file() or activation.read_text() != content:
         write_text(activation, content)
     return activation
+
+
+def repaired_runtime_environment(home, state, *, materialize=True):
+    """Resolve an apt repair while retaining the operation's frozen inputs."""
+    from .package_operations import _inside
+
+    repair = state["activation_repair"]
+    if (not isinstance(repair, dict) or not isinstance(repair.get("id"), str)
+            or not isinstance(repair.get("sha256"), str)):
+        raise ForgeError("Invalid apt activation repair record.")
+    revision = _inside(home, Path(state["activation"])).parent
+    directory = _inside(home, revision / "repairs" / identifier(repair["id"]))
+    modifications = _inside(home, directory / "modifications.json")
+    activation = _inside(home, directory / "activate.sh")
+    if not modifications.is_file() or digest(modifications) != repair["sha256"]:
+        raise ForgeError(f"Repaired apt settings are missing or modified: {modifications}")
+    if materialize:
+        original = _inside(home, Path(state["activation"]))
+        old_adapter = _inside(home, revision / "spack-environment.sh")
+        envdir = _inside(home, Path(state["spack"]["environment"]))
+        bridge = _inside(home, revision / "spack_bridge.py")
+        if not bridge.is_file() or not envdir.is_dir():
+            raise ForgeError(f"Spack activation inputs are missing for {original}.",
+                             hint="Run jforge apt check to inspect the package environment.")
+        adapter = _inside(home, directory / old_adapter.name)
+        before = "source " + shlex.quote(str(old_adapter)) + " || return $?"
+        text = original.read_text(encoding="utf-8")
+        if before not in text.splitlines():
+            raise ForgeError(f"Unrecognized Spack activation script: {original}")
+        after = "source " + shlex.quote(str(adapter)) + " || return $?"
+        content = _adapter_script(home, envdir, revision, modifications=modifications)
+        if not adapter.is_file() or adapter.read_text(encoding="utf-8") != content:
+            write_text(adapter, content)
+        content = text.replace(before + "\n", after + "\n", 1)
+        if not activation.is_file() or activation.read_text(encoding="utf-8") != content:
+            write_text(activation, content)
+    return activation, modifications
 
 
 def _publish(home, op, envdir, roots, snapshot):

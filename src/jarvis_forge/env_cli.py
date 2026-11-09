@@ -6,7 +6,7 @@ from typing import Optional
 import typer
 
 from .cli import emit
-from .environment_registry import add, list_environments, show
+from .environment_registry import add, list_environments, repair, show
 from .storage import ForgeError
 
 
@@ -47,3 +47,24 @@ def show_environment(ctx: typer.Context,
         print(result["activation"])
     else:
         emit(ctx, "env show", environment=result)
+
+
+@app.command("repair")
+def repair_environment(ctx: typer.Context,
+                       name: Optional[str] = typer.Argument(None, help="Repair this named environment or the active apt environment.", metavar="<name>"),
+                       shell: Optional[Path] = typer.Option(None, "--shell", help="Activation file to repair. Defaults to ./activate.sh.", metavar="<path>"),
+                       dry_run: bool = typer.Option(False, "--dry-run", help="Check and report settings without writing files.")):
+    """Remove invalid literal paths from an activation script."""
+    if name is not None and shell is not None:
+        raise ForgeError("Choose either an environment name or --shell.")
+    if name == "apt":
+        from .shell_repair import repair_apt
+
+        report = repair_apt(ctx.obj.home, dry_run=dry_run)
+    elif name is not None:
+        report = repair(ctx.obj.home, name, dry_run=dry_run)
+    else:
+        from .shell_repair import repair_file
+
+        report = repair_file(shell or Path("activate.sh"), dry_run=dry_run)
+    emit(ctx, "env repair", **report)

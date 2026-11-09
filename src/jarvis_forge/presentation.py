@@ -498,7 +498,30 @@ def build_result(console, values, prog, resume_command):
         line(console, "  " + resume_command)
 
 
+def shell_repair(console, values):
+    preview = values["dry_run"]
+    label = "Shell repair preview" if preview else "Shell repair"
+    line(console, label, style="bold")
+    line(console, values["activation"])
+    removed = "would remove" if preview else "removed"
+    line(console, f"  {len(values['settings'])} recorded · {values['removed']} {removed} · {values['unchecked']} unchecked")
+    for item in values["settings"]:
+        if item["status"] == "removed":
+            name = item.get("name", item["kind"])
+            target = f" {item['value']}" if "value" in item else ""
+            line(console, f"  {name}{target} · {item['reason']}")
+            location = f" entry {item['entry']}" if "entry" in item else f":{item['line']}"
+            line(console, f"    {item['script']}{location}", style="dim")
+    if values.get("backup"):
+        line(console, "Backup " + values["backup"])
+    if values.get("report"):
+        line(console, "Report " + values["report"])
+
+
 def render(console, command, values):
+    if command == "env repair":
+        shell_repair(console, values)
+        return
     if command in {"build list", "build update"}:
         build_catalog(console, command, values)
         return

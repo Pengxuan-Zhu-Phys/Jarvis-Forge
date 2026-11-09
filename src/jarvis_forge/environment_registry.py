@@ -78,6 +78,10 @@ def show(home, name, revision=None, *, strict=False):
             from .package_operations import environment_path
 
             activation = Path(environment_path(home))
+        elif not strict and state.get("activation_repair"):
+            from .spack_backend import repaired_runtime_environment
+
+            activation, _ = repaired_runtime_environment(home, state, materialize=False)
         record = {"schema_version": 1, "managed_by": "jforge-apt", "home": str(home.root),
                   "name": "apt", "revision": state["last_operation_id"], "path": str(activation.parent),
                   "activation": str(activation), "description": "Active user-local packages",
@@ -178,3 +182,33 @@ def add(home, name, shell, *, replace=False, description=None):
         return _publish(home, name, content, {"path": str(shell), "sha256": hashlib.sha256(content).hexdigest()},
                         description if description is not None else (previous or {}).get("description", ""),
                         (previous or {}).get("revision"))
+
+
+def repair(home, name, *, dry_run=False):
+    from .shell_repair import Repair
+
+    base = _base(home, name)
+
+    def inspect():
+        previous = show(home, name, strict=True)
+        script = Path(previous["path"]) / "source.sh"
+        directory = _inside(home, base / "repairs" / new_id("repair"))
+        operation = Repair(script, directory, dry_run)
+        content = operation.scan(script)
+        report = operation.report(changed=content != operation.originals[script],
+                                  name=name, previous_revision=previous["revision"],
+                                  activation=previous["activation"])
+        if not dry_run:
+            operation.save(report)
+            if report["changed"]:
+                selected = _publish(home, name, content.encode("utf-8"),
+                                    {**previous["source"], "repair": report["report"]},
+                                    previous["description"], previous["revision"])
+                report.update(activation=selected["activation"], revision=selected["revision"])
+                write_json(Path(report["report"]), report)
+        return report
+
+    if dry_run or not (base / "current.json").is_file():
+        return inspect()
+    with _locked(home):
+        return inspect()

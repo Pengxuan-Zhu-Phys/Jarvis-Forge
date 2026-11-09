@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Add `jforge env repair` to preview or remove invalid activation paths, with a per-setting JSON report for workspaces, named environments, and apt profiles.
+
 ### Changed
 
 - Show the number of packages in flight and a separate progress row for each active package during interactive installs.
@@ -12,7 +16,8 @@
 - Use an available system `python3` for new Spack profiles when pyenv selects `system` and its `python` shim has no matching executable.
 - Generate the APT shell hook even when the selected profile is unavailable. Keep JSON output and package command exit codes intact when shell activation fails.
 - Isolate Forge control subprocesses from the selected project Python, validate Python dependencies against the build environment, and keep package activation working across bootstrap launcher upgrades.
-- Respect each dependency's pinned artifact, include linked source contents in build fingerprints, and keep exported activation scripts from changing the caller's shell options.
+- Respect each dependency's pinned artifact and include linked source contents in build fingerprints.
+- Keep build activation from enabling strict shell options in the calling terminal, including when a workspace reuses an older build artifact.
 - Stream build step logs while commands run and publish recipe cache files atomically so interrupted updates can be retried.
 
 ## 1.1.7 — 2026-11-09

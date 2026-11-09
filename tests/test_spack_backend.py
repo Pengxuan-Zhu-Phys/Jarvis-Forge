@@ -319,6 +319,55 @@ def test_legacy_apt_activation_refreshes_without_modifying_evidence(managed, mon
     assert output == "ok"
 
 
+def test_apt_shell_repair_preserves_snapshot_and_selected_python(managed, monkeypatch, tmp_path, capsys):
+    from jarvis_forge.package_operations import environment_path
+
+    home, _ = managed
+    result = b.transact(home, "install", ["fixture-app"], cache="never")
+    original = Path(result["activation"])
+    source = original.with_name("modifications.json")
+    missing = tmp_path / "old prefix"
+    live = tmp_path / "live bin"
+    live.mkdir()
+    lua_template = {"type": "PrependPath", "name": "LUA_PATH", "value": str(live / "?.lua")}
+    source.write_text(json.dumps([
+        {"type": "PrependPath", "name": "PATH", "value": str(missing)},
+        {"type": "PrependPath", "name": "PATH", "value": str(live)},
+        {"type": "SetEnv", "name": "ROOTSYS", "value": str(missing)},
+        lua_template,
+    ]))
+    evidence = {file: file.read_bytes() for file in (original, source, original.with_name("spack-environment.sh"))}
+    state_path = home.root / "apt/state.json"
+    before = read_json(state_path)
+    b._executable(home).write_text(
+        "import json, shlex, sys\n"
+        "for row in reversed(json.load(open(sys.argv[-1]))):\n"
+        "    if row['name'] == 'PATH':\n"
+        "        print('export PATH=' + shlex.quote(row['value']) + ':\"$PATH\"')\n"
+    )
+    monkeypatch.delenv("JFORGE_CONTROLLER_LAUNCHER", raising=False)
+    argv = ["--home", str(home.root), "env", "repair", "apt", "--json"]
+    assert main([*argv, "--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["removed"] == 2 and read_json(state_path) == before
+    assert main(argv) == 0
+    report = json.loads(capsys.readouterr().out)
+    selected = read_json(state_path)
+    assert {key: value for key, value in selected.items() if key != "activation_repair"} == before
+    assert all(file.read_bytes() == content for file, content in evidence.items())
+    assert str(original) != report["activation"] == environment_path(home)
+    assert lua_template in json.loads(Path(report["activation"]).with_name("modifications.json").read_text())
+    output = subprocess.check_output(
+        ["bash", "-c", 'export PATH="$2:/usr/bin:/bin"; source "$1" && printf "%s\\n" "$PATH" && command -v python3',
+         "fixture", report["activation"], str(Path(sys.executable).parent)],
+        text=True,
+    ).splitlines()
+    assert output == [f"{live}:{Path(sys.executable).parent}:/usr/bin:/bin",
+                      str(Path(sys.executable).with_name("python3"))]
+    assert main(argv) == 0
+    assert not json.loads(capsys.readouterr().out)["changed"]
+    assert read_json(state_path) == selected
+
+
 def test_name_only_environment_pins_installed_gcc_runtime(managed):
     home, calls = managed
     named_layout(home)

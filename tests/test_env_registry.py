@@ -70,6 +70,26 @@ def test_managed_copy_survives_source_removal_and_revisions_are_retained(home, s
     assert show(home, "cbs", strict=True)["revision"] == second["revision"]
 
 
+def test_repair_publishes_a_new_named_environment_revision(home, script, capsys):
+    original = 'export FORGE_USER_VALUE=chosen\n. /nonexistent/jforge-fixture.sh\n'
+    script.write_text(original)
+    first = add(home, "cbs", script)
+    args = ["env", "repair", "cbs", "--home", str(home.root), "--json"]
+
+    assert main([*args, "--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["removed"] == 1
+    assert show(home, "cbs")["revision"] == first["revision"]
+    assert main(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    second = show(home, "cbs", strict=True)
+    assert second["revision"] == report["revision"] and second["parent_revision"] == first["revision"]
+    assert (Path(first["path"]) / "source.sh").read_text() == script.read_text() == original
+    assert (Path(second["path"]) / "source.sh").read_text() == "export FORGE_USER_VALUE=chosen\n"
+    assert main(args) == 0
+    assert not json.loads(capsys.readouterr().out)["changed"]
+    assert show(home, "cbs")["revision"] == second["revision"]
+
+
 def test_registry_is_shared_and_target_needs_no_forge_install(home, script, target):
     selected = add(home, "cbs", script)
     env = {**os.environ, "JFORGE_HOME": str(home.root),
@@ -209,7 +229,7 @@ def test_registry_does_not_write_through_symlinked_environment_directory(home, s
     assert not list(outside.iterdir())
 
 
-@pytest.mark.parametrize("command", [["env"], ["env", "add"], ["env", "list"], ["env", "show"]])
+@pytest.mark.parametrize("command", [["env"], ["env", "add"], ["env", "list"], ["env", "show"], ["env", "repair"]])
 def test_environment_cli_help(command, capsys):
     assert main([*command, "-h"]) == 0
     assert "Usage:" in capsys.readouterr().out

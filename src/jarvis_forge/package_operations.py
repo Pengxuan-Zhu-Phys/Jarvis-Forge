@@ -268,7 +268,10 @@ def environment_path(home):
         raise ForgeError(
             "The Spack activation script is missing.", hint="jforge apt import spack"
         )
-    from .spack_backend import _validate_external_python, refresh_runtime_environment
+    from .spack_backend import _validate_external_python, refresh_runtime_environment, repaired_runtime_environment
 
     _validate_external_python(home, state["spack"].get("packages", ()))
+    if state.get("activation_repair"):
+        activation, _ = repaired_runtime_environment(home, state)
+        return str(activation)
     return str(refresh_runtime_environment(Path(path)))

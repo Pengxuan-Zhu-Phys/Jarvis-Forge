@@ -78,7 +78,9 @@ checks:
   inputs:
   - src/jarvis_forge/environment*.py
   - src/jarvis_forge/shell_activation.py
+  - src/jarvis_forge/shell_repair.py
   - tests/test_env*.py
+  - tests/test_shell_repair.py
   - src/jarvis_forge/storage.py
   - src/jarvis_forge/package_operations.py
   - src/jarvis_forge/suite.py
@@ -92,6 +94,7 @@ checks:
   - -q
   - tests/test_environment.py
   - tests/test_env_registry.py
+  - tests/test_shell_repair.py
 - id: acceptance-history
   inputs:
   - src/jarvis_forge/runner.py

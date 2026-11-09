@@ -61,11 +61,13 @@ def write_json(path: Path, value: dict) -> None:
         Path(name).unlink(missing_ok=True)
 
 
-def write_text(path: Path, content: str) -> None:
+def write_text(path: Path, content: str, *, mode: int = 0o600) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=".write-")
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            if mode != 0o600:
+                os.fchmod(stream.fileno(), mode)
             stream.write(content)
         os.replace(name, path)
     finally:
