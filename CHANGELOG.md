@@ -1,7 +1,6 @@
 # Changelog
 
-## Unreleased
-
+## 1.1.8 — 2026-11-09
 ### Added
 
 - Add `jforge env repair` to preview or remove invalid activation paths, with a per-setting JSON report for workspaces, named environments, and apt profiles.
