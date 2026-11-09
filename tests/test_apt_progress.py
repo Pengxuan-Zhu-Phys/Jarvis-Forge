@@ -12,7 +12,9 @@ from jarvis_forge import apt_cli, build_catalog, spack_backend
 from jarvis_forge.apt_progress import AptProgress
 from jarvis_forge.cli import main
 from jarvis_forge.package_operations import operation, run_command
-from jarvis_forge.storage import read_json
+from jarvis_forge.storage import ForgeError, read_json
+
+pytestmark = pytest.mark.usefixtures("linux_apt")
 
 
 RAW = "==> Concretized dependency tree: fixture@1.0 +shared ^tool@2.0\n"
@@ -273,3 +275,25 @@ def test_update_command_passes_one_progress_instance_through_preparation(
     assert json.loads(output.out)["build_catalog"] == catalog
     assert "Updated package catalog" in output.err
     assert seen[0].closed
+
+
+def test_apt_update_reports_partial_success_in_json(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(apt_cli, "initialize_profile", lambda home: None)
+    monkeypatch.setattr(apt_cli, "ensure_active", lambda home, **kwargs: home)
+    monkeypatch.setattr(spack_backend, "update", lambda home, **kwargs: {"status": "passed", "path": "/packages"})
+
+    def fail(home):
+        with operation(home, "build-catalog-update", {}) as (directory, _):
+            (directory / "index.stderr.log").write_text("network error\n")
+            raise ForgeError("Failed to download build index", code=1)
+
+    from jarvis_forge.storage import ForgeHome
+    home = ForgeHome(tmp_path / "forge")
+    home.initialize()
+    monkeypatch.setattr(build_catalog, "update", fail)
+    assert main(["--home", str(home.root), "apt", "update", "--json"]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["command"] == "apt update" and not result["ok"]
+    assert result["package_update"]["status"] == "passed"
+    assert result["build_catalog"]["status"] == "failed"
+    assert (home.root / result["build_catalog"]["path"] / "index.stderr.log").is_file()

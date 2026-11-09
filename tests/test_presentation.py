@@ -82,7 +82,7 @@ def test_check_shows_complete_plan_including_uninstalled_dependencies():
     assert "list --installed" not in output
 
 
-def test_public_list_json_and_show_keep_full_metadata(tmp_path, monkeypatch, capsys):
+def test_public_list_json_and_show_keep_full_metadata(tmp_path, monkeypatch, capsys, linux_apt):
     package = installed("eigen", version="5.0.1")
     monkeypatch.setattr(spack_backend, "current", lambda home: dict(packages=[package]))
     monkeypatch.setattr(spack_backend, "details", lambda home, name: dict(name=name))

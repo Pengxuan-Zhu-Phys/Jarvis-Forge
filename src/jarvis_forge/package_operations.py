@@ -107,6 +107,7 @@ def operation(home, action, request):
             error=str(exc),
         )
         if isinstance(exc, ForgeError):
+            exc.operation_path = str(directory)
             exc.hint = (
                 exc.hint + "\n" if exc.hint else ""
             ) + f"Operation logs: {directory}"
@@ -258,8 +259,9 @@ def verified_archive(home, source, log_path, *, progress=None):
 
 def environment_path(home):
     from . import homebrew_backend
+    from .apt_profiles import backend_name
 
-    if homebrew_backend.configured(home):
+    if backend_name(home) == "homebrew":
         return homebrew_backend.environment_path(home)
     file = home.root / "apt/state.json"
     state = read_json(file) if file.exists() else {}

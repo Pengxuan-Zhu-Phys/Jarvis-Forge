@@ -14,7 +14,7 @@ def configure(home):
     return backend._config(home, home.root / 'repository', {'prefix':sys.prefix, 'version':'3.13.13'})
 
 
-def test_fresh_profile_uses_real_flat_store_under_shared_home(tmp_path, capsys):
+def test_fresh_profile_uses_real_flat_store_under_shared_home(tmp_path, capsys, linux_apt):
     base = ForgeHome(tmp_path / 'forge'); base.initialize()
     profile = ForgeHome(base.root / 'apt/profiles/spack-default'); profile.initialize()
     write_json(profile.root / 'config.json', {**read_json(profile.root / 'config.json'), 'apt_base_home':str(base.root)})

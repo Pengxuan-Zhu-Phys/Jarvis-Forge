@@ -252,6 +252,28 @@ def test_init_migrates_legacy_spack_default_to_homebrew(setup_brew, monkeypatch)
     assert not writes()
 
 
+def test_macos_apt_preview_is_native_and_recovers_missing_profile(setup_brew, monkeypatch):
+    cli, _, profile, writes = setup_brew
+    monkeypatch.setattr(apt_profiles, "sys", SimpleNamespace(platform="darwin"))
+    base = profile.root.parents[2]
+    selection = base / "apt/selection.json"
+    shutil.rmtree(profile.root)
+    selection.unlink()
+    before = {file: file.read_bytes() for file in base.rglob("*") if file.is_file()}
+    plan = cli("apt", "install", "eigen", "--dry-run")
+    assert plan["backend"] == "homebrew" and plan["would_install"] == []
+    assert before == {file: file.read_bytes() for file in base.rglob("*") if file.is_file()}
+    cli("apt", "profile", "other", "--create", "--backend", "homebrew")
+    write_json(selection, {"schema_version": 1, "platform": "darwin", "id": "homebrew-deleted"})
+    profiles = {row["id"]: row for row in cli("apt", "profile")["environments"]}
+    assert profiles["homebrew-deleted"]["status"] == "missing"
+    assert profiles["homebrew-mac"]["active"]
+    assert "homebrew-other" in profiles
+    assert cli("init")["apt_profile"]["id"] == "homebrew-mac"
+    assert read_json(selection)["id"] == "homebrew-mac"
+    assert not writes()
+
+
 def test_homebrew_registration_requires_darwin(monkeypatch):
     monkeypatch.setattr(brew.sys, "platform", "linux")
     with pytest.raises(ForgeError, match="require macOS"):

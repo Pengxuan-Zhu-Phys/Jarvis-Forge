@@ -77,6 +77,8 @@ def _transact(
         if command == "satisfy":
             _spack_only(ctx)
         if action == "install" and not dry_run and not homebrew_backend.configured(ctx.obj.home):
+            homebrew_backend.transact(ctx.obj.home, action, packages, jobs=jobs, timeout=timeout,
+                                      cache=cache, dry_run=True)
             _ready(ctx)
         _emit(ctx, command or action, **homebrew_backend.transact(
             ctx.obj.home, action, packages, jobs=jobs, timeout=timeout, cache=cache,
@@ -167,7 +169,7 @@ def list_packages(
         view = "available"
     else:
         if driver is homebrew_backend:
-            rows = homebrew_backend.inventory(ctx.obj.home) if homebrew_backend.configured(ctx.obj.home) else []
+            rows = homebrew_backend.inventory(ctx.obj.home)
         else:
             rows = backend.current(ctx.obj.home)["packages"]
         view = "installed"
@@ -380,19 +382,33 @@ def update_sources(ctx: typer.Context):
     """Refresh the active package catalog and this system's build recipes."""
     from . import build_catalog
 
-    initialize_profile(ctx.obj.user_home)
-    target = _ready(ctx)
-    driver = backend_name(target)
-    result = (homebrew_backend.update(target) if driver == "homebrew"
-              else backend.update(target, progress=_progress(ctx)))
+    def failure(exc, package, catalog):
+        if not ctx.obj.as_json:
+            raise exc
+        _emit(ctx, "update", ok=False, status="failed", package_update=package, build_catalog=catalog,
+              error={"type": type(exc).__name__, "message": str(exc), "hint": exc.hint})
+        raise typer.Exit(exc.code) from exc
+
+    try:
+        initialize_profile(ctx.obj.user_home)
+        target = _ready(ctx)
+        driver = backend_name(target)
+        result = (homebrew_backend.update(target) if driver == "homebrew"
+                  else backend.update(target, progress=_progress(ctx)))
+    except (ForgeError, OSError) as exc:
+        error = exc if isinstance(exc, ForgeError) else ForgeError(str(exc), code=1)
+        failure(error, {"status": "failed", "path": getattr(exc, "operation_path", None)}, {"status": "skipped"})
+    package = {"backend": driver, "status": result.get("status", "passed"), "path": result.get("path")}
     _progress(ctx)("Refresh build recipes for this system")
     try:
         catalog = build_catalog.update(ctx.obj.user_home)
     except (ForgeError, OSError) as exc:
         detail = getattr(exc, "hint", None)
-        raise ForgeError(f"{driver.capitalize()} metadata was refreshed. Build recipe refresh failed.\n{exc}",
-                         code=1, hint=detail or "Retry the build catalog with jforge build update.") from exc
-    _emit(ctx, "update", **{**result, "backend": driver, "build_catalog": catalog})
+        hint = "\n".join(part for part in (detail, "Retry the build catalog with jforge build update.") if part)
+        failure(ForgeError(f"{driver.capitalize()} metadata was refreshed. Build recipe refresh failed.\n{exc}",
+                           code=1, hint=hint),
+                package, {"status": "failed", "path": getattr(exc, "operation_path", None)})
+    _emit(ctx, "update", **{**result, "backend": driver, "package_update": package, "build_catalog": catalog})
 
 
 @app.command("switch", hidden=True)

@@ -415,12 +415,14 @@ def apt_update(console, values):
     if catalog:
         line(console, f"Build recipes for {catalog['platform']} · {len(catalog['builds'])} available"
              f" · {len(catalog['excluded_builds'])} for other platforms")
+        if catalog.get("path"):
+            field(console, "build_catalog_logs", catalog["path"])
     for key in ("available", "repository_commit", "updated_at", "note", "operation_id", "path"):
         if key in values:
             field(console, "logs" if key == "path" else key, values[key])
     for key, value in values.items():
         if key not in {"available", "repository_commit", "updated_at", "note", "operation_id", "path", "status",
-                       "build_catalog"}:
+                       "build_catalog", "package_update"}:
             field(console, key, value, compact=True)
 
 
@@ -507,7 +509,8 @@ def apt_profile_list(console, profiles):
         return
     line(console, f"Package profiles ({len(profiles)})", style="bold")
     for profile in profiles:
-        state = ("pending setup" if profile.get("configured") is False else "active" if profile["active"]
+        state = ("missing" if profile.get("status") == "missing"
+                 else "pending setup" if profile.get("configured") is False else "active" if profile["active"]
                  else "archived" if profile["backend"] == "archived" else "inactive")
         line(console, f"  {profile['id']} · {state}")
         line(console, f"    {profile['path']}", style="dim")

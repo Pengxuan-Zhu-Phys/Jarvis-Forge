@@ -132,14 +132,15 @@ def runtime_activation(path, ancestors=frozenset()):
     return destination
 
 
-def capture(script=None):
+def capture(script=None, *, environment=None, cwd=None):
     """Capture only exported environment, keeping shell chatter out of the data."""
     import sys
     code = "import os,json; print('JFORGE_ENV_JSON='+json.dumps(dict(os.environ)))"
     prefix = "set -e; " + ("source " + shlex.quote(str(script)) + "; " if script else "")
-    result = subprocess.run(["bash", "--noprofile", "--norc", "-c",
+    bash = shutil.which("bash") or "bash"
+    result = subprocess.run([bash, "--noprofile", "--norc", "-c",
                              prefix + 'exec "$@"', "jforge-env", sys.executable, "-I", "-c", code],
-                            stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+                            stdin=subprocess.DEVNULL, capture_output=True, timeout=60, env=environment, cwd=cwd)
     if result.returncode:
         raise ForgeError("Environment activation failed: " + result.stderr.decode(errors="replace"), code=1)
     for line in reversed(result.stdout.decode(errors="replace").splitlines()):

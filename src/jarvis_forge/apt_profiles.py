@@ -38,31 +38,35 @@ def _profile(base, profile_id):
     return ForgeHome(_inside(base, base.root / "apt/profiles" / identifier(profile_id)))
 
 
-def active_home(base):
-    record = _selection(base) or {}
+def _native_profile(base):
+    return _profile(base, "homebrew-mac" if sys.platform == "darwin" else "spack-default")
+
+
+def _recorded_profile(base, record):
     selected = record.get("id")
     if record.get("platform") not in {None, sys.platform}:
-        return _profile(base, "homebrew-mac" if sys.platform == "darwin" else "spack-default")
+        return None
     if record.get("location") == "root":
-        if selected != "direct" or not configured(base):
-            raise ForgeError(
-                "The selected root Spack environment is unavailable.",
-                hint="jforge apt import spack",
-            )
-        return base
+        return base if selected == "direct" and configured(base) else None
     if selected and selected.startswith(("spack-", "homebrew-")):
         target = _profile(base, selected)
-        if not (target.root / "config.json").is_file():
-            raise ForgeError(
-                f"Selected package profile is missing: {target.root}",
-                hint="jforge apt profile",
-            )
+        if (target.root / "config.json").is_file() and (
+                record.get("pending") or configured(target) or _is_configured_homebrew(target)):
+            return target
+    return None
+
+
+def active_home(base):
+    record = _selection(base) or {}
+    target = _recorded_profile(base, record)
+    native = _native_profile(base)
+    if target and (record.get("platform") or backend_name(target) == backend_name(native)):
         return target
     # Existing direct Spack deployments remain valid. Legacy selections do not
     # execute the removed backend and are replaced only after a successful write.
-    if selected in {None, "legacy"} and configured(base):
+    if record.get("id") in {None, "legacy"} and configured(base) and backend_name(native) == "spack":
         return base
-    return _profile(base, "spack-default")
+    return native
 
 
 def archived_homes(base):
@@ -99,12 +103,15 @@ def archived_packages(base):
 
 def profiles(base, *, archived=False):
     selected = active_home(base)
-    pending = (_selection(base) or {}).get("pending")
+    record = _selection(base) or {}
+    recorded = _recorded_profile(base, record)
     homes = [base] if configured(base) else []
     for path in sorted((base.root / "apt/profiles").glob("*/config.json")):
         target = _profile(base, path.parent.name)
-        if configured(target) or _is_configured_homebrew(target) or target == selected and pending:
+        if configured(target) or _is_configured_homebrew(target):
             homes.append(target)
+    if selected not in homes:
+        homes.append(selected)
     rows = [
         dict(
             id="direct" if home == base else home.root.name,
@@ -115,6 +122,16 @@ def profiles(base, *, archived=False):
         )
         for home in homes
     ]
+    missing = record.get("id", "")
+    if (missing == "direct" or missing.startswith(("spack-", "homebrew-"))) and (
+            record.get("platform") in {None, sys.platform} and recorded is None):
+        missing_path = base if missing == "direct" else _profile(base, missing)
+        row = {"id": missing, "path": str(missing_path.root), "backend": backend_name(missing_path),
+               "active": False, "configured": False, "status": "missing"}
+        if missing_path == selected:
+            rows = [row if item["id"] == missing else item for item in rows]
+        else:
+            rows.append(row)
     if archived:
         rows += [
             dict(
@@ -129,18 +146,22 @@ def profiles(base, *, archived=False):
     return rows
 
 
-def ensure_active(base, *, progress=None):
-    selected = active_home(base)
-    pending = (_selection(base) or {}).get("pending")
+def ensure_active(base, *, progress=None, selected=None):
+    if selected and configured(selected) and (selected.root / "apt/state.json").is_file():
+        return selected
+    active = active_home(base)
+    selected = selected or active
+    pending = selected == active and (_selection(base) or {}).get("pending")
     if (configured(selected) and not pending) or _is_configured_homebrew(selected):
         return selected
     if backend_name(selected) == "homebrew":
         create_homebrew(base, selected.root.name)
         return active_home(base)
     switch(
-        base, "spack", name=selected.root.name.removeprefix("spack-"), progress=progress
+        base, "spack", name=selected.root.name.removeprefix("spack-"), progress=progress,
+        select=selected == active,
     )
-    return active_home(base)
+    return selected
 
 
 def _is_configured_homebrew(home):
@@ -161,7 +182,8 @@ def initialize_profile(base):
         native = "homebrew" if sys.platform == "darwin" else "spack"
         selected_backend = backend_name(selected)
         profile_id = "direct" if selected == base else selected.root.name
-        if record.get("platform") == sys.platform and not record.get("pending"):
+        if (record.get("platform") == sys.platform and not record.get("pending")
+                and _recorded_profile(base, record) == selected):
             return {"id": profile_id, "backend": selected_backend, "status": "selected"}
         if selected_backend == native and (configured(selected) or _is_configured_homebrew(selected)):
             if (selected.root / "apt/state.json").is_file():
@@ -239,7 +261,7 @@ def create_homebrew(base, name):
 
 
 def switch(
-    base, origin="spack", *, name="default", direct=False, progress=None, create_only=False
+    base, origin="spack", *, name="default", direct=False, progress=None, create_only=False, select=True
 ):
     from . import spack_backend as backend
 
@@ -283,4 +305,4 @@ def switch(
         result["bootstrap"] = backend.bootstrap(
             target, progress=progress
         )
-        return _save_selection(base, target, profile_id, result)
+        return _save_selection(base, target, profile_id, result) if select else result

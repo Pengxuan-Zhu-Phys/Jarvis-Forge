@@ -108,22 +108,108 @@ def test_cmake_producer_consumer_and_reuse(home, projects):
         builds.artifact(home, output['artifact_id'])
 
 
-def test_resume_uses_original_recipe_and_retries_failed_check(home, projects, tmp_path):
+@pytest.mark.parametrize("legacy_marker", [False, True])
+def test_resume_uses_original_recipe_and_retries_failed_check(home, projects, tmp_path, legacy_marker):
     producer, _ = projects
     config = yaml.safe_load(producer.read_text())
     marker = tmp_path / 'allow-success'
+    config['steps'].insert(0, {'id': 'preflight', 'uses': 'command', 'with': {'argv': ['true']}})
+    config['steps'][1]['needs'] = ['preflight']
+    config['steps'][1]['with']['dependencies'] = ['preflight']
     config['steps'].append({'id': 'check', 'uses': 'command', 'needs': ['tiny'], 'with': {
         'argv': [sys.executable, '-c', 'from pathlib import Path; assert Path(' + repr(str(marker)) + ').exists()']}})
     config['outputs']['installation']['publish_after'] = ['check']
     producer.write_text(yaml.safe_dump(config))
     first = builds.execute(home, producer)
     assert first['status'] == 'failed'
+    assert first['failed_step']['id'] == 'check'
+    if legacy_marker:
+        step = next(Path(first['attempt']).glob('*/tiny/environment.sh'))
+        configured = next((home.root / 'builds/work').glob('*/build/tiny/.jforge-configure.json'))
+        argv = read_json(step.parent / 'command-1.json')['requested_argv']
+        write_json(configured, {'fingerprint': builds.fingerprint({'configure': argv, 'environment': digest(step)})})
     assert not list((home.root / 'builds/artifacts').glob('*/manifest.json'))
     producer.write_text('broken original; resume must use snapshot')
     marker.touch()
     second = builds.execute(home, resume=first['run_id'], jobs=2)
     assert second['status'] == 'passed', second
     assert len(list((Path(second['path']) / 'attempts').iterdir())) == 2
+
+
+def test_build_reuse_tracks_selected_profile_and_installed_dag(home, projects, monkeypatch):
+    from jarvis_forge import apt_profiles, spack_backend
+
+    producer, _ = projects
+    config = yaml.safe_load(producer.read_text())
+    config["steps"].insert(0, {"id": "deps", "uses": "apt.install", "with": {"specs": ["gsl"]}})
+    config["steps"][1]["needs"] = ["deps"]
+    config["steps"][1]["with"]["dependencies"] = ["deps"]
+    producer.write_text(yaml.safe_dump(config))
+    monkeypatch.setattr(spack_backend, "bootstrap", fake_bootstrap)
+    targets = []
+
+    def install(target, action, specs, **options):
+        targets.append(target.root.name)
+        activation = target.root / "environment.sh"
+        activation.write_text(":\n")
+        state = read_json(target.root / "apt/state.json")
+        selected = state["spack"]
+        selected["roots"] = ["gsl"]
+        if not selected["packages"]:
+            selected["packages"] = [{"name": "gsl", "hash": "first", "prefix": str(target.root)}]
+        write_json(target.root / "apt/state.json", state)
+        lock = target.root / ("lock-" + selected["packages"][0]["hash"])
+        lock.write_text("{}")
+        return {"activation": str(activation), "lockfile": str(lock), "packages": selected["packages"],
+                "roots": selected["roots"]}
+
+    monkeypatch.setattr(spack_backend, "transact", install)
+    apt_profiles.switch(home, name="first")
+    first = builds.execute(home, producer)
+    assert first["status"] == "passed", first
+    repeated = builds.execute(home, producer)
+    assert repeated["outputs"]["installation"]["artifact_id"] == first["outputs"]["installation"]["artifact_id"]
+    apt_profiles.switch(home, name="second")
+    second = builds.execute(home, producer)
+    assert second["status"] == "passed", second
+    assert second["outputs"]["installation"]["artifact_id"] != first["outputs"]["installation"]["artifact_id"]
+    state_file = apt_profiles.active_home(home).root / "apt/state.json"
+    state = read_json(state_file)
+    state["spack"]["packages"][0]["hash"] = "changed"
+    write_json(state_file, state)
+    changed = builds.execute(home, producer)
+    assert changed["status"] == "passed", changed
+    assert changed["outputs"]["installation"]["artifact_id"] != second["outputs"]["installation"]["artifact_id"]
+    assert targets == ["spack-first", "spack-second", "spack-second"]
+
+
+def test_pending_apt_step_resumes_with_original_profile(home, tmp_path, monkeypatch):
+    from jarvis_forge import apt_profiles, spack_backend
+
+    monkeypatch.setattr(spack_backend, "bootstrap", fake_bootstrap)
+    targets = []
+
+    def install(target, *args, **kwargs):
+        targets.append(target.root.name)
+        if len(targets) == 1:
+            raise ForgeError("transient package failure", code=1)
+        activation = target.root / "environment.sh"
+        activation.write_text(":\n")
+        lock = target.root / "spack.lock"
+        lock.write_text("{}")
+        return {"activation": str(activation), "lockfile": str(lock), "packages": []}
+
+    monkeypatch.setattr(spack_backend, "transact", install)
+    path = save(tmp_path / "apt.yaml", id="apt-build",
+                steps=[{"id": "packages", "uses": "apt.install", "with": {"specs": ["gsl"]}}])
+    apt_profiles.switch(home, name="first")
+    first = builds.execute(home, path)
+    assert first["status"] == "failed"
+    apt_profiles.switch(home, name="second")
+    resumed = builds.execute(home, resume=first["run_id"])
+    assert resumed["status"] == "passed", resumed
+    assert targets == ["spack-first", "spack-first"]
+    assert apt_profiles.active_home(home).root.name == "spack-second"
 
 
 def test_two_pinned_artifacts_from_one_recipe_survive_resume(home, projects, tmp_path):
@@ -249,6 +335,20 @@ def test_catalog_is_independent_and_failure_retains_cache(tmp_path, home):
     with pytest.raises(ForgeError):
         build_catalog.update(home, index.as_uri())
     assert (home.root / 'builds/catalog/index.json').read_bytes() == old
+
+
+def test_failed_build_catalog_update_keeps_reported_download_log(tmp_path, home, monkeypatch):
+    curl = tmp_path / "curl"
+    curl.write_text("#!/bin/sh\necho 'fixture download failure' >&2\nexit 22\n")
+    curl.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + ":/usr/bin:/bin")
+    with pytest.raises(ForgeError) as error:
+        build_catalog.update(home)
+    logs = Path(error.value.operation_path)
+    assert "fixture download failure" in (logs / "index.stderr.log").read_text()
+    assert str(logs / "index.stderr.log") in str(error.value)
+    assert read_json(logs / "result.json")["status"] == "failed"
+    assert not list(logs.glob("staging-*"))
 
 
 def test_catalog_refresh_downloads_only_supported_builds(tmp_path, home, monkeypatch):
@@ -687,7 +787,7 @@ def test_dependency_host_requirements_are_checked_before_parent(home, tmp_path, 
     assert not list((home.root / "runs").iterdir())
 
 
-def test_package_install_uses_active_apt_profile(home, tmp_path, monkeypatch):
+def test_package_install_uses_active_apt_profile(home, tmp_path, monkeypatch, linux_apt):
     from jarvis_forge import spack_backend
     seen = {}
     monkeypatch.setattr(spack_backend, "bootstrap", fake_bootstrap)
@@ -713,7 +813,7 @@ def test_package_install_uses_active_apt_profile(home, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("verbose", [False, True])
-def test_build_package_install_uses_apt_progress_display(home, tmp_path, monkeypatch, capfdbinary, verbose):
+def test_build_package_install_uses_apt_progress_display(home, tmp_path, monkeypatch, capfdbinary, verbose, linux_apt):
     from jarvis_forge import spack_backend
     monkeypatch.setenv("NO_COLOR", "1")
     monkeypatch.setattr(spack_backend, "bootstrap", fake_bootstrap)
@@ -753,7 +853,7 @@ def test_build_package_install_uses_apt_progress_display(home, tmp_path, monkeyp
     assert "Jarvis-Forge.APT" in recorded and "Resolve dependencies" in recorded
 
 
-def test_build_failure_shows_stage_diagnostic_and_resume_once(home, tmp_path, monkeypatch, capsys):
+def test_build_failure_shows_stage_diagnostic_and_resume_once(home, tmp_path, monkeypatch, capsys, linux_apt):
     from jarvis_forge import spack_backend
 
     monkeypatch.setenv("NO_COLOR", "1")
@@ -815,7 +915,7 @@ def test_build_success_keeps_command_output_for_verbose_and_logs(home, tmp_path,
     assert raw.read_text() == "raw subprocess output\n"
 
 
-def test_inline_package_archive_and_cmake_paths(home,projects,tmp_path,monkeypatch):
+def test_inline_package_archive_and_cmake_paths(home,projects,tmp_path,monkeypatch,linux_apt):
     from jarvis_forge import spack_backend
     import tarfile
     producer,_=projects
@@ -850,7 +950,7 @@ def test_inline_package_archive_and_cmake_paths(home,projects,tmp_path,monkeypat
     assert not list((home.root/'apt/profiles').glob('spack-build-*'))
 
 
-def test_package_paths_reach_cmake_discovery_and_nested_build(home, projects, tmp_path, monkeypatch):
+def test_package_paths_reach_cmake_discovery_and_nested_build(home, projects, tmp_path, monkeypatch, linux_apt):
     """Reproduce ROOT's nested header/-l search failures with real compiler commands."""
     import subprocess
     from jarvis_forge import spack_backend

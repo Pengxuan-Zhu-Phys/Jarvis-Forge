@@ -17,7 +17,7 @@ from jarvis_forge.storage import ForgeError, ForgeHome, read_json, write_json
 
 
 @pytest.fixture
-def base(tmp_path, monkeypatch):
+def base(tmp_path, monkeypatch, linux_apt):
     base = ForgeHome(tmp_path / "user home")
     base.initialize()
 

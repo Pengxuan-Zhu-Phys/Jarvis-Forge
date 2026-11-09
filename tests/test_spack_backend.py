@@ -13,6 +13,8 @@ from jarvis_forge.apt_profiles import active_home, switch
 from jarvis_forge.cli import main
 from jarvis_forge.storage import ForgeError, ForgeHome, read_json, write_json
 
+pytestmark = pytest.mark.usefixtures("linux_apt")
+
 
 @pytest.mark.parametrize(
     "requested,expected",

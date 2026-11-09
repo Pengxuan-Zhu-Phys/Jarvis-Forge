@@ -19,6 +19,8 @@
 
 ### Fixed
 
+- Bind builds to the selected apt profile and resolved package graph, preserve that selection across resume, and fingerprint the effective CMake environment across attempts.
+- Use the native package backend for fresh apt commands, recover from missing profile selections, and keep build-catalog update logs and per-phase results.
 - Reject unsupported build platforms and apt backends before execution, including for dependent recipes. Show host requirements in build inspection and planning.
 - Rebuild a deleted workspace installation at the original path without manually removing its old artifact record.
 - Omit missing search directories when generating build runtime activation scripts.

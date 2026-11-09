@@ -182,7 +182,7 @@ def test_modified_managed_file_is_visible_and_cannot_be_activated(home, script):
         show(home, "cbs", strict=True)
 
 
-def test_apt_environment_can_be_listed_but_not_overwritten(home, script):
+def test_apt_environment_can_be_listed_but_not_overwritten(home, script, linux_apt):
     home.initialize()
     from jarvis_forge.apt_profiles import active_home
     target = active_home(home)

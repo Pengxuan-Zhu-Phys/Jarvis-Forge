@@ -4,6 +4,8 @@ import json
 import pytest
 from jarvis_forge.cli import main
 
+pytestmark = pytest.mark.usefixtures("linux_apt")
+
 
 @pytest.mark.parametrize(
     "command",

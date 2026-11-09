@@ -112,10 +112,12 @@ def discover():
     return {"schema_version": 1, "brew": brew, "prefix": prefix, "cellar": cellar}
 
 
-def settings(home):
+def settings(home, *, allow_unregistered=False):
     _darwin()
     path = _inside(home, home.root / "apt/homebrew.json")
     if not path.is_file():
+        if allow_unregistered:
+            return discover()
         raise ForgeError("The Homebrew profile is pending.", hint="Make Homebrew available, then run jforge init.")
     data = read_json(path)
     if data.get("schema_version") != 1 or not all(
@@ -132,7 +134,7 @@ def current(home):
     state = read_json(path).get("homebrew") if path.is_file() else None
     if (not isinstance(state, dict) or not isinstance(state.get("roots"), list)
             or not isinstance(state.get("packages"), list) or not isinstance(state.get("activation"), str)):
-        raise ForgeError(f"No Homebrew environment has been published: {home.root}")
+        raise ForgeError(f"No Homebrew environment has been published: {home.root}", hint="jforge init")
     return state
 
 
@@ -184,8 +186,8 @@ def _keg(config, formula, installed):
 
 
 def inventory(home, *, config=None):
-    config = config or settings(home)
-    state = current(home)
+    config = config or settings(home, allow_unregistered=True)
+    state = current(home) if configured(home) else {"packages": []}
     selected = {row["install_id"]: row for row in state["packages"]}
     rows = []
     for formula in _installed(config):
@@ -199,7 +201,7 @@ def inventory(home, *, config=None):
 
 
 def catalog(home, pattern="*", query=None):
-    config = settings(home)
+    config = settings(home, allow_unregistered=True)
     installed = {row["name"]: row for row in inventory(home, config=config)}
     names = _invoke(config["brew"], ["formulae"]).splitlines()
     return [installed.get(name, {"name": name, "backend": "homebrew", "status": "available", "scope": "shared"})
@@ -207,7 +209,7 @@ def catalog(home, pattern="*", query=None):
 
 
 def details(home, name):
-    config = settings(home)
+    config = settings(home, allow_unregistered=True)
     name = _formula(name)
     rows = _info(config, ["--formula", "homebrew/core/" + name])
     if len(rows) != 1 or rows[0].get("tap") != "homebrew/core":
@@ -389,12 +391,13 @@ def transact(home, action, requests, *, dry_run=False, timeout=3600, jobs=1, cac
     if cache != "auto":
         raise ForgeError("Spack cache policies do not apply to Homebrew.")
     names = list(dict.fromkeys(_formula(value) for value in requests))
-    config = settings(home)
+    preview = dry_run or action == "check"
+    config = settings(home, allow_unregistered=preview)
 
     def prepare():
         if progress:
             progress("[1/4] Audit Homebrew formulae and dependencies")
-        previous = current(home)["roots"]
+        previous = current(home)["roots"] if configured(home) else []
         if action == "remove":
             if any(name not in previous for name in names):
                 raise ForgeError("Only explicitly selected Homebrew roots can be removed from this profile.")
@@ -411,7 +414,7 @@ def transact(home, action, requests, *, dry_run=False, timeout=3600, jobs=1, cac
                 "would_install": missing, "audited_dependencies": audited, "deferred_roots": deferred or {},
                 "dry_run": dry_run or action == "check"}
 
-    if dry_run or action == "check":
+    if preview:
         return prepare()
     with locked(home), operation(home, action, {"formulae": names, "backend": "homebrew"}) as (directory, result):
         with _prefix_lock(config):

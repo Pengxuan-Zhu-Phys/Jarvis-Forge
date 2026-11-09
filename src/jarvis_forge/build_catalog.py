@@ -6,7 +6,7 @@ import json
 import re
 import shutil
 import sys
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 import yaml
 from packaging.specifiers import SpecifierSet, InvalidSpecifier
@@ -14,7 +14,8 @@ from packaging.version import Version
 
 from . import __version__
 from .downloads import fetch
-from .storage import ForgeError, digest, identifier, new_id, read_json, write_json
+from .package_operations import operation
+from .storage import ForgeError, digest, identifier, read_json, write_json
 from .suite import UniqueLoader
 
 INDEX_URL = "https://github.com/Pengxuan-Zhu-Phys/Jarvis-Forge/releases/download/builds/builds.json"
@@ -106,98 +107,101 @@ def _platforms(value, name):
 
 
 def update(home, url=INDEX_URL, *, platform=sys.platform):
-    from .builds import host_requirements, load
     home.require_initialized()
-    temporary = home.root / "builds/catalog" / new_id("download")
-    temporary.mkdir(parents=True)
+    with operation(home, "build-catalog-update", {"source": url, "platform": platform}) as (logs, result):
+        with TemporaryDirectory(prefix="staging-", dir=logs) as directory:
+            result.update(_refresh(home, url, platform, Path(directory), logs))
+        return result
+
+
+def _refresh(home, url, platform, temporary, logs):
+    from .builds import host_requirements, load
+
+    fetch(url, temporary / "index.json", logs / "index")
+    index = read_json(temporary / "index.json")
     try:
-        fetch(url, temporary / "index.json", temporary / "index")
-        index = read_json(temporary / "index.json")
+        compatible = Version(__version__) in SpecifierSet(index.get("requires_forge", ""))
+    except (InvalidSpecifier, TypeError):
+        compatible = False
+    if index.get("schema_version") != 1 or not compatible or not isinstance(index.get("builds"), list):
+        raise ForgeError("Invalid or incompatible build Release index.")
+    seen = set()
+    selected, excluded = [], {}
+    library_files = {}
+    from .build_cards import read_library
+    if not isinstance(index.get("libraries", []), list):
+        raise ForgeError("Invalid build library catalog.")
+    for row in index.get("libraries", []):
+        name = identifier(row.get("id", ""))
+        if name in library_files or not re.fullmatch("[a-f0-9]{64}", str(row.get("sha256", ""))):
+            raise ForgeError("Duplicate library ID or invalid library SHA-256.")
+        asset = temporary / ("library-" + name + ".yaml")
+        fetch(row.get("url", ""), asset, logs / ("library-" + name))
+        if digest(asset) != row["sha256"]:
+            raise ForgeError(f"Library SHA-256 mismatch: {name}", code=1)
+        template = read_library(asset)["build"]
+        template_file = temporary / ("template-" + name + ".yaml")
+        template_file.write_text(yaml.safe_dump(template))
+        load(template_file)
+        destination = home.root / "builds/recipes" / row["sha256"] / "library.yaml"
+        _cache_asset(asset, destination, row["sha256"], "library")
+        library_files[name] = destination
+    for row in index["builds"]:
+        name = identifier(row.get("id", ""))
+        if name in seen or not re.fullmatch("[a-f0-9]{64}", str(row.get("sha256", ""))):
+            raise ForgeError("Duplicate build ID or invalid SHA-256 in Release index.")
+        seen.add(name)
+        if not isinstance(row.get("revision"), str) or not row["revision"]:
+            raise ForgeError("Build Release entry requires a revision.")
+        companions = resources(row)
+        declared_platforms = _platforms(row["platforms"], name) if "platforms" in row else None
+        if platform and declared_platforms and platform not in declared_platforms:
+            excluded[name] = declared_platforms
+            continue
+        bundle = temporary / ("bundle-" + name)
+        bundle.mkdir()
+        asset = bundle / "build.yaml"
+        fetch(row.get("url", ""), asset, logs / ("recipe-" + name))
+        if digest(asset) != row["sha256"]:
+            raise ForgeError(f"Build SHA-256 mismatch: {name}", code=1)
         try:
-            compatible = Version(__version__) in SpecifierSet(index.get("requires_forge", ""))
-        except (InvalidSpecifier, TypeError):
-            compatible = False
-        if index.get("schema_version") != 1 or not compatible or not isinstance(index.get("builds"), list):
-            raise ForgeError("Invalid or incompatible build Release index.")
-        seen = set()
-        selected, excluded = [], {}
-        library_files = {}
-        from .build_cards import read_library
-        if not isinstance(index.get("libraries", []), list):
-            raise ForgeError("Invalid build library catalog.")
-        for row in index.get("libraries", []):
-            name = identifier(row.get("id", ""))
-            if name in library_files or not re.fullmatch("[a-f0-9]{64}", str(row.get("sha256", ""))):
-                raise ForgeError("Duplicate library ID or invalid library SHA-256.")
-            asset = temporary / ("library-" + name + ".yaml")
-            fetch(row.get("url", ""), asset, temporary / ("library-" + name))
-            if digest(asset) != row["sha256"]:
-                raise ForgeError(f"Library SHA-256 mismatch: {name}", code=1)
-            template = read_library(asset)["build"]
-            template_file = temporary / ("template-" + name + ".yaml")
-            template_file.write_text(yaml.safe_dump(template))
-            load(template_file)
-            destination = home.root / "builds/recipes" / row["sha256"] / "library.yaml"
-            _cache_asset(asset, destination, row["sha256"], "library")
-            library_files[name] = destination
-        for row in index["builds"]:
-            name = identifier(row.get("id", ""))
-            if name in seen or not re.fullmatch("[a-f0-9]{64}", str(row.get("sha256", ""))):
-                raise ForgeError("Duplicate build ID or invalid SHA-256 in Release index.")
-            seen.add(name)
-            if not isinstance(row.get("revision"), str) or not row["revision"]:
-                raise ForgeError("Build Release entry requires a revision.")
-            companions = resources(row)
-            declared_platforms = _platforms(row["platforms"], name) if "platforms" in row else None
-            if platform and declared_platforms and platform not in declared_platforms:
-                excluded[name] = declared_platforms
-                continue
-            bundle = temporary / ("bundle-" + name)
-            bundle.mkdir()
-            asset = bundle / "build.yaml"
-            fetch(row.get("url", ""), asset, temporary / name)
-            if digest(asset) != row["sha256"]:
-                raise ForgeError(f"Build SHA-256 mismatch: {name}", code=1)
-            try:
-                raw = yaml.load(asset.read_text(), Loader=UniqueLoader)
-            except (ValueError, yaml.YAMLError) as exc:
-                raise ForgeError(f"Cannot read build {name}: {exc}") from exc
-            platforms = host_requirements(raw).get("platforms") if isinstance(raw, dict) else None
-            if platforms:
-                _platforms(platforms, name)
-            if declared_platforms and platforms != declared_platforms:
-                raise ForgeError(f"Build platform metadata does not match the recipe: {name}")
-            if platform and platforms and platform not in platforms:
-                excluded[name] = platforms
-                continue
-            for item in companions:
-                script = bundle / item["path"]
-                script.parent.mkdir(parents=True, exist_ok=True)
-                fetch(item["url"], script, temporary / ("script-" + item["sha256"]))
-                if digest(script) != item["sha256"]:
-                    raise ForgeError(f"Companion script SHA-256 mismatch: {item['path']}", code=1)
-            loaded = load(asset, home=home, library_files=library_files)
-            if loaded["config"]["id"] != name:
-                raise ForgeError(f"Build ID mismatch: {name}")
-            platforms = loaded["config"].get("platforms")
-            if platform and platforms and platform not in platforms:
-                excluded[name] = platforms
-                continue
-            declared = {v["path"]: v["sha256"] for v in companions}
-            required = {v["path"]: v["sha256"] for v in loaded["card_sources"] if "script_id" in v}
-            if declared != required:
-                raise ForgeError(f"Companion files do not match build scripts: {name}")
-            destination = home.root / "builds/recipes" / snapshot_id(row) / "build.yaml"
-            _cache_asset(asset, destination, row["sha256"], "build")
-            for item in companions:
-                target = destination.parent / item["path"]
-                _cache_asset(bundle / item["path"], target, item["sha256"], "companion script")
-            selected.append(row)
-        write_json(home.root / "builds/catalog/index.json",
-                   {**index, "builds": selected, "platform": platform, "excluded_builds": excluded})
-        return {"builds": selected, "source": url, "platform": platform, "excluded_builds": excluded}
-    finally:
-        shutil.rmtree(temporary)
+            raw = yaml.load(asset.read_text(), Loader=UniqueLoader)
+        except (ValueError, yaml.YAMLError) as exc:
+            raise ForgeError(f"Cannot read build {name}: {exc}") from exc
+        platforms = host_requirements(raw).get("platforms") if isinstance(raw, dict) else None
+        if platforms:
+            _platforms(platforms, name)
+        if declared_platforms and platforms != declared_platforms:
+            raise ForgeError(f"Build platform metadata does not match the recipe: {name}")
+        if platform and platforms and platform not in platforms:
+            excluded[name] = platforms
+            continue
+        for item in companions:
+            script = bundle / item["path"]
+            script.parent.mkdir(parents=True, exist_ok=True)
+            fetch(item["url"], script, logs / ("script-" + item["sha256"]))
+            if digest(script) != item["sha256"]:
+                raise ForgeError(f"Companion script SHA-256 mismatch: {item['path']}", code=1)
+        loaded = load(asset, home=home, library_files=library_files)
+        if loaded["config"]["id"] != name:
+            raise ForgeError(f"Build ID mismatch: {name}")
+        platforms = loaded["config"].get("platforms")
+        if platform and platforms and platform not in platforms:
+            excluded[name] = platforms
+            continue
+        declared = {v["path"]: v["sha256"] for v in companions}
+        required = {v["path"]: v["sha256"] for v in loaded["card_sources"] if "script_id" in v}
+        if declared != required:
+            raise ForgeError(f"Companion files do not match build scripts: {name}")
+        destination = home.root / "builds/recipes" / snapshot_id(row) / "build.yaml"
+        _cache_asset(asset, destination, row["sha256"], "build")
+        for item in companions:
+            target = destination.parent / item["path"]
+            _cache_asset(bundle / item["path"], target, item["sha256"], "companion script")
+        selected.append(row)
+    write_json(home.root / "builds/catalog/index.json",
+               {**index, "builds": selected, "platform": platform, "excluded_builds": excluded})
+    return {"builds": selected, "source": url, "platform": platform, "excluded_builds": excluded}
 
 
 def resolve(home, reference, parent=None):

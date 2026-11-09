@@ -320,7 +320,7 @@ def compatible(value, request, context):
             and value["context"] == context)
 
 
-def find_artifact(home, request, context):
+def find_artifact(home, request, context, *, apt=None):
     paths = list((home.root / "builds/artifacts").glob("*/manifest.json"))
     if request.get("artifact"):
         result = artifact(home, request["artifact"])
@@ -330,7 +330,7 @@ def find_artifact(home, request, context):
     matches = []
     for path in paths:
         value = read_json(path)
-        if compatible(value, request, context):
+        if compatible(value, request, context) and (apt is None or value.get("apt") == apt):
             try:
                 matches.append(artifact(home, value["artifact_id"]))
             except ForgeError:
@@ -339,6 +339,39 @@ def find_artifact(home, request, context):
         raise ForgeError("Multiple compatible artifacts; bind requires.NAME.artifact explicitly: " +
                          ", ".join(v["artifact_id"] for v in matches))
     return matches[0] if matches else None
+
+
+def _apt_signature(roots, packages):
+    return fingerprint({"roots": sorted(roots),
+                        "packages": sorted((p["name"], p["hash"], p["prefix"]) for p in packages)})
+
+
+def _apt_snapshot(profile):
+    from .spack_backend import current
+
+    state = current(ForgeHome(Path(profile["path"])))
+    return {"profile": profile, "signature": _apt_signature(state["roots"], state["packages"])}
+
+
+def _find_apt_instance(home, config, identity, apt):
+    """Find a complete build whose installed apt DAG matches the current one."""
+    folder = home.root / "builds/artifacts"
+    build_identity = fingerprint(identity)
+    for path in sorted(folder.glob(config["id"] + "-*/manifest.json")):
+        value = read_json(path)
+        if value.get("build_identity") != build_identity or value.get("apt") != apt:
+            continue
+        instance = value["instance"]
+        if all((folder / (config["id"] + "-" + instance[:20] + "-" + name) / "manifest.json").is_file()
+               for name in config.get("outputs", {})):
+            return value["apt_input"]
+    apt_input = apt["signature"]
+    while True:
+        instance = fingerprint({**identity, "apt_input": apt_input})
+        if not any((folder / (config["id"] + "-" + instance[:20] + "-" + name) / "manifest.json").is_file()
+                   for name in config.get("outputs", {})):
+            return apt_input
+        apt_input = fingerprint(apt_input)
 
 
 def _source_archive(home, source, log, name, *, show_progress):
@@ -420,7 +453,7 @@ def _require_spack_profile(selected, build_id=None):
                          hint="Run jforge apt profile to list profiles, then select a Spack profile.")
 
 
-def _check_host(home, selected_graph, saved_nodes=None):
+def _check_host(home, selected_graph, saved_nodes=None, apt_profile=None):
     from .apt_profiles import active_home
 
     nodes = selected_graph["nodes"]
@@ -435,8 +468,36 @@ def _check_host(home, selected_graph, saved_nodes=None):
     for key, node in nodes.items():
         saved_steps = saved_nodes.get(key, {}).get("steps", {})
         if any(step["uses"] == "apt.install" and step["id"] not in saved_steps for step in node["ordered"]):
-            _require_spack_profile(active_home(home), node["config"]["id"])
-            break
+            target = ForgeHome(Path(apt_profile["path"])) if apt_profile else active_home(home)
+            _require_spack_profile(target, node["config"]["id"])
+            return {"backend": "spack", "path": str(target.root)}
+    return apt_profile
+
+
+def _configure_fingerprint(argv, script, source, environment):
+    effective = cmake.capture(script, environment=environment, cwd=source)
+    for key in ("_", "SHLVL", "PWD", "OLDPWD"):
+        effective.pop(key, None)
+    return fingerprint({"configure": argv, "environment": effective})
+
+
+def _matches_legacy_configure(saved, requested, argv, logs, source, environment):
+    if len(logs.parents) < 3:
+        return False
+    attempts = logs.parents[2]
+    if attempts.name != "attempts":
+        return False
+    for attempt in attempts.iterdir():
+        folder = attempt / logs.parent.name / logs.name
+        archived = folder / "environment.sh"
+        if not archived.is_file():
+            continue
+        if fingerprint({"configure": argv, "environment": digest(archived)}) != saved:
+            continue
+        runtime = folder / "runtime-environment.sh"
+        script = runtime if runtime.is_file() else archived
+        return _configure_fingerprint(argv, script, source, environment) == requested
+    return False
 
 
 def execute(home, reference=None, *, parameters=None, environment_name=None, jobs=1, resume=None, progress=None, verbose=False, as_json=False):
@@ -453,17 +514,20 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
         environment_name = request.get("environment_name")
     else:
         selected_graph = graph(home, reference, parameters=parameters)
-        _check_host(home, selected_graph)
+        apt_profile = _check_host(home, selected_graph)
         home.require_initialized()
         request = {"kind": "build", "run_id": run_id, "suite_id": selected_graph["nodes"][selected_graph["root"]]["config"]["id"],
                    "started_at": now(), "environment_name": environment_name,
                    "workspace": selected_graph["nodes"][selected_graph["root"]].get("workspace")}
+        if apt_profile:
+            request["apt_profile"] = apt_profile
+    apt_profile = request.get("apt_profile")
     directory.mkdir(parents=True, exist_ok=True)
     with file_lock(directory / "run.lock"):
         state_path = directory / "graph.lock.json"
         state = read_json(state_path) if resume and state_path.exists() else {"schema_version": 1, "nodes": {}}
         if resume:
-            _check_host(home, selected_graph, state["nodes"])
+            _check_host(home, selected_graph, state["nodes"], apt_profile)
         if not resume:
             write_json(directory / "request.json", request)
             write_json(directory / "graph.json", selected_graph)
@@ -518,6 +582,10 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                 observed = cmake.tools(environment)
             context = {"tools": observed, "platform": sys.platform, "machine": os.uname().machine,
                        "cxx_standard": str(node["parameters"].get("cxx_standard", "unspecified"))}
+            node_profile = apt_profile if any(s["uses"] == "apt.install" for s in node["ordered"]) else None
+            apt = None
+            if node_profile and not old.get("instance"):
+                apt = _apt_snapshot(node_profile)
             if requirement:
                 # A consumer's selected C++ standard is an explicit ABI requirement.
                 if context["cxx_standard"] != requirement["context"]["cxx_standard"] or context["tools"] != requirement["context"]["tools"]:
@@ -537,7 +605,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     if not compatible(existing, req, context):
                         raise ForgeError("Locked artifact is incompatible with its consumer.")
                 elif policy != "rebuild":
-                    existing = find_artifact(home, req, context)
+                    existing = find_artifact(home, req, context, apt=apt)
                 if existing:
                     row = {"outputs": {req["output"]: existing}, "status": "reused"}
                     result["nodes"].setdefault(key, row)
@@ -568,6 +636,17 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                 identity["workspace"] = str(workspace)
             if policy == "rebuild":
                 identity["rebuild"] = old.get("rebuild", run_id)
+            apt_input = build_identity = None
+            if node_profile:
+                identity["apt_profile"] = node_profile
+                build_identity = fingerprint(identity)
+                if old.get("instance"):
+                    apt_input = old["apt_input"]
+                else:
+                    # Other nodes may have published dependencies since this node was entered.
+                    apt = _apt_snapshot(node_profile)
+                    apt_input = _find_apt_instance(home, config, identity, apt)
+                identity["apt_input"] = apt_input
             instance = fingerprint(identity)
             if old.get("instance") and old["instance"] != instance:
                 raise ForgeError("Build inputs changed; start a new run instead of resuming.")
@@ -596,15 +675,20 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                                 and not prefix.exists() and not prefix.is_symlink()):
                             continue
                     existing_outputs[name] = artifact(home, aid)
+                    if apt and existing_outputs[name].get("apt") != apt:
+                        raise ForgeError("The apt dependency selection changed during this build. Start a new run.")
                 if existing_outputs and len(existing_outputs) == len(config.get("outputs", {})):
                     row = {"status": "reused", "outputs": existing_outputs, "instance": instance}
-                    state["nodes"][key] = {**old, **row}
+                    state["nodes"][key] = {**old, **row, "apt_input": apt_input,
+                                           "environment": environment, "environment_origin": environment_origin,
+                                           "tools": observed}
                     write_json(state_path, state)
                     result["nodes"][key] = row
                     built_nodes[key] = row
                     return row
                 row = {"instance": instance, "environment": environment, "tools": observed, "steps": old.get("steps", {}),
-                       "outputs": old.get("outputs", {}), "rebuild": identity.get("rebuild"), "environment_origin": environment_origin}
+                       "outputs": old.get("outputs", {}), "rebuild": identity.get("rebuild"),
+                       "environment_origin": environment_origin, "apt_input": apt_input}
                 state["nodes"][key] = row
                 write_json(state_path, state)
                 python = observed.get("python", {}).get("path", "python3")
@@ -683,7 +767,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     try:
                         record = _step(home, step, options, work, step_dir, environment, observed,
                                        context, records, dependencies, jobs, event, row["steps"].get(step_id),
-                                       workspace=workspace, verbose=verbose, as_json=as_json)
+                                       workspace=workspace, verbose=verbose, as_json=as_json, apt_profile=node_profile)
                         records[step_id] = record
                         row["steps"][step_id] = record
                         if record.get("prefix"):
@@ -723,6 +807,11 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                                  "cmake_dir": metadata.get("cmake_dir"), "activation": producer["activation"],
                                  "dependencies": [v["artifact_id"] for v in dependencies.values()],
                                  "evidence": evidence, "files": cmake.manifest(Path(producer["prefix"]))}
+                    if node_profile:
+                        last_apt = next(records[step["id"]] for step in reversed(node["ordered"])
+                                        if step["uses"] == "apt.install")
+                        installed.update(apt={"profile": node_profile, "signature": last_apt["apt_signature"]},
+                                         build_identity=build_identity, apt_input=apt_input)
                     write_json(home.root / "builds/artifacts" / artifact_id / "manifest.json", installed)
                     outputs[name] = installed
                 row["outputs"] = outputs
@@ -760,7 +849,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
         return result
 
 
-def _step(home, step, options, work, logs, environment, observed, context, records, dependencies, jobs, progress, previous, *, workspace=None, verbose=False, as_json=False):
+def _step(home, step, options, work, logs, environment, observed, context, records, dependencies, jobs, progress, previous, *, workspace=None, verbose=False, as_json=False, apt_profile=None):
     used = []
     for name in options.get("dependencies", []):
         used.append(dependencies[name[9:]] if name.startswith("requires.") else records[name])
@@ -837,7 +926,8 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
         reporter = _AptInstallProgress(progress, display, logs)
         try:
             with process_environment(environment):
-                target = ensure_active(home, progress=reporter)
+                target = ensure_active(home, progress=reporter,
+                                       selected=ForgeHome(Path(apt_profile["path"])) if apt_profile else None)
                 _require_spack_profile(target)
                 installed = backend.transact(target, "install", options["specs"], jobs=jobs,
                                              timeout=step.get("timeout_seconds", 86400), progress=reporter,
@@ -853,6 +943,7 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
         evidence = {str(lock): digest(lock)}
         evidence.update({str(p): digest(p) for p in Path(activation).parent.iterdir() if p.is_file()})
         return {"status": "passed", "packages": installed["packages"], "activation": activation,
+                "apt_signature": _apt_signature(installed.get("roots", []), installed["packages"]),
                 "evidence": evidence,
                 "profile": str(target.root)}
     if step["uses"] == "check":
@@ -912,15 +1003,19 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
     if context["cxx_standard"] != "unspecified" and context["cxx_standard"] != selected_standard:
         raise ForgeError("CMake C++ standard must match the declared cxx_standard parameter.")
     invocation = cmake.commands(configured, source, build, prefix, jobs=jobs)
-    requested = fingerprint({"configure": invocation["configure"],
-                             "environment": digest(archived_script)})
     marker = build / ".jforge-configure.json"
     for phase in options.get("phases", ["configure", "build", "install"]):
         if phase == "configure":
-            if marker.exists() and read_json(marker)["fingerprint"] == requested:
-                progress("Reuse CMake configuration")
-                continue
+            argv = invocation["configure"]
+            requested = _configure_fingerprint(argv, script, source, environment)
             if marker.exists():
+                saved = read_json(marker)
+                if saved["fingerprint"] == requested or (saved.get("schema_version") is None
+                        and _matches_legacy_configure(saved["fingerprint"], requested, argv, logs, source, environment)):
+                    if saved.get("schema_version") != 2:
+                        write_json(marker, {"schema_version": 2, "fingerprint": requested})
+                    progress("Reuse CMake configuration")
+                    continue
                 raise ForgeError("CMake configuration changed; use a new build instance.")
             query = build / ".cmake/api/v1/query"
             query.mkdir(parents=True, exist_ok=True)
@@ -949,7 +1044,7 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
                         raise ForgeError(f"CMake selected {path} for {variable}, expected {python_artifacts[variable]}.", code=1)
             write_json(logs / "cmake-cache.json", actual)
             shutil.copyfile(build / "CMakeCache.txt", logs / "CMakeCache.txt")
-            write_json(marker, {"fingerprint": requested})
+            write_json(marker, {"schema_version": 2, "fingerprint": requested})
     reply = build / ".cmake/api/v1/reply"
     if reply.is_dir():
         shutil.copytree(reply, logs / "cmake-file-api", dirs_exist_ok=True)

@@ -169,13 +169,13 @@ def doctor(ctx: typer.Context,
 def list_packages(ctx: typer.Context,
                   archived: bool = typer.Option(False,"--archived",help="Read old source installation records.")):
     """List package instances in the selected profile or archive."""
-    from .apt_profiles import active_home, archived_packages
+    from .apt_profiles import active_home, archived_packages, backend_name
     from . import homebrew_backend
     if archived:
         records = archived_packages(ctx.obj.home)
     else:
         selected = active_home(ctx.obj.home)
-        records = homebrew_backend.inventory(selected) if homebrew_backend.configured(selected) else selected.packages()
+        records = homebrew_backend.inventory(selected) if backend_name(selected) == "homebrew" else selected.packages()
     emit(ctx, "list", packages=records)
 
 
@@ -189,11 +189,11 @@ def info(ctx: typer.Context,
     """Locate package installation prefixes."""
     if path and ctx.obj.as_json:
         raise ForgeError("--path and --json are mutually exclusive.")
-    from .apt_profiles import active_home, archived_packages
+    from .apt_profiles import active_home, archived_packages, backend_name
     from .spack_backend import name_of
     from . import homebrew_backend
     selected = None if archived else active_home(ctx.obj.home)
-    if selected is not None and homebrew_backend.configured(selected):
+    if selected is not None and backend_name(selected) == "homebrew":
         names = {package, homebrew_backend.name_of(package)}
         candidates = homebrew_backend.inventory(selected)
     else:
