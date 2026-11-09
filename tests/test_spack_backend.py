@@ -349,8 +349,17 @@ def test_apt_shell_repair_preserves_snapshot_and_selected_python(managed, monkey
     argv = ["--home", str(home.root), "env", "repair", "apt", "--json"]
     assert main([*argv, "--dry-run"]) == 0
     assert json.loads(capsys.readouterr().out)["removed"] == 2 and read_json(state_path) == before
-    assert main(argv) == 0
-    report = json.loads(capsys.readouterr().out)
+    second_profile = home.root / "apt/profiles/spack-other"
+    second_activation = second_profile / "environments/apt/revisions/other/activate.sh"
+    second_activation.parent.mkdir(parents=True)
+    second_activation.write_text(":\n")
+    second_activation.with_name("modifications.json").write_text("[]\n")
+    write_json(second_profile / "apt/state.json", {"activation": str(second_activation), "spack": {"packages": []}})
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert main(["--home", str(home.root), "env", "repair", "--json"]) == 0
+    batch = json.loads(capsys.readouterr().out)
+    assert {(item["kind"], item["name"]) for item in batch["targets"]} == {("apt", "direct"), ("apt", "spack-other")}
+    report = next(item for item in batch["targets"] if item["name"] == "direct")
     selected = read_json(state_path)
     assert {key: value for key, value in selected.items() if key != "activation_repair"} == before
     assert all(file.read_bytes() == content for file, content in evidence.items())

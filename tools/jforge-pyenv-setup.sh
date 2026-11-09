@@ -270,7 +270,7 @@ case "$_jforge_bootstrap_path" in
 esac
 unset _jforge_bootstrap_bin _jforge_bootstrap_path
 
-# Load the selected package environment and refresh it after interactive apt changes.
+# Load the shell hook for package changes and successful interactive builds.
 case "${0##*/}:$-" in
     sh:*|-sh:*) ;;
     *:*i*)

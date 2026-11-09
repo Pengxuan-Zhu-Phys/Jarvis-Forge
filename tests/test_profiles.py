@@ -225,6 +225,88 @@ def test_shell_hook_only_refreshes_after_changes(tmp_path, capsys, arguments, ex
 
 
 @pytest.mark.parametrize("shell", ["bash", "zsh"])
+def test_shell_hook_activates_only_successful_interactive_builds(tmp_path, capsys, shell):
+    if not shutil.which(shell):
+        pytest.skip("shell is not installed")
+    assert main(["apt", "shell-init"]) == 0
+    hook = capsys.readouterr().out
+    fake = tmp_path / "jforge"
+    fake.write_text(
+        '#!/bin/bash\n'
+        'case "$1 $2" in\n'
+        '  "build run"|"build resume") ;;\n'
+        '  *) exit 2 ;;\n'
+        'esac\n'
+        'if [ "${_JFORGE_BUILD_ACTIVATION-}" = 1 ] && [ "$3" != empty ]; then\n'
+        '    printf "%s\\0" "$ACTIVATION" >&9\n'
+        'fi\n'
+        '[ "$3" != failed ] || exit 7\n'
+    )
+    fake.chmod(0o700)
+    script = tmp_path / "some workspace's activation.sh"
+    script.write_text('export FIXTURE_BUILD=loaded\n')
+    code = r'''
+export PATH="$1:$PATH" ACTIVATION="$2" TMPDIR="$1"
+eval "$3"
+jforge build run fixture
+printf 'run %s\n' "${FIXTURE_BUILD-unset}"
+unset FIXTURE_BUILD
+jforge build resume fixture
+printf 'resume %s\n' "${FIXTURE_BUILD-unset}"
+unset FIXTURE_BUILD
+jforge build run failed
+printf 'failed %s %s\n' "$?" "${FIXTURE_BUILD-unset}"
+jforge build run empty
+printf 'empty %s\n' "${FIXTURE_BUILD-unset}"
+jforge build run fixture --json
+printf 'json %s\n' "${FIXTURE_BUILD-unset}"
+jforge build run fixture --no-activate
+printf 'optout %s\n' "${FIXTURE_BUILD-unset}"
+'''
+    args = ["--noprofile", "--norc"] if shell == "bash" else ["-f"]
+    result = subprocess.run([shell, *args, "-ic", code, "test", str(tmp_path), str(script), hook],
+                            capture_output=True, text=True, check=True)
+    assert result.stdout.splitlines() == ["run loaded", "resume loaded", "failed 7 unset",
+                                          "empty unset", "json unset", "optout unset"]
+    assert result.stderr.count("Build environment activated.") == 2
+    assert not list(tmp_path.glob("jforge-build-activate.*"))
+
+    script.write_text("return 9\n")
+    check = 'export PATH="$1:$PATH" ACTIVATION="$2"; eval "$3"; jforge build run fixture; echo $?'
+    result = subprocess.run([shell, *args, "-ic", check, "test", str(tmp_path), str(script), hook],
+                            capture_output=True, text=True, check=True)
+    assert result.stdout.strip() == "0" and "Could not activate" in result.stderr
+    result = subprocess.run([shell, *args, "-c", check, "test", str(tmp_path), str(script), hook],
+                            capture_output=True, text=True, check=True)
+    assert result.stdout.strip() == "0" and "Could not activate" not in result.stderr
+
+
+@pytest.mark.parametrize("shell", ["bash", "zsh"])
+def test_managed_repair_refreshes_the_loaded_hook(tmp_path, capsys, shell):
+    if not shutil.which(shell):
+        pytest.skip("shell is not installed")
+    assert main(["apt", "shell-init"]) == 0
+    hook = capsys.readouterr().out
+    fake = tmp_path / "jforge"
+    fake.write_text(
+        '#!/bin/sh\ncase "$1 $2" in\n'
+        '  "apt shell-init") printf "%s\\n" "export FIXTURE_HOOK=refreshed" ;;\n'
+        '  "env repair") exit 0 ;;\n'
+        '  *) exit 2 ;;\nesac\n'
+    )
+    fake.chmod(0o700)
+    args = ["--noprofile", "--norc"] if shell == "bash" else ["-f"]
+    code = ('export PATH="$1:$PATH"; eval "$2"; '
+            'jforge env repair --dry-run; printf "%s\\n" "${FIXTURE_HOOK-unset}"; '
+            'jforge env repair --json; printf "%s\\n" "${FIXTURE_HOOK-unset}"; '
+            'jforge env repair --shell=other.sh; printf "%s\\n" "${FIXTURE_HOOK-unset}"; '
+            'jforge env repair; printf "%s\\n" "${FIXTURE_HOOK-unset}"')
+    result = subprocess.run([shell, *args, "-ic", code, "test", str(tmp_path), hook],
+                            capture_output=True, text=True, check=True)
+    assert result.stdout.splitlines() == ["unset", "unset", "unset", "refreshed"]
+
+
+@pytest.mark.parametrize("shell", ["bash", "zsh"])
 @pytest.mark.parametrize("layout", ["legacy", "native-short"])
 def test_spack_profile_activation_removes_old_managed_paths(base, tmp_path, shell, layout):
     if not shutil.which(shell):

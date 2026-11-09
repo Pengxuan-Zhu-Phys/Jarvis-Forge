@@ -52,7 +52,7 @@ Text results use standalone headings and record summaries suitable for SSH termi
 
 `--json`, `--home` and `--debug` work before or after the command. `--json` emits one JSON object on stdout, while progress goes to stderr. `compare --check` fails on changed, missing, corrupted or unsuccessful evidence; ordinary comparison only describes differences. Comparison uses exact artifact bytes; scientific equivalence and performance regression policies remain outside the current comparison mode.
 
-## Automatic package environment (Bash and Zsh)
+## Automatic shell activation (Bash and Zsh)
 
 A child process cannot change its parent shell. Enable the shell integration once in each interactive session:
 
@@ -60,7 +60,9 @@ A child process cannot change its parent shell. Enable the shell integration onc
 eval "$(command jforge apt shell-init)"
 ```
 
-Add that line to your own `~/.bashrc` or `~/.zshrc` to enable it for future shells. The hook sources the selected package environment on startup and refreshes it after successful installs, upgrades, removals and source switches. It uses the selected Forge home, including an explicit `--home`. Forge does not edit your startup files. Existing shells need to enable the hook themselves. Source switching removes previous managed package paths and restores exported values while preserving user PATH additions. After upgrading Forge, reload this hook once in existing shells to obtain its new behavior; other already-open shells keep their current environment until refreshed. The hook is intended for interactive use, not JSON or script automation.
+To register the hook for future shells, run `jforge env repair --hook` or use the bootstrap installer. Regular `jforge env repair` restores registered hook blocks and the bootstrap loader when needed. It also refreshes the hook in the calling interactive shell when that shell already runs the Forge hook. An open shell running an older hook can reload it with the command above.
+
+The hook loads the selected package environment at startup and refreshes it after successful package changes. It uses the selected Forge home, including an explicit `--home`. Source switching removes previous managed package paths and restores exported values while preserving user PATH additions. The hook is intended for interactive use.
 
 Spack package names are cached during import/update. Listings read that local cache without starting Spack or accessing the network; complete distribution listings are printed as compact lines. `apt list --installed` shows one row per package, with version, requested/dependency kind and state. Requested packages appear first, followed by dependencies, sorted by name. Use `apt show <package>` for full installation paths and instance metadata, or `--json` for complete records. Installation summaries show selected roots and the dependency count; `apt check` shows the complete plan. `jforge list` also includes saved installation instances.
 
@@ -128,7 +130,9 @@ Each `env add ... --replace` saves a new revision. Use `env show cbs --revision 
 
 Scripts are copied, not relocated together with their dependencies: use stable absolute paths for external files. If the original script changes, register the update with `env add cbs --shell /path/to/cbs-env.sh --replace`. For reproducibility, files in published revisions are not intended for direct editing. Full usage and storage details are in [the environment guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/ENVIRONMENTS.md).
 
-Run `jforge env repair --dry-run` in a workspace to preview invalid paths in `./activate.sh`. Omit `--dry-run` to save a JSON report and apply the repair. Pass `--shell PATH` to check a specific file, a registered name to publish a repaired revision, or `apt` to repair the selected package environment. The report lists checked paths and settings that require manual review. Repair checks literal paths without executing the activation script.
+Run `jforge env repair` from any directory to discover and repair Forge-managed environments. It checks named environments, published Spack profiles, build workspaces and independent build exports, and the setup script's bootstrap activation when installed. Use `--dry-run` to preview or `--json` for per-setting results. The command saves a report for each changed target and keeps going if an individual target fails.
+
+Literal references to a known build workspace's `activate.sh` are skipped while it is missing and used again when the workspace is rebuilt. Use `--shell PATH`, a registered environment name, or `apt` to target a single file, named environment, or active package profile. Repair checks literal paths without executing activation scripts.
 
 ## User-local packages with Spack
 
@@ -226,6 +230,8 @@ jforge build run "$HOME/workshops/root-forge" --jobs 8
 The directory contains `build.yaml`, companion scripts and `instances/<name>/{downloads,sources,build,install}`. A build with one exported package uses its package and version as the instance name, for example `ROOT-6.40.04`. Other builds use the recipe ID. Distinct build identities with the same name get a numbered suffix. Each new instance records its full identity in `.jforge-instance.json`. Resume and reuse also support existing directories named by their full hash.
 
 Package dependencies live in Forge's shared Spack profiles. `runs/<run-id>` links to the retained Forge history. A successful acceptance run updates the workspace's `activate.sh`, and a failure leaves the previous successful activation available. Absolute installation paths may be embedded in binaries and build files. Building in a new workspace gives an existing project a new installation path.
+
+With the Forge shell hook loaded, successful `jforge build run` and `jforge build resume` commands activate the installation in the current interactive Bash or Zsh session. The bootstrap installer loads the hook at startup. For a plain pip installation or an already open terminal after upgrading, load it with `eval "$(command jforge apt shell-init)"`. Use `--no-activate` to keep a build from activating. JSON and noninteractive commands keep their existing behavior.
 
 In an interactive terminal, `build run` and `build resume` show a progress bar while downloading a source archive. The bar shows the bytes transferred and a percentage when the downloader knows the total size. Raw downloader output stays in the run logs. `--verbose` prints the download log path.
 

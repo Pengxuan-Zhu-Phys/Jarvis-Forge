@@ -1,5 +1,7 @@
 """Editable Release workspaces; project files stay outside the shared package store."""
 
+import hashlib
+import os
 from pathlib import Path
 import shlex
 
@@ -7,6 +9,26 @@ from .shell_repair import WORKSPACE_HEADER, activation_lock
 from .storage import ForgeError, digest, read_json, write_json, write_text
 
 MARKER = ".jforge/workspace.json"
+
+
+def workspace_candidates(home):
+    """Read the workspace index and the requests created by older clients."""
+    from .package_operations import _inside
+
+    for directory, pattern in (("builds/workspaces", "*.json"), ("runs", "build-*/request.json")):
+        for record in sorted((home.root / directory).glob(pattern)):
+            try:
+                value = read_json(_inside(home, record))
+                if directory == "runs" and value.get("kind") != "build":
+                    continue
+                workspace = value.get("workspace")
+                if workspace is None and directory == "runs":
+                    continue
+                if not isinstance(workspace, str) or not Path(workspace).is_absolute():
+                    raise ForgeError(f"Invalid workspace path in {record}")
+                yield Path(os.path.normpath(workspace)), None
+            except ForgeError as exc:
+                yield record, exc
 
 
 def locate(recipe):
@@ -34,6 +56,11 @@ def create(home, source, directory):
     release = next((row for row in entries(home) if source.parent.name == snapshot_id(row)), None)
     write_json(directory / MARKER, {"schema_version": 1, "build": "build.yaml",
                "origin": str(source), "sha256": digest(source), "release": release, "home": str(home.root)})
+    from .package_operations import _inside
+
+    key = hashlib.sha256(os.fsencode(directory)).hexdigest()
+    registration = _inside(home, home.root / "builds/workspaces" / (key + ".json"))
+    write_json(registration, {"workspace": str(directory)})
     return output
 
 
@@ -47,11 +74,14 @@ def link_run(directory, run):
     target.symlink_to(run.resolve(), target_is_directory=True)
 
 
+def activation_output(outputs):
+    return outputs.get("installation") or (next(iter(outputs.values())) if len(outputs) == 1 else None)
+
+
 def publish(directory, result):
     from .cmake import runtime_activation
 
-    outputs = result.get("outputs", {})
-    selected = outputs.get("installation") or (next(iter(outputs.values())) if len(outputs) == 1 else None)
+    selected = activation_output(result.get("outputs", {}))
     if not selected:
         return
     # Only successful, verified outputs reach this point. Failed attempts retain the previous entry.

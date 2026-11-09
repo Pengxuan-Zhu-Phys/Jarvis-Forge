@@ -465,7 +465,7 @@ def build_artifacts(console, values):
     line(console, "Find the activation script with jforge build env <artifact-id> --path.", style="dim")
 
 
-def build_result(console, values, prog, resume_command):
+def build_result(console, values, prog, resume_command, *, handed_off=False):
     status, suite = values["status"], values["suite_id"]
     failed_step = values.get("failed_step")
     if status == "passed":
@@ -488,9 +488,10 @@ def build_result(console, values, prog, resume_command):
         name = "Installed" if row["name"] == "installation" else f"Installed {row['name']}"
         line(console, f"{name} · {row['version']}", style="bold")
         line(console, "  " + row["prefix"])
-        if row.get("activation") and not workspace_activation:
+        selected = row["name"] == "installation" or len(outputs) == 1
+        if row.get("activation") and not workspace_activation and not (handed_off and selected):
             line(console, "  " + shlex.join(["source", row["activation"]]))
-    if workspace_activation:
+    if workspace_activation and not handed_off:
         line(console, shlex.join(["source", str(Path(values["workspace"]) / "activate.sh")]))
     field(console, "build_log", str(Path(values["attempt"]) / "build.log"))
     if failed_step:
@@ -502,6 +503,18 @@ def shell_repair(console, values):
     preview = values["dry_run"]
     label = "Shell repair preview" if preview else "Shell repair"
     line(console, label, style="bold")
+    if values.get("scope") == "managed":
+        changed = "would change" if preview else "changed"
+        line(console, f"  {len(values['targets'])} checked · {values['changed']} {changed} · {values['removed']} invalid paths · "
+             f"{values['deferred']} waiting for a workspace · {len(values['errors'])} failed")
+        for target in values["targets"]:
+            state = "would repair" if preview else "repaired"
+            if not target["changed"]:
+                state = "waiting for a workspace" if target["deferred"] else "checked"
+            line(console, f"  {target['kind']} {target['name']} · {state}")
+            if target.get("report"):
+                line(console, "    " + target["report"], style="dim")
+        return
     line(console, values["activation"])
     removed = "would remove" if preview else "removed"
     line(console, f"  {len(values['settings'])} recorded · {values['removed']} {removed} · {values['unchecked']} unchecked")

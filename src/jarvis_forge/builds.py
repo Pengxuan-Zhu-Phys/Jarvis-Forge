@@ -541,8 +541,19 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                 existing_outputs = {}
                 for name in config.get("outputs", {}):
                     aid = identifier(config["id"] + "-" + instance[:20] + "-" + name)
-                    if (home.root / "builds/artifacts" / aid / "manifest.json").exists():
-                        existing_outputs[name] = artifact(home, aid)
+                    manifest = home.root / "builds/artifacts" / aid / "manifest.json"
+                    if not manifest.exists():
+                        continue
+                    if workspace:
+                        saved = read_json(manifest)
+                        prefix = Path(saved["prefix"]) if isinstance(saved.get("prefix"), str) else Path(".")
+                        # A deleted workspace leaves its manifest in Forge home.
+                        # Keep it until a successful build replaces the output.
+                        if (saved.get("artifact_id") == aid and saved.get("instance") == instance
+                                and prefix.is_absolute() and prefix.resolve().is_relative_to(workspace / "instances")
+                                and not prefix.exists() and not prefix.is_symlink()):
+                            continue
+                    existing_outputs[name] = artifact(home, aid)
                 if existing_outputs and len(existing_outputs) == len(config.get("outputs", {})):
                     row = {"status": "reused", "outputs": existing_outputs, "instance": instance}
                     state["nodes"][key] = {**old, **row}
@@ -682,7 +693,9 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
         try:
             event(("Resume " if resume else "Build ") + request["suite_id"], echo=not verbose)
             final = run_node(selected_graph["root"])
-            outputs = {name: {**value, "activation": str(cmake.runtime_activation(Path(value["activation"])))}
+            from .shell_repair import artifact_activation
+
+            outputs = {name: {**value, "activation": str(artifact_activation(home, value))}
                        for name, value in final["outputs"].items()}
             result.update(status="passed", outputs=outputs)
             if request.get("workspace"):
@@ -907,8 +920,16 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
         actual_standard = cmake.cache_values(build).get("CMAKE_CXX_STANDARD")
         if actual_standard:
             raise ForgeError("Exported CMake projects must declare a matching cxx_standard parameter.")
-    exported_paths = {k: [str(prefix / v) if not Path(v).is_absolute() else v for v in values]
-                      for k, values in metadata.get("paths", {}).items()}
+    from .shell_repair import PATH_LISTS, _path_status, _variable_kind
+
+    exported_paths = {}
+    for name, values in metadata.get("paths", {}).items():
+        paths = [str(prefix / value) for value in values]
+        if name in PATH_LISTS:
+            # Package layouts can have just lib or lib64. Check after install.
+            kind = _variable_kind(name)
+            paths = [path for path in paths if _path_status(path, kind)[0] != "invalid"]
+        exported_paths[name] = paths
     activation_scripts = [cmake.runtime_activation(Path(path)) for path in exported_dependencies]
     if metadata.get("activation"):
         activation_scripts.append(prefix / metadata["activation"])

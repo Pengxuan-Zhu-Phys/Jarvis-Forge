@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import shlex
 import shutil
 import subprocess
 import sys
@@ -768,7 +769,7 @@ def test_inline_package_archive_and_cmake_paths(home,projects,tmp_path,monkeypat
     output=result['outputs']['installation']
     assert Path(output['prefix'],'include/value.h').is_file()
     activation=Path(output['activation']).read_text()
-    assert str(package/'lib64') in activation and str(package/'lib') in activation
+    assert str(package/'lib64') not in activation and str(package/'lib') in activation
     assert read_json(home.root/'apt/selection.json')['id'] == 'spack-default'
     assert not list((home.root/'apt/profiles').glob('spack-build-*'))
 
@@ -918,6 +919,39 @@ def test_release_workspace_keeps_download_source_build_install_and_activation(ho
     assert calls == ['download']  # Local workspaces remain usable without the Release service.
 
 
+def test_workspace_build_activates_in_the_calling_shell(home, projects, tmp_path, capsys):
+    build_catalog.update(home, workspace_release(tmp_path, projects).as_uri())
+    assert main(["apt", "shell-init"]) == 0
+    hook = capsys.readouterr().out
+    launcher = tmp_path / "jforge"
+    source = Path(__file__).resolve().parents[1] / "src"
+    launcher.write_text("#!/bin/sh\n"
+                        f"export PYTHONPATH={shlex.quote(str(source))}\n"
+                        f"exec {shlex.quote(sys.executable)} -m jarvis_forge \"$@\"\n")
+    launcher.chmod(0o700)
+    workspace = tmp_path / "activated workspace"
+    command = r'''
+export PATH="$1:$5:$PATH" JFORGE_HOME="$2"
+eval "$4"
+check='import sys; print(sys.executable, sys.prefix, sys.base_prefix)'
+before=$(python3 -c "$check") || exit 11
+flags=$-; options=$SHELLOPTS
+jforge build run workspace-tiny --directory "$3" --jobs 2 || exit 12
+test "$flags" = "$-" && test "$options" = "$SHELLOPTS" || exit 13
+test "$before" = "$(python3 -c "$check")" || exit 14
+printf 'AUTO_PREFIX=%s\n' "${CMAKE_PREFIX_PATH%%:*}"
+false
+echo shell-survived
+'''
+    process = subprocess.run(["bash", "--noprofile", "--norc", "-ic", command, "test", str(tmp_path),
+                              str(home.root), str(workspace), hook, str(Path(sys.executable).parent)],
+                             capture_output=True, text=True, check=True)
+    current = read_json(workspace / ".jforge/current.json")
+    assert f"AUTO_PREFIX={current['prefix']}" in process.stdout
+    assert "shell-survived" in process.stdout
+    assert "Build environment activated." in process.stderr
+
+
 @pytest.mark.parametrize("legacy", [False, True])
 def test_workspace_resume_preserves_directory_and_script_snapshot(home, projects, tmp_path, monkeypatch, legacy):
     from jarvis_forge.build_workspace import create
@@ -966,6 +1000,18 @@ def test_run_can_fetch_workspace_in_one_command_and_reuse_offline(home, projects
     assert second['nodes'][0]['status'] == 'reused'
     assert main(['--home',str(home.root),'build','run','other','--directory',str(directory),'--json']) == 2
     assert json.loads(capsys.readouterr().out)['ok'] is False
+
+    prefix = Path(first["outputs"][0]["prefix"])
+    (prefix / "include/value.h").unlink()
+    assert main(argv) == 1
+    assert "Installed artifact is missing or modified" in json.loads(capsys.readouterr().out)["error"]["message"]
+    shutil.rmtree(directory)
+    assert main(argv) == 0
+    rebuilt = json.loads(capsys.readouterr().out)
+    assert rebuilt["nodes"][0]["status"] == "passed"
+    assert rebuilt["outputs"][0]["artifact_id"] == first["outputs"][0]["artifact_id"]
+    assert (directory / "activate.sh").is_file()
+    assert (prefix / "include/value.h").is_file()
 
 
 def test_workspace_fetch_rejects_collisions_and_read_only_plan_stays_offline(home, tmp_path, monkeypatch, capsys):

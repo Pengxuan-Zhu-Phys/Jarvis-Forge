@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Make `jforge env repair` discover and repair managed environments from any directory. Keep references to known workspaces usable across same-path rebuilds.
+- Activate a successful build or resume in the calling interactive Bash or Zsh session when the Forge shell hook is loaded. Use `--no-activate` to opt out.
+- Restore registered shell hook loaders during managed environment repair. Use `jforge env repair --hook` to register the hook in Bash or Zsh startup files.
+
+### Fixed
+
+- Rebuild a deleted workspace installation at the original path without manually removing its old artifact record.
+- Omit missing search directories when generating build runtime activation scripts.
+
 ## 1.1.8 — 2026-11-09
 ### Added
 

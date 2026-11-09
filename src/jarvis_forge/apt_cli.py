@@ -496,14 +496,15 @@ def spack_compilers(
 
 @app.command("shell-init")
 def shell_init(ctx: typer.Context):
-    """Print a Bash/Zsh hook for automatic activation after package changes."""
+    """Print a Bash/Zsh hook for automatic activation after installs and builds."""
     if ctx.obj.as_json:
         raise ForgeError("shell-init cannot be used with --json.")
     explicit_home = ctx.find_root().params.get("home")
     home_args = " " + shlex.join(["--home", explicit_home]) if explicit_home is not None else ""
     print(r"""# Add eval "$(command jforge apt shell-init)" to your shell startup file.
 jforge() {
-    local _jf_arg _jf_next=0 _jf_home='' _jf_apt=0 _jf_change=0 _jf_path _jf_command='' _jf_action='' _jf_skip=0 _jf_target=0
+    local _jf_arg _jf_next=0 _jf_home='' _jf_change=0 _jf_path _jf_command='' _jf_action='' _jf_skip=0 _jf_target=0
+    local _jf_no_activate=0 _jf_handoff _jf_status _jf_hook
     for _jf_arg in "$@"; do
         if [ "$_jf_next" = 1 ]; then _jf_home=$_jf_arg; _jf_next=0; continue; fi
         case "$_jf_arg" in
@@ -511,6 +512,8 @@ jforge() {
             --home) _jf_next=1 ;;
             --home=*) _jf_home=${_jf_arg#--home=} ;;
             --help|-h|--dry-run|-s|--version|-v|-V|--json) _jf_skip=1 ;;
+            --no-activate) _jf_no_activate=1 ;;
+            --shell|--shell=*) _jf_target=1 ;;
             --debug|-d) ;;
             --*) ;;
 
@@ -525,7 +528,42 @@ jforge() {
         case "$_jf_action" in install|reinstall|upgrade|full-upgrade|satisfy|switch|import|remove|autoremove) _jf_change=1 ;; esac
     fi
     if [ "$_jf_skip" = 1 ] || { [ "$_jf_action" = switch ] && [ "$_jf_target" = 0 ]; }; then _jf_change=0; fi
+    case "$-:$_jf_command:$_jf_action:$_jf_skip:$_jf_no_activate" in
+        *i*:build:run:0:0|*i*:build:resume:0:0)
+            if _jf_handoff=$(mktemp "${TMPDIR:-/tmp}/jforge-build-activate.XXXXXXXX"); then
+                if _JFORGE_BUILD_ACTIVATION=1 command jforge "$@" 9>"$_jf_handoff"; then
+                    _jf_path=''
+                    IFS= read -r -d '' _jf_path < "$_jf_handoff" || _jf_path=''
+                    command rm -- "$_jf_handoff" 2>/dev/null || :
+                    if [ -n "$_jf_path" ]; then
+                        if source "$_jf_path" >&2; then
+                            printf '%s\n' 'jforge: Build environment activated.' >&2
+                        else
+                            printf 'jforge: Build passed. Could not activate %s\n' "$_jf_path" >&2
+                        fi
+                    fi
+                    return 0
+                else
+                    _jf_status=$?
+                    command rm -- "$_jf_handoff" 2>/dev/null || :
+                    return "$_jf_status"
+                fi
+            fi
+            ;;
+    esac
     if command jforge "$@"; then
+        case "$-:$_jf_command:$_jf_action:$_jf_skip:$_jf_target" in
+            *i*:env:repair:0:0)
+                if [ -n "$_jf_home" ]; then
+                    _jf_hook=$(command jforge --home "$_jf_home" apt shell-init) || _jf_hook=''
+                else
+                    _jf_hook=$(command jforge apt shell-init) || _jf_hook=''
+                fi
+                if [ -n "$_jf_hook" ] && ! eval "$_jf_hook"; then
+                    printf '%s\n' 'jforge: Could not refresh the shell hook.' >&2
+                fi
+                ;;
+        esac
         if [ "$_jf_change" = 1 ]; then
             if [ -n "$_jf_home" ]; then
                 _jf_path=$(command jforge --home "$_jf_home" apt env --path) || _jf_path=''
@@ -545,4 +583,5 @@ if [ -n "$_jforge_apt_initial" ] && ! source "$_jforge_apt_initial" >&2; then
     printf '%s\n' 'jforge: Could not load the selected package environment.' >&2
 fi
 unset _jforge_apt_initial
+_JFORGE_HOOK_LOADED=1
 """.replace("__JFORGE_HOME_ARGS__", home_args))

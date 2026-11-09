@@ -1,5 +1,6 @@
 """Project build CLI; package operations remain owned by apt/Spack."""
 
+import os
 from pathlib import Path
 import shlex
 from typing import Optional
@@ -103,7 +104,20 @@ def plan(ctx: typer.Context, build: str = typer.Argument(..., metavar="<build>")
     emit(ctx, "build plan", **builds.plan(ctx.obj.home, build, parameters=parameters(setting), environment_name=env))
 
 
-def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directory=None):
+def _handoff_activation(result):
+    from .build_workspace import activation_output
+
+    selected = activation_output(result.get("outputs", {}))
+    if not selected or not selected.get("activation"):
+        return False
+    # The interactive hook opens a private, per-invocation file on fd 9.
+    # Keep stdout and the persisted build result independent of this handoff.
+    with open(9, "wb", closefd=False) as handoff:
+        handoff.write(os.fsencode(selected["activation"]) + b"\0")
+    return True
+
+
+def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directory=None, no_activate=False):
     from .cli import emit, line, _console
     from .presentation import build_result
     if not resume:
@@ -125,6 +139,12 @@ def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directo
                                progress=lambda message: line(console, message))
     values = builds.summary(result)
     passed = result["status"] == "passed"
+    handed_off = False
+    if passed and not ctx.obj.as_json and not no_activate and os.environ.get("_JFORGE_BUILD_ACTIVATION") == "1":
+        try:
+            handed_off = _handoff_activation(result)
+        except OSError as exc:
+            line(console, f"Build passed. Could not pass the activation path to the shell: {exc}")
     if ctx.obj.as_json:
         if not passed:
             values["error"] = {"type": "VerificationFailed", "message": values["error"],
@@ -137,7 +157,7 @@ def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directo
         if root.params.get("home") is not None:
             command += ["--home", str(ctx.obj.home.root)]
         command += ["build", "resume", result["run_id"], "--jobs", str(jobs)]
-        build_result(_console() if passed else console, values, prog, shlex.join(command))
+        build_result(_console() if passed else console, values, prog, shlex.join(command), handed_off=handed_off)
     raise typer.Exit(0 if result["status"] == "passed" else 130 if result["status"] == "interrupted" else 1)
 
 
@@ -146,16 +166,18 @@ def run(ctx: typer.Context, build: str = typer.Argument(..., metavar="<build>"),
         setting: list[str] = typer.Option([], "--set", help="Override a declared parameter: NAME=VALUE."),
         env: Optional[str] = typer.Option(None, "--env", help="Use this registered compiler/Python environment."),
         jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Maximum concurrent build jobs."),
-        directory: Optional[Path] = typer.Option(None, "--directory", help="Fetch and build in this workspace; reuse its editable recipe on later runs.")):
+        directory: Optional[Path] = typer.Option(None, "--directory", help="Fetch and build in this workspace; reuse its editable recipe on later runs."),
+        no_activate: bool = typer.Option(False, "--no-activate", help="Skip activation in the calling interactive shell.")):
     """Build projects and run acceptance checks. Use --verbose for raw output."""
-    _execute(ctx, build, setting, env, jobs, directory=directory)
+    _execute(ctx, build, setting, env, jobs, directory=directory, no_activate=no_activate)
 
 
 @app.command()
 def resume(ctx: typer.Context, run_id: str = typer.Argument(..., metavar="<run_id>"),
-           jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Maximum concurrent build jobs.")):
+           jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Maximum concurrent build jobs."),
+           no_activate: bool = typer.Option(False, "--no-activate", help="Skip activation in the calling interactive shell.")):
     """Retry a saved graph with its original recipe and environment snapshots."""
-    _execute(ctx, jobs=jobs, resume=run_id)
+    _execute(ctx, jobs=jobs, resume=run_id, no_activate=no_activate)
 
 
 @app.command("artifacts")
@@ -175,11 +197,11 @@ def artifact_environment(ctx: typer.Context, artifact_id: str = typer.Argument(.
                          path: bool = typer.Option(False, "--path", help="Print only the verified activation script path.")):
     """Locate the runtime environment exported by a verified installation."""
     from .cli import emit
-    from .cmake import runtime_activation
+    from .shell_repair import artifact_activation
     if path and ctx.obj.as_json:
         raise ForgeError("--path and --json are mutually exclusive.")
     value = builds.artifact(ctx.obj.home, artifact_id)
-    activation = str(runtime_activation(Path(value["activation"])))
+    activation = str(artifact_activation(ctx.obj.home, value))
     if path:
         print(activation)
     else:

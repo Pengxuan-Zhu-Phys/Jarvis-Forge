@@ -184,7 +184,7 @@ def add(home, name, shell, *, replace=False, description=None):
                         (previous or {}).get("revision"))
 
 
-def repair(home, name, *, dry_run=False):
+def repair(home, name, *, dry_run=False, workspace_sources=(), save_unchanged=True):
     from .shell_repair import Repair
 
     base = _base(home, name)
@@ -193,12 +193,12 @@ def repair(home, name, *, dry_run=False):
         previous = show(home, name, strict=True)
         script = Path(previous["path"]) / "source.sh"
         directory = _inside(home, base / "repairs" / new_id("repair"))
-        operation = Repair(script, directory, dry_run)
+        operation = Repair(script, directory, dry_run, workspace_sources=workspace_sources)
         content = operation.scan(script)
         report = operation.report(changed=content != operation.originals[script],
                                   name=name, previous_revision=previous["revision"],
                                   activation=previous["activation"])
-        if not dry_run:
+        if not dry_run and (report["changed"] or save_unchanged):
             operation.save(report)
             if report["changed"]:
                 selected = _publish(home, name, content.encode("utf-8"),

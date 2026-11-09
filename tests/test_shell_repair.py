@@ -4,8 +4,11 @@ import json
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 
 from jarvis_forge.cli import main
+from jarvis_forge.environment_registry import add, show
+from jarvis_forge.storage import ForgeHome, digest, write_json
 
 
 def test_workspace_repairs_nested_links_without_editing_build_artifacts(tmp_path, capsys, monkeypatch):
@@ -33,12 +36,12 @@ def test_workspace_repairs_nested_links_without_editing_build_artifacts(tmp_path
     entry.write_text(wrapper)
     entry.chmod(0o750)
 
-    assert main(["env", "repair", "--dry-run", "--json"]) == 0
+    assert main(["env", "repair", "--shell", str(entry), "--dry-run", "--json"]) == 0
     preview = json.loads(capsys.readouterr().out)
     assert preview["removed"] == 5
     assert entry.read_text() == wrapper and not list(tmp_path.glob(".activate.sh.*"))
 
-    assert main(["env", "repair", "--json"]) == 0
+    assert main(["env", "repair", "--shell", str(entry), "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["removed"] == preview["removed"]
     assert Path(report["backup"]).read_text() == wrapper
@@ -54,7 +57,7 @@ def test_workspace_repairs_nested_links_without_editing_build_artifacts(tmp_path
     )
     assert result.stdout.splitlines() == [str(install), f"{bin_dir}:/usr/bin:/bin", f"{install}:/usr"]
 
-    assert main(["env", "repair", "--json"]) == 0
+    assert main(["env", "repair", "--shell", str(entry), "--json"]) == 0
     repeated = json.loads(capsys.readouterr().out)
     assert not repeated["changed"] and repeated["removed"] == 0
 
@@ -83,3 +86,140 @@ def test_shell_repair_leaves_compound_and_dynamic_settings_unexecuted(tmp_path, 
     assert main(["env", "repair", "--shell", str(entry), "--json"]) == 2
     assert "Invalid Bash activation script" in capsys.readouterr().out
     assert entry.read_text() == "if true; then\n"
+
+
+def test_managed_repair_discovers_legacy_workspaces_and_keeps_rebuild_links(tmp_path, capsys, monkeypatch):
+    from jarvis_forge.build_workspace import MARKER
+    from jarvis_forge.shell_repair import WORKSPACE_HEADER
+
+    home = ForgeHome(tmp_path / "forge")
+    missing = tmp_path / "projects" / "old ROOT's workspace"
+    live = tmp_path / "projects" / "live"
+    for index, directory in enumerate((missing, live)):
+        write_json(home.root / f"runs/build-{index}/request.json", {"kind": "build", "workspace": str(directory)})
+    write_json(live / MARKER, {"schema_version": 1, "build": "build.yaml", "home": str(home.root)})
+    activation = live / "activate.sh"
+    activation.write_text(WORKSPACE_HEADER + f"source {tmp_path}/gone.sh || return $?\n")
+    (tmp_path / "alias").symlink_to(missing.parent, target_is_directory=True)
+    missing_source = tmp_path / "alias" / missing.name / "activate.sh"
+    user_script = tmp_path / "env.sh"
+    user_script.write_text(f"source {shlex.quote(str(missing_source))}\nsource {tmp_path}/unrelated.sh\n")
+    old = add(home, "default", user_script)
+    personal = tmp_path / "activate.sh"
+    personal.write_text("source /not/managed\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    args = ["--home", str(home.root), "env", "repair", "--json"]
+
+    assert main([*args, "--dry-run"]) == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["changed"] == 2 and preview["removed"] == 2 and preview["deferred"] == 1
+    assert show(home, "default")["revision"] == old["revision"]
+    assert main(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert {target["kind"] for target in report["targets"]} == {"named", "workspace"}
+    assert personal.read_text() == "source /not/managed\n"
+    assert activation.read_text() == WORKSPACE_HEADER
+
+    repaired = show(home, "default", strict=True)
+    code = ('set -e; python_before=$(python3 -c "$2"); source "$1"; '
+            'test "$python_before" = "$(python3 -c "$2")"; echo "${FIXTURE_ROOT-unset}"')
+    identity = "import sys; print(sys.executable, sys.prefix, sys.base_prefix)"
+    env = {"PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin"}
+    command = ["bash", "-c", code, "test", repaired["activation"], identity]
+    assert subprocess.check_output(command, env=env, text=True).strip() == "unset"
+    missing.mkdir()
+    (missing / "activate.sh").write_text("export FIXTURE_ROOT=reinstalled\n")
+    assert subprocess.check_output(command, env=env, text=True).strip() == "reinstalled"
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out)["changed"] == 0
+    assert show(home, "default")["revision"] == repaired["revision"]
+
+
+def test_managed_repair_continues_after_a_broken_record(tmp_path, capsys, monkeypatch):
+    home = ForgeHome(tmp_path / "forge")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    script = tmp_path / "env.sh"
+    script.write_text(f"source {tmp_path}/missing.sh\n")
+    add(home, "good", script)
+    add(home, "broken", script)
+    (home.root / "environments/broken/current.json").write_text("broken\n")
+    assert main(["--home", str(home.root), "env", "repair", "--json"]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert not result["ok"] and result["removed"] == 1
+    assert result["errors"][0]["name"] == "broken"
+
+
+def test_managed_repair_refreshes_independent_build_export(tmp_path, capsys, monkeypatch):
+    from jarvis_forge.cmake import write_environment
+
+    home = ForgeHome(tmp_path / "forge")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    prefix = home.root / "builds/installs/test/package"
+    prefix.mkdir(parents=True)
+    script = write_environment(home.root / "builds/work/package/test-activate.sh",
+                               paths={"PATH": [tmp_path / "missing"]})
+    record = home.root / "builds/artifacts/test-installation/manifest.json"
+    write_json(record, {"artifact_id": "test-installation", "status": "ready", "prefix": str(prefix),
+                        "activation": str(script), "evidence": {str(script): digest(script)}, "files": {}})
+    original = {p: p.read_bytes() for p in (record, script)}
+    args = ["--home", str(home.root)]
+    assert main([*args, "env", "repair", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["changed"] == report["removed"] == 1
+    assert report["targets"][0]["kind"] == "artifact"
+    assert main([*args, "build", "env", "test-installation", "--path"]) == 0
+    entry = Path(capsys.readouterr().out.strip())
+    assert entry == Path(report["targets"][0]["activation"])
+    assert "export PATH=" not in entry.read_text()
+    assert all(p.read_bytes() == contents for p, contents in original.items())
+
+
+def test_repair_hook_registers_once_and_restores_managed_startup_block(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    rc = tmp_path / ".bashrc"
+    login = tmp_path / ".profile"
+    original = "export USER_SETTING=custom\n"
+    rc.write_text(original)
+    rc.chmod(0o640)
+    login.write_text("export LOGIN_SETTING=custom\n")
+    args = ["--home", str(tmp_path / "forge"), "env", "repair", "--json"]
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out)["targets"] == []
+    assert main([*args, "--hook", "--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["changed"] == 2
+    assert rc.read_text() == original
+    assert main([*args, "--hook"]) == 0
+    assert json.loads(capsys.readouterr().out)["changed"] == 2
+    expected = rc.read_text() + "export AFTER_BLOCK=custom\n"
+    rc.write_text(expected.replace("eval \"$_jforge_hook\"", ": # missing hook"))
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out)["changed"] == 1
+    assert rc.read_text() == expected and rc.stat().st_mode & 0o777 == 0o640
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out)["changed"] == 0
+
+
+def test_repair_hook_recovers_installer_owned_bootstrap(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    bootstrap = tmp_path / ".jarvis-pyenv/jforge-bootstrap"
+    launcher = bootstrap / "bin/jforge"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\nprintf '%s\\n' 'export FIXTURE_HOOK=loaded'\n")
+    launcher.chmod(0o700)
+    rc = tmp_path / ".bashrc"
+    rc.write_text("# >>> jforge pyenv setup >>>\nexport PYENV_ROOT=/user/pyenv\n# <<< jforge pyenv setup <<<\n")
+    args = ["--home", str(tmp_path / "forge"), "env", "repair", "--json"]
+    assert main(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["changed"] == 2
+    assert (bootstrap / "activate.sh").is_file()
+    process = subprocess.run(["bash", "--noprofile", "--norc", "-ic",
+                              'source "$1"; printf "%s\\n" "$PYENV_ROOT" "$FIXTURE_HOOK"',
+                              "test", str(rc)], check=True, capture_output=True, text=True,
+                             env={"PATH": "/usr/bin:/bin"})
+    assert process.stdout.splitlines() == ["/user/pyenv", "loaded"]
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out)["changed"] == 0
