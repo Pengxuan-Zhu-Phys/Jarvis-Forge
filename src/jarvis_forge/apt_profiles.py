@@ -1,6 +1,8 @@
-"""Select Spack profiles; old source directories are read-only history."""
+"""Select package profiles and preserve old source installations as history."""
 
 from __future__ import annotations
+
+import sys
 
 from .storage import ForgeError, ForgeHome, identifier, read_json, write_json
 from .package_operations import _inside, environment_path, locked, operation
@@ -10,17 +12,26 @@ def configured(home):
     return (home.root / "apt/spack.json").is_file()
 
 
+def backend_name(home):
+    is_brew_profile = (home.root.name.startswith("homebrew-")
+                       and home.root.parent.name == "profiles" and home.root.parent.parent.name == "apt")
+    return "homebrew" if is_brew_profile or _is_configured_homebrew(home) else "spack"
+
+
 def _selection(base):
     path = _inside(base, base.root / "apt/selection.json")
     if not path.exists():
         return None
     value = read_json(path)
-    if value.get("schema_version") != 1 or not isinstance(value.get("id"), str):
+    if (value.get("schema_version") != 1 or not isinstance(value.get("id"), str)
+            or ("platform" in value and not isinstance(value["platform"], str))
+            or ("pending" in value and not isinstance(value["pending"], bool))):
         raise ForgeError(
             f"Invalid package environment selection: {path}",
-            hint="jforge apt switch spack",
+            hint="jforge apt import spack",
         )
-    return identifier(value["id"])
+    identifier(value["id"])
+    return value
 
 
 def _profile(base, profile_id):
@@ -28,21 +39,23 @@ def _profile(base, profile_id):
 
 
 def active_home(base):
-    selected = _selection(base)
-    selection_file = base.root / "apt/selection.json"
-    if selection_file.exists() and read_json(selection_file).get("location") == "root":
+    record = _selection(base) or {}
+    selected = record.get("id")
+    if record.get("platform") not in {None, sys.platform}:
+        return _profile(base, "homebrew-mac" if sys.platform == "darwin" else "spack-default")
+    if record.get("location") == "root":
         if selected != "direct" or not configured(base):
             raise ForgeError(
                 "The selected root Spack environment is unavailable.",
-                hint="jforge apt switch spack",
+                hint="jforge apt import spack",
             )
         return base
-    if selected and selected.startswith("spack-"):
+    if selected and selected.startswith(("spack-", "homebrew-")):
         target = _profile(base, selected)
         if not (target.root / "config.json").is_file():
             raise ForgeError(
-                f"Selected Spack profile is missing: {target.root}",
-                hint="jforge apt switch spack",
+                f"Selected package profile is missing: {target.root}",
+                hint="jforge apt profile",
             )
         return target
     # Existing direct Spack deployments remain valid. Legacy selections do not
@@ -60,7 +73,7 @@ def archived_homes(base):
     return [
         home
         for home in homes
-        if not configured(home)
+        if not configured(home) and not _is_configured_homebrew(home)
         and (
             any((home.root / "packages").glob("*/*/*/manifest.json"))
             or any(
@@ -86,17 +99,19 @@ def archived_packages(base):
 
 def profiles(base, *, archived=False):
     selected = active_home(base)
-    homes = ([base] if configured(base) else []) + [
-        _profile(base, path.parent.name)
-        for path in sorted((base.root / "apt/profiles").glob("*/config.json"))
-        if configured(_profile(base, path.parent.name))
-    ]
+    pending = (_selection(base) or {}).get("pending")
+    homes = [base] if configured(base) else []
+    for path in sorted((base.root / "apt/profiles").glob("*/config.json")):
+        target = _profile(base, path.parent.name)
+        if configured(target) or _is_configured_homebrew(target) or target == selected and pending:
+            homes.append(target)
     rows = [
         dict(
             id="direct" if home == base else home.root.name,
             path=str(home.root),
-            backend="spack",
+            backend=backend_name(home),
             active=home == selected,
+            **({"configured": False} if not configured(home) and not _is_configured_homebrew(home) else {}),
         )
         for home in homes
     ]
@@ -116,23 +131,122 @@ def profiles(base, *, archived=False):
 
 def ensure_active(base, *, progress=None):
     selected = active_home(base)
-    if configured(selected):
+    pending = (_selection(base) or {}).get("pending")
+    if (configured(selected) and not pending) or _is_configured_homebrew(selected):
         return selected
+    if backend_name(selected) == "homebrew":
+        create_homebrew(base, selected.root.name)
+        return active_home(base)
     switch(
         base, "spack", name=selected.root.name.removeprefix("spack-"), progress=progress
     )
     return active_home(base)
 
 
+def _is_configured_homebrew(home):
+    from .homebrew_backend import configured as homebrew_configured
+
+    return homebrew_configured(home)
+
+
+def initialize_profile(base):
+    """Select a host profile without downloading packages or bootstrapping Spack."""
+    from . import homebrew_backend
+
+    if sys.platform not in {"linux", "darwin"}:
+        return None
+    with locked(base):
+        record = _selection(base) or {}
+        selected = active_home(base)
+        native = "homebrew" if sys.platform == "darwin" else "spack"
+        selected_backend = backend_name(selected)
+        profile_id = "direct" if selected == base else selected.root.name
+        if record.get("platform") == sys.platform and not record.get("pending"):
+            return {"id": profile_id, "backend": selected_backend, "status": "selected"}
+        if selected_backend == native and (configured(selected) or _is_configured_homebrew(selected)):
+            if (selected.root / "apt/state.json").is_file():
+                _write_selection(base, selected, profile_id)
+                return {"id": profile_id, "backend": native, "status": "selected"}
+        profile_id = "homebrew-mac" if native == "homebrew" else "spack-default"
+        target = _profile(base, profile_id)
+        if native == "homebrew" and homebrew_backend.find_brew():
+            with operation(base, "initialize-profile", {"profile": profile_id, "backend": native}) as (_, result):
+                if not (_is_configured_homebrew(target) and (target.root / "apt/state.json").is_file()):
+                    with locked(target):
+                        homebrew_backend.initialize(target, base, homebrew_backend.discover())
+                _save_selection(base, target, profile_id, result)
+            return {"id": profile_id, "backend": native, "status": "selected"}
+        with locked(target):
+            _write_selection(base, target, profile_id, pending=True)
+        return {"id": profile_id, "backend": native, "status": "pending"}
+
+
+def _write_selection(base, target, profile_id, *, pending=False):
+    selection = {"schema_version": 1, "id": profile_id, "platform": sys.platform}
+    if target == base:
+        selection["location"] = "root"
+    if pending:
+        selection["pending"] = True
+    write_json(_inside(base, base.root / "apt/selection.json"), selection)
+
+
+def _save_selection(base, target, profile_id, result):
+    from .spack_backend import store_root
+
+    backend = backend_name(target)
+    activation = environment_path(target)
+    if backend == "homebrew":
+        from .homebrew_backend import settings
+
+        packages = settings(target)["prefix"]
+    else:
+        packages = str(store_root(target))
+    _write_selection(base, target, profile_id)
+    result.update(profile=profile_id, backend=backend, apt_home=str(target.root),
+                  user_home=str(base.root), packages=packages, activation=activation, state_committed=True)
+    return result
+
+
+def use(base, name):
+    """Select an existing profile without bootstrapping or installing packages."""
+    identifier(name)
+    ids = [name] if name == "direct" or name.startswith(("spack-", "homebrew-")) else [
+        identifier(kind + "-" + name) for kind in ("spack", "homebrew")]
+    candidates = [(profile_id, base if profile_id == "direct" else _profile(base, profile_id)) for profile_id in ids]
+    found = [(profile_id, target) for profile_id, target in candidates
+             if configured(target) or _is_configured_homebrew(target)]
+    if not found:
+        raise ForgeError(f"No configured package profile: {name}", hint="jforge apt profile")
+    if len(found) != 1:
+        raise ForgeError(f"Ambiguous profile name: {name}. Select {' or '.join(key for key, _ in found)}.")
+    profile_id, target = found[0]
+    with locked(base), operation(base, "use", {"profile": profile_id, "backend": backend_name(target)}) as (_, result):
+        return _save_selection(base, target, profile_id, result)
+
+
+def create_homebrew(base, name):
+    from . import homebrew_backend
+
+    profile_id = identifier("homebrew-" + identifier(name.removeprefix("homebrew-")))
+    target = _profile(base, profile_id)
+    config = homebrew_backend.discover()
+    with locked(base), operation(base, "create", {"profile": profile_id, "backend": "homebrew"}) as (_, result):
+        if homebrew_backend.configured(target) and (target.root / "apt/state.json").is_file():
+            raise ForgeError(f"Homebrew profile already exists: {profile_id}", hint=f"jforge apt profile {profile_id}")
+        with locked(target):
+            homebrew_backend.initialize(target, base, config)
+        return _save_selection(base, target, profile_id, result)
+
+
 def switch(
-    base, origin="spack", *, name="default", direct=False, progress=None
+    base, origin="spack", *, name="default", direct=False, progress=None, create_only=False
 ):
     from . import spack_backend as backend
 
     if origin != "spack":
         raise ForgeError(
             "Ubuntu/Debian source backends have been removed; use Spack.",
-            hint="jforge apt switch spack; jforge apt switch --archived",
+            hint="jforge apt import spack\njforge apt profile --archived",
         )
     if direct:
         if name != "default" or not backend.configured(base):
@@ -147,31 +261,21 @@ def switch(
                 result,
             ),
         ):
-            activation = environment_path(base)
-            write_json(
-                _inside(base, base.root / "apt/selection.json"),
-                {"schema_version": 1, "id": "direct", "location": "root"},
-            )
-            result.update(
-                profile="direct",
-                backend="spack",
-                bootstrap=prepared,
-                apt_home=str(base.root),
-                user_home=str(base.root),
-                packages=str(backend.store_root(base)),
-                activation=activation,
-                state_committed=True,
-            )
-            return result
+            result["bootstrap"] = prepared
+            return _save_selection(base, base, "direct", result)
     profile_id = identifier("spack-" + identifier(name))
     target = _profile(base, profile_id)
     with (
         locked(base),
-        operation(base, "switch", {"profile": profile_id, "backend": "spack"}) as (
+        operation(base, "create" if create_only else "switch", {"profile": profile_id, "backend": "spack"}) as (
             directory,
             result,
         ),
     ):
+        if create_only and configured(target):
+            state = _inside(target, target.root / "apt/state.json")
+            if state.is_file() and read_json(state).get("activation"):
+                raise ForgeError(f"Spack profile already exists: {profile_id}", hint=f"jforge apt profile {profile_id}")
         target.initialize()
         config = read_json(target.root / "config.json")
         config["apt_base_home"] = str(base.root)
@@ -179,18 +283,4 @@ def switch(
         result["bootstrap"] = backend.bootstrap(
             target, progress=progress
         )
-        activation = environment_path(target)
-        write_json(
-            _inside(base, base.root / "apt/selection.json"),
-            {"schema_version": 1, "id": profile_id},
-        )
-        result.update(
-            profile=profile_id,
-            backend="spack",
-            apt_home=str(target.root),
-            user_home=str(base.root),
-            packages=str(backend.store_root(target)),
-            activation=activation,
-            state_committed=True,
-        )
-        return result
+        return _save_selection(base, target, profile_id, result)

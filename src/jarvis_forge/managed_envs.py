@@ -3,7 +3,7 @@
 from pathlib import Path
 from subprocess import TimeoutExpired
 
-from . import build_workspace, environment_registry
+from . import build_workspace, environment_registry, homebrew_backend
 from .package_operations import _inside
 from .shell_hook import BOOTSTRAP_HEADER, repair_bootstrap, repair_startup, startup_files
 from .shell_repair import WORKSPACE_HEADER, repair_apt_profile, repair_artifact, repair_file
@@ -94,13 +94,16 @@ def repair_managed(home, *, dry_run=False, install_hook=False):
             run("named", name, environment_registry.repair, home, name,
                 workspace_sources=workspace_sources, save_unchanged=False)
 
-    for profile in (home.root, *sorted((home.root / "apt/profiles").glob("spack-*"))):
+    profiles = home.root / "apt/profiles"
+    for profile in (home.root, *sorted(profiles.glob("spack-*")), *sorted(profiles.glob("homebrew-*"))):
         name = "direct" if profile == home.root else profile.name
         try:
             state = _inside(home, profile / "apt/state.json")
             if state.is_file():
                 record = read_json(state)
-                if record.get("spack") and record.get("activation"):
+                if record.get("homebrew") and record.get("activation"):
+                    run("apt", name, homebrew_backend.repair, ForgeHome(profile))
+                elif record.get("spack") and record.get("activation"):
                     run("apt", name, repair_apt_profile, ForgeHome(profile), save_unchanged=False)
         except (ForgeError, OSError, ValueError) as exc:
             failed("apt", name, exc)

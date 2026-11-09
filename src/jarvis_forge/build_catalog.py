@@ -5,14 +5,17 @@ import hashlib
 import json
 import re
 import shutil
+import sys
 from tempfile import NamedTemporaryFile
 
+import yaml
 from packaging.specifiers import SpecifierSet, InvalidSpecifier
 from packaging.version import Version
 
 from . import __version__
 from .downloads import fetch
 from .storage import ForgeError, digest, identifier, new_id, read_json, write_json
+from .suite import UniqueLoader
 
 INDEX_URL = "https://github.com/Pengxuan-Zhu-Phys/Jarvis-Forge/releases/download/builds/builds.json"
 
@@ -66,14 +69,17 @@ def copy_bundle(source, output, *, home=None):
     return output
 
 
-def entries(home):
+def _index(home):
     path = home.root / "builds/catalog/index.json"
-    return read_json(path).get("builds", []) if path.is_file() else []
+    return read_json(path) if path.is_file() else {}
+
+
+def entries(home):
+    return _index(home).get("builds", [])
 
 
 def libraries(home):
-    path = home.root / "builds/catalog/index.json"
-    return read_json(path).get("libraries", []) if path.is_file() else []
+    return _index(home).get("libraries", [])
 
 
 def _cache_asset(source, destination, sha256, kind):
@@ -93,8 +99,14 @@ def _cache_asset(source, destination, sha256, kind):
         staged.unlink(missing_ok=True)
 
 
-def update(home, url=INDEX_URL):
-    from .builds import load
+def _platforms(value, name):
+    if not isinstance(value, list) or not value or any(item not in ("linux", "darwin") for item in value):
+        raise ForgeError(f"Invalid supported platforms for build {name}.")
+    return value
+
+
+def update(home, url=INDEX_URL, *, platform=sys.platform):
+    from .builds import host_requirements, load
     home.require_initialized()
     temporary = home.root / "builds/catalog" / new_id("download")
     temporary.mkdir(parents=True)
@@ -108,6 +120,7 @@ def update(home, url=INDEX_URL):
         if index.get("schema_version") != 1 or not compatible or not isinstance(index.get("builds"), list):
             raise ForgeError("Invalid or incompatible build Release index.")
         seen = set()
+        selected, excluded = [], {}
         library_files = {}
         from .build_cards import read_library
         if not isinstance(index.get("libraries", []), list):
@@ -122,7 +135,6 @@ def update(home, url=INDEX_URL):
                 raise ForgeError(f"Library SHA-256 mismatch: {name}", code=1)
             template = read_library(asset)["build"]
             template_file = temporary / ("template-" + name + ".yaml")
-            import yaml
             template_file.write_text(yaml.safe_dump(template))
             load(template_file)
             destination = home.root / "builds/recipes" / row["sha256"] / "library.yaml"
@@ -135,13 +147,30 @@ def update(home, url=INDEX_URL):
             seen.add(name)
             if not isinstance(row.get("revision"), str) or not row["revision"]:
                 raise ForgeError("Build Release entry requires a revision.")
+            companions = resources(row)
+            declared_platforms = _platforms(row["platforms"], name) if "platforms" in row else None
+            if platform and declared_platforms and platform not in declared_platforms:
+                excluded[name] = declared_platforms
+                continue
             bundle = temporary / ("bundle-" + name)
             bundle.mkdir()
             asset = bundle / "build.yaml"
             fetch(row.get("url", ""), asset, temporary / name)
             if digest(asset) != row["sha256"]:
                 raise ForgeError(f"Build SHA-256 mismatch: {name}", code=1)
-            for item in resources(row):
+            try:
+                raw = yaml.load(asset.read_text(), Loader=UniqueLoader)
+            except (ValueError, yaml.YAMLError) as exc:
+                raise ForgeError(f"Cannot read build {name}: {exc}") from exc
+            platforms = host_requirements(raw).get("platforms") if isinstance(raw, dict) else None
+            if platforms:
+                _platforms(platforms, name)
+            if declared_platforms and platforms != declared_platforms:
+                raise ForgeError(f"Build platform metadata does not match the recipe: {name}")
+            if platform and platforms and platform not in platforms:
+                excluded[name] = platforms
+                continue
+            for item in companions:
                 script = bundle / item["path"]
                 script.parent.mkdir(parents=True, exist_ok=True)
                 fetch(item["url"], script, temporary / ("script-" + item["sha256"]))
@@ -150,17 +179,23 @@ def update(home, url=INDEX_URL):
             loaded = load(asset, home=home, library_files=library_files)
             if loaded["config"]["id"] != name:
                 raise ForgeError(f"Build ID mismatch: {name}")
-            declared = {v["path"]: v["sha256"] for v in resources(row)}
+            platforms = loaded["config"].get("platforms")
+            if platform and platforms and platform not in platforms:
+                excluded[name] = platforms
+                continue
+            declared = {v["path"]: v["sha256"] for v in companions}
             required = {v["path"]: v["sha256"] for v in loaded["card_sources"] if "script_id" in v}
             if declared != required:
                 raise ForgeError(f"Companion files do not match build scripts: {name}")
             destination = home.root / "builds/recipes" / snapshot_id(row) / "build.yaml"
             _cache_asset(asset, destination, row["sha256"], "build")
-            for item in resources(row):
+            for item in companions:
                 target = destination.parent / item["path"]
                 _cache_asset(bundle / item["path"], target, item["sha256"], "companion script")
-        write_json(home.root / "builds/catalog/index.json", index)
-        return {"builds": index["builds"], "source": url}
+            selected.append(row)
+        write_json(home.root / "builds/catalog/index.json",
+                   {**index, "builds": selected, "platform": platform, "excluded_builds": excluded})
+        return {"builds": selected, "source": url, "platform": platform, "excluded_builds": excluded}
     finally:
         shutil.rmtree(temporary)
 
@@ -177,7 +212,8 @@ def resolve(home, reference, parent=None):
             raise ForgeError(f"Not a build workspace: {candidate}")
     if candidate.is_file():
         return candidate.resolve()
-    for row in entries(home):
+    index = _index(home)
+    for row in index.get("builds", []):
         if row["id"] == reference:
             path = home.root / "builds/recipes" / snapshot_id(row) / "build.yaml"
             if not path.is_file() or digest(path) != row["sha256"]:
@@ -187,6 +223,11 @@ def resolve(home, reference, parent=None):
                 if not script.is_file() or digest(script) != item["sha256"]:
                     raise ForgeError(f"Missing or modified companion script: {item['path']}")
             return path
+    platforms = index.get("excluded_builds", {}).get(str(reference))
+    if platforms and index.get("platform") == sys.platform:
+        supported = ", ".join(platforms)
+        raise ForgeError(f"Build {reference} requires platform {supported}. Current platform is {sys.platform}.",
+                         hint=f"Run this build on a supported host ({supported}).")
     raise ForgeError(f"Build file or cached ID not found: {reference}",
                      hint="jforge build update; or supply a local YAML file")
 
@@ -194,7 +235,9 @@ def resolve(home, reference, parent=None):
 def acquire(home, reference):
     """Fetch an uncached Release ID for explicit fetch/run actions; local paths stay local."""
     candidate = Path(reference).expanduser()
-    if candidate.exists() or any(row["id"] == reference for row in entries(home)):
+    index = _index(home)
+    if (candidate.exists() or any(row["id"] == reference for row in index.get("builds", []))
+            or index.get("platform") == sys.platform and reference in index.get("excluded_builds", {})):
         return resolve(home, reference)
     if "/" in reference or "\\" in reference or candidate.suffix in {".yaml", ".yml"}:
         return resolve(home, reference)

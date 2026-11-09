@@ -1,6 +1,7 @@
 # Parton-level CEPC baseline. The physics inputs live in the project's server_setup bundle.
 name: CEPC-build
 platforms: [linux]
+# Dependencies are Spack specs installed through the selected apt profile.
 dependencies:
   - "cepc-whizard@=3.2.0 hepmc=off ~pythia8~lcio~lhapdf~fastjet~openmp~openloops~gosam %c,cxx,fortran=gcc@11.1:"
   - "cepc-madgraph@=3.8.1"

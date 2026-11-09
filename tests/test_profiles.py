@@ -5,10 +5,11 @@ from pathlib import Path
 import shutil
 import shlex
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
-from jarvis_forge import spack_backend as b
+from jarvis_forge import apt_profiles, homebrew_backend, spack_backend as b
 from jarvis_forge.apt_profiles import active_home, archived_packages, profiles, switch
 from jarvis_forge.cli import main
 from jarvis_forge.shell_activation import activation
@@ -88,6 +89,29 @@ def test_old_selection_routes_to_spack_without_modifying_history(base):
     assert next(r for r in rows if r["backend"] == "archived")["active"] is False
 
 
+def test_linux_initialization_selects_spack_without_bootstrapping(base, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(apt_profiles, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    assert main(["--home", str(base.root), "--json", "init"]) == 0
+    profile = json.loads(capsys.readouterr().out)["apt_profile"]
+    assert profile == {"id": "spack-default", "backend": "spack", "status": "pending"}
+    assert profiles(base)[0]["configured"] is False
+    assert not apt_profiles.configured(active_home(base))
+    assert apt_profiles.ensure_active(base).root.name == "spack-default"
+    assert profiles(base)[0]["active"] and "configured" not in profiles(base)[0]
+    switch(base, "spack", name="custom")
+    assert apt_profiles.initialize_profile(base)["id"] == "spack-custom"
+
+
+def test_macos_without_brew_leaves_homebrew_pending(base, monkeypatch):
+    monkeypatch.setattr(apt_profiles, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(homebrew_backend, "find_brew", lambda: None)
+    assert apt_profiles.initialize_profile(base) == {"id": "homebrew-mac", "backend": "homebrew", "status": "pending"}
+    assert active_home(base).root.name == "homebrew-mac"
+    assert profiles(base)[0]["configured"] is False
+    assert not (base.root / "apt/profiles/spack-default").exists()
+
+
 def test_two_spack_profiles_keep_separate_records_and_shared_home(base):
     first = switch(base, "spack", name="gambit")
     one = active_home(base)
@@ -150,6 +174,28 @@ def test_switch_recovers_missing_or_corrupt_selection(base, capsys):
     assert json.loads(capsys.readouterr().out)["profile"] == "spack-default"
 
 
+def test_profile_command_lists_selects_and_creates(base, capsys, monkeypatch):
+    args = ["--home", str(base.root), "--json"]
+    assert main([*args, "apt", "profile", "gambit", "--create"]) == 0
+    assert json.loads(capsys.readouterr().out)["profile"] == "spack-gambit"
+    assert main([*args, "apt", "profile", "root", "--create"]) == 0
+    capsys.readouterr()
+    monkeypatch.setattr(b, "bootstrap", lambda *args, **kwargs: pytest.fail("use must not bootstrap"))
+    assert main([*args, "apt", "profile", "missing"]) == 2
+    assert "No configured" in json.loads(capsys.readouterr().out)["error"]["message"]
+    assert not (base.root / "apt/profiles/spack-missing").exists()
+    assert active_home(base).root.name == "spack-root"
+    assert main([*args, "apt", "profile", "spack-gambit", "--create"]) == 2
+    assert "already exists" in json.loads(capsys.readouterr().out)["error"]["message"]
+    assert main([*args, "apt", "profile", "gambit"]) == 0
+    assert json.loads(capsys.readouterr().out)["profile"] == "spack-gambit"
+    assert main([*args, "apt", "profile"]) == 0
+    listed = json.loads(capsys.readouterr().out)["environments"]
+    assert [(item["id"], item["active"]) for item in listed] == [("spack-gambit", True), ("spack-root", False)]
+    assert main([*args, "env", "list"]) == 0
+    assert json.loads(capsys.readouterr().out)["profiles"] == listed
+
+
 def test_shell_hook_is_available_with_invalid_preferences(base, tmp_path, monkeypatch, capsys):
     (base.root / "apt/selection.json").write_text("{broken")
     config = tmp_path / "config"
@@ -185,6 +231,10 @@ def test_shell_hook_initial_activation_uses_explicit_home(tmp_path, capsys):
         ("apt switch --help", False, 0),
         ("apt switch", False, 0),
         ("apt switch spack --name gambit", True, 0),
+        ("apt profile", False, 0),
+        ("apt profile --archived", False, 0),
+        ("apt profile gambit", True, 0),
+        ("apt profile gambit --create", True, 0),
         ("apt import spack", True, 0),
         ("apt install toy", True, 0),
         ("apt install toy", True, 7),

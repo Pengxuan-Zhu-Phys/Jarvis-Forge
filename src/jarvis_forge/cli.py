@@ -93,10 +93,13 @@ def root(ctx: typer.Context,
 @app.command()
 def init(ctx: typer.Context):
     """Initialize user directories and remember this default location."""
+    from .apt_profiles import initialize_profile
+
     config = ctx.obj.home.initialize()
+    profile = initialize_profile(ctx.obj.home)
     preference = ctx.obj.home.remember_default()
     emit(ctx, "init", **ctx.obj.home.paths(), host_id=config["host_id"],
-         default_saved=True, default_home_file=str(preference))
+         default_saved=True, default_home_file=str(preference), apt_profile=profile)
 
 
 @app.command()
@@ -110,9 +113,14 @@ def paths(ctx: typer.Context):
         paths.update(apt_home=str(selected.root), packages=str(selected.root / "packages"), apt=str(selected.root / "apt"),
                      apt_environment=str(selected.root / "environments/apt"))
     from .spack_backend import configured as spack_configured, root as spack_root, store_root
+    from . import homebrew_backend
     if spack_configured(selected):
         paths.update(spack=str(spack_root(selected)), spack_store=str(store_root(selected)),
                      spack_environments=str(spack_root(selected)/"environments"))
+    elif homebrew_backend.configured(selected):
+        brew = homebrew_backend.settings(selected)
+        paths.update(homebrew=brew["prefix"], homebrew_cellar=brew["cellar"],
+                     packages=brew["cellar"], apt_environment=str(selected.root / "environments/apt"))
     emit(ctx, "paths", **paths, default_home_file=str(default_home_file()))
 
 
@@ -160,9 +168,14 @@ def doctor(ctx: typer.Context,
 @app.command("list")
 def list_packages(ctx: typer.Context,
                   archived: bool = typer.Option(False,"--archived",help="Read old source installation records.")):
-    """List recorded Spack instances or read-only archived source records."""
+    """List package instances in the selected profile or archive."""
     from .apt_profiles import active_home, archived_packages
-    records = archived_packages(ctx.obj.home) if archived else active_home(ctx.obj.home).packages()
+    from . import homebrew_backend
+    if archived:
+        records = archived_packages(ctx.obj.home)
+    else:
+        selected = active_home(ctx.obj.home)
+        records = homebrew_backend.inventory(selected) if homebrew_backend.configured(selected) else selected.packages()
     emit(ctx, "list", packages=records)
 
 
@@ -173,13 +186,19 @@ def info(ctx: typer.Context,
          instance: Optional[str] = typer.Option(None,"--instance",help="Select an exact install ID.",metavar="<str>"),
          path: bool = typer.Option(False,"--path",help="Print only a unique installation prefix."),
          archived: bool = typer.Option(False,"--archived",help="Read old source installation records.")):
-    """Locate Spack or archived source installation prefixes."""
+    """Locate package installation prefixes."""
     if path and ctx.obj.as_json:
         raise ForgeError("--path and --json are mutually exclusive.")
     from .apt_profiles import active_home, archived_packages
     from .spack_backend import name_of
-    names = {package, name_of(package)}
-    candidates = archived_packages(ctx.obj.home) if archived else active_home(ctx.obj.home).packages()
+    from . import homebrew_backend
+    selected = None if archived else active_home(ctx.obj.home)
+    if selected is not None and homebrew_backend.configured(selected):
+        names = {package, homebrew_backend.name_of(package)}
+        candidates = homebrew_backend.inventory(selected)
+    else:
+        names = {package, name_of(package)}
+        candidates = archived_packages(ctx.obj.home) if archived else selected.packages()
     records = [item for item in candidates if (item["name"] in names or names.intersection(item.get("provenance",{}).get("binary_versions",{})))
                and (version is None or item["version"]==version) and (instance is None or item["install_id"]==instance)]
     if not records:

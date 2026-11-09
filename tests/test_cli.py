@@ -35,7 +35,7 @@ def test_build_list_summarizes_the_catalog_and_preserves_json(tmp_path, capsys):
                          "sha256": "b" * 64}]}
     libraries = [{"id": "math-libraries", "revision": "2026.11.09.1", "description": "Shared math tools"}]
     write_json(catalog, {"builds": [recipe], "libraries": libraries})
-    args = ["--home", str(tmp_path), "build", "list"]
+    args = ["--home", str(tmp_path), "build", "list", "--available"]
     assert main(args) == 0
     output = capsys.readouterr().out
     assert "root-build" in output and "2026.11.09.1" in output and "Scripts" in output
@@ -46,6 +46,25 @@ def test_build_list_summarizes_the_catalog_and_preserves_json(tmp_path, capsys):
     result = json.loads(capsys.readouterr().out)
     assert result["command"] == "build list"
     assert result["builds"] == [recipe] and result["libraries"] == libraries
+
+
+def test_build_list_defaults_to_present_installations(tmp_path, capsys):
+    prefix = tmp_path / "root prefix"
+    prefix.mkdir()
+    installed = {"artifact_id": "root-live", "build_id": "root-build", "output": "installation",
+                 "prefix": str(prefix), "version": "6.40.04", "status": "ready"}
+    missing = {**installed, "artifact_id": "root-removed", "prefix": str(tmp_path / "deleted")}
+    for record in (installed, missing):
+        write_json(tmp_path / "builds/artifacts" / record["artifact_id"] / "manifest.json", record)
+    args = ["--home", str(tmp_path), "build"]
+    assert main([*args, "list", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["view"] == "installed" and result["builds"] == [installed]
+    assert main([*args, "artifacts", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["artifacts"] == [installed, missing]
+    assert main([*args, "list"]) == 0
+    output = capsys.readouterr().out
+    assert "Installed builds (1)" in output and str(prefix) in output
 
 
 def test_workflow_is_reserved(capsys):

@@ -27,11 +27,13 @@ def add_environment(ctx: typer.Context,
 
 @app.command("list")
 def list_environment(ctx: typer.Context):
-    """List registered scripts and the apt environment."""
+    """List named shell environments and configured package profiles."""
+    from .apt_profiles import profiles
+
     records = list_environments(ctx.obj.home)
     rows = [{"name": r["name"], "revision": r["revision"], "status": r["status"],
              "path": r["activation"], "description": r["description"]} for r in records]
-    emit(ctx, "env list", environments=rows)
+    emit(ctx, "env list", environments=rows, profiles=profiles(ctx.obj.home))
 
 
 @app.command("show")
@@ -61,9 +63,13 @@ def repair_environment(ctx: typer.Context,
     if hook and (name is not None or shell is not None):
         raise ForgeError("--hook applies to managed environment repair without a name or --shell.")
     if name == "apt":
+        from .apt_profiles import active_home
+        from . import homebrew_backend
         from .shell_repair import repair_apt
 
-        report = repair_apt(ctx.obj.home, dry_run=dry_run)
+        selected = active_home(ctx.obj.home)
+        report = (homebrew_backend.repair(selected, dry_run=dry_run) if homebrew_backend.configured(selected)
+                  else repair_apt(ctx.obj.home, dry_run=dry_run))
     elif name is not None:
         report = repair(ctx.obj.home, name, dry_run=dry_run)
     elif shell is not None:

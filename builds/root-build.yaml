@@ -1,6 +1,7 @@
 # ROOT requirements are explicit; home, directories, logs and ordinary build policy use Forge defaults.
 name: root-build
 platforms: [linux]
+# Dependencies are Spack specs installed through the selected apt profile.
 dependencies: [pkgconf, gsl, openblas+shared, openssl, libbsd, libmd, libx11, libxext, libxft, libxpm,
   fontconfig, freetype, mesa, mesa-glu, gl2ps, graphviz, libxml2, curl, intel-tbb, pcre2, fftw, cfitsio,
   nlohmann-json, giflib, libjpeg-turbo, libpng, libtiff, lz4, xz, zstd, sqlite, pythia8, arrow, davix,

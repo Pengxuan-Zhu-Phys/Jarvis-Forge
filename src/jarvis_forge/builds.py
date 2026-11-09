@@ -138,6 +138,17 @@ def graph(home, reference, *, parameters=None):
     return {"root": root, "nodes": nodes}
 
 
+def host_requirements(config):
+    workflow = config.get("Workflow")
+    platforms = config.get("platforms") or (workflow.get("platforms") if isinstance(workflow, dict) else None)
+    result = {"platforms": platforms} if platforms else {}
+    steps = config.get("steps")
+    if config.get("dependencies") or (isinstance(steps, list) and any(
+            isinstance(step, dict) and step.get("uses") == "apt.install" for step in steps)):
+        result["apt_backend"] = "spack"
+    return result
+
+
 def plan(home, reference, *, parameters=None, environment_name=None):
     value = graph(home, reference, parameters=parameters)
     commands = []
@@ -154,7 +165,8 @@ def plan(home, reference, *, parameters=None, environment_name=None):
             "environment_name": environment_name,
             "root": value["root"], "nodes": [{"recipe": k, "build": v["config"]["id"],
             "parameters": v["parameters"], "requires": v["requirements"], "steps": v["ordered"],
-            "sources": v["config"].get("sources", {})} for k, v in value["nodes"].items()],
+            "sources": v["config"].get("sources", {}), "host_requirements": host_requirements(v["config"])}
+            for k, v in value["nodes"].items()],
             "note": "Read-only graph; packages and compiler compatibility are resolved during execution."}
 
 
@@ -399,13 +411,41 @@ def _step_title(step):
     return "Run " + step["id"]
 
 
+def _require_spack_profile(selected, build_id=None):
+    from .apt_profiles import backend_name
+
+    if backend_name(selected) != "spack":
+        build = f"Build {build_id}" if build_id else "This build"
+        raise ForgeError(f"{build} requires a Spack apt profile. Current profile {selected.root.name} uses Homebrew.",
+                         hint="Run jforge apt profile to list profiles, then select a Spack profile.")
+
+
+def _check_host(home, selected_graph, saved_nodes=None):
+    from .apt_profiles import active_home
+
+    nodes = selected_graph["nodes"]
+    saved_nodes = saved_nodes or {}
+    for node in nodes.values():
+        config = node["config"]
+        platforms = config.get("platforms", [])
+        if platforms and sys.platform not in platforms:
+            supported = ", ".join(platforms)
+            raise ForgeError(f"Build {config['id']} requires platform {supported}. Current platform is {sys.platform}.",
+                             hint=f"Run this build on a supported host ({supported}).")
+    for key, node in nodes.items():
+        saved_steps = saved_nodes.get(key, {}).get("steps", {})
+        if any(step["uses"] == "apt.install" and step["id"] not in saved_steps for step in node["ordered"]):
+            _require_spack_profile(active_home(home), node["config"]["id"])
+            break
+
+
 def execute(home, reference=None, *, parameters=None, environment_name=None, jobs=1, resume=None, progress=None, verbose=False, as_json=False):
-    home.require_initialized()
     if jobs < 1:
         raise ForgeError("Jobs must be positive.")
     run_id = identifier(resume) if resume else new_id("build")
     directory = home.root / "runs" / run_id
     if resume:
+        home.require_initialized()
         request = read_json(directory / "request.json")
         if request.get("kind") != "build":
             raise ForgeError("This run is not a project build.")
@@ -413,11 +453,17 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
         environment_name = request.get("environment_name")
     else:
         selected_graph = graph(home, reference, parameters=parameters)
+        _check_host(home, selected_graph)
+        home.require_initialized()
         request = {"kind": "build", "run_id": run_id, "suite_id": selected_graph["nodes"][selected_graph["root"]]["config"]["id"],
                    "started_at": now(), "environment_name": environment_name,
                    "workspace": selected_graph["nodes"][selected_graph["root"]].get("workspace")}
     directory.mkdir(parents=True, exist_ok=True)
     with file_lock(directory / "run.lock"):
+        state_path = directory / "graph.lock.json"
+        state = read_json(state_path) if resume and state_path.exists() else {"schema_version": 1, "nodes": {}}
+        if resume:
+            _check_host(home, selected_graph, state["nodes"])
         if not resume:
             write_json(directory / "request.json", request)
             write_json(directory / "graph.json", selected_graph)
@@ -425,8 +471,6 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
         attempts.mkdir(parents=True)
         result = {**request, "path": str(directory), "attempt": str(attempts), "status": "running", "nodes": {}}
         write_json(directory / "result.json", result)
-        state_path = directory / "graph.lock.json"
-        state = read_json(state_path) if resume and state_path.exists() else {"schema_version": 1, "nodes": {}}
         from .build_logging import ProcessLog
         process_log = ProcessLog(attempts / "build.log", "Jarvis-Forge.Build", progress if verbose else None)
         active_step = None
@@ -447,8 +491,6 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
             nonlocal active_step
             node = selected_graph["nodes"][key]
             config = node["config"]
-            if config.get("platforms") and sys.platform not in config["platforms"]:
-                raise ForgeError(f"Build {config['id']} does not support {sys.platform}.")
             old = state["nodes"].get(key, {})
             node_dir = attempts / key[:16]
             node_dir.mkdir(exist_ok=True)
@@ -788,7 +830,7 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
         from .apt_profiles import ensure_active
         from .apt_progress import AptProgress
         from .cli import _console
-        # Package dependencies belong in the apt environment. With no apt switch
+        # Package dependencies belong in the selected apt profile. By default
         # that is spack-default, the same store and compilers as `jforge apt`.
         # The screen uses the same phase and package display as `jforge apt install`.
         display = AptProgress(_console(stderr=True), verbose=verbose, as_json=as_json, indent="  ")
@@ -796,6 +838,7 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
         try:
             with process_environment(environment):
                 target = ensure_active(home, progress=reporter)
+                _require_spack_profile(target)
                 installed = backend.transact(target, "install", options["specs"], jobs=jobs,
                                              timeout=step.get("timeout_seconds", 86400), progress=reporter,
                                              project_python=project_python)

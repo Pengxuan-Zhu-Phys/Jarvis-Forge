@@ -248,6 +248,7 @@ printf '#!/bin/bash\nif [ "${1-}" = __jforge_controller_python ]; then\n    shif
     "$venv/bin/python" "$launcher" "$venv/bin/python" > "$launcher_tmp"
 chmod u+x "$launcher_tmp"
 "$launcher_tmp" --version
+"$launcher_tmp" init >/dev/null
 mv -f "$launcher_tmp" "$launcher_target"
 ln -sfn "$launcher_target" "$launcher"
 
@@ -287,7 +288,7 @@ mv -f "$activation_tmp" "$activation_file"
 if ! "$configure_startup"; then
     printf '\nAdd this line to ~/.bashrc (or ~/.zshrc for Zsh)\n'
     printf 'source "%s"\n' "\$HOME/.jarvis-pyenv/jforge-bootstrap/activate.sh"
-    printf 'Then open a new terminal and run: jforge --help\n'
+    printf 'Then open a new terminal and run: jforge apt profile\n'
     exit 0
 fi
 
@@ -376,4 +377,4 @@ else
 fi
 
 printf '\nOpen a new terminal or run: exec %s -l\n' "$login_shell"
-printf 'Then run: jforge --help\n'
+printf 'Then run: jforge apt profile\n'

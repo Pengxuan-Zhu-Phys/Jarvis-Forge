@@ -107,6 +107,8 @@ def record(console, item, *, indent=0, compact=False):
 
 
 def package_kind(item):
+    if item.get("scope") == "shared" and not item.get("selected"):
+        return "shared"
     if "automatic" in item:
         return "dependency" if item["automatic"] else "requested"
     if "root" in item:
@@ -161,7 +163,9 @@ def package_summary(console, packages):
 
 
 def apt_packages(console, values):
-    line(console, "APT packages · " + str(values.get("backend", "spack")), style="bold")
+    view = values.get("view")
+    title = {"installed": "Installed packages", "available": "Available packages", "archived": "Archived packages"}
+    line(console, title.get(view, "APT packages") + " · " + str(values.get("backend", "spack")), style="bold")
     packages = values.get("packages", [])
     package_summary(console, packages)
     line(console)
@@ -176,6 +180,10 @@ def apt_transaction(console, command, values):
     line(console, f"APT {command.removeprefix('apt ')}: " + ("preview" if preview else str(values.get("status", "completed"))), style="bold")
     if "roots" in values:
         line(console, "Requests: " + (", ".join(values["roots"]) or "none"))
+    if preview and values.get("backend") == "homebrew":
+        line(console, "To install with Homebrew: " + (", ".join(values["would_install"]) or "none"))
+    for reason in values.get("deferred_roots", {}).values():
+        line(console, "  " + reason)
     if "packages" in values:
         packages = values["packages"]
         package_summary(console, packages)
@@ -185,12 +193,17 @@ def apt_transaction(console, command, values):
         selected = packages if command == "apt check" else [p for p in packages if package_kind(p) != "dependency"]
         package_rows(console, selected, planned=command == "apt check")
         line(console)
-        line(console, "All packages: jforge apt list --installed" if command != "apt check" else "Plan only; no packages built or activated.", style="dim")
+        if command == "apt check":
+            line(console, "Plan only; no packages built or activated.", style="dim")
+        else:
+            line(console, "Preview only." if preview else "Installed packages: jforge apt list", style="dim")
     for key in ("note", "activation", "plan", "path"):
         if values.get(key):
             field(console, "logs" if key == "path" else key, values[key])
     if values.get("store_retained"):
         line(console, "Package store retained for saved environment revisions.")
+    if command == "apt remove" and values.get("backend") == "homebrew" and not preview:
+        line(console, "Shared Homebrew kegs retained.")
 
 
 def _join(values):
@@ -270,11 +283,16 @@ def _step_detail(step):
     return ""
 
 
-def _show_native_build(console, card):
+def _show_host_requirements(console, requirements):
+    if requirements.get("platforms"):
+        line(console, "Platform: " + _join(requirements["platforms"]))
+    if requirements.get("apt_backend") == "spack":
+        line(console, "APT profile: Spack")
+
+
+def _show_native_build(console, card, requirements):
     line(console, str(card.get("name", "build")), style="bold")
-    platforms = card.get("platforms") or []
-    if platforms:
-        line(console, "Platform: " + _join(platforms))
+    _show_host_requirements(console, requirements)
     build = card.get("build") or {}
     if build:
         title = " ".join(part for part in (str(build.get("name", "")), str(build.get("version", ""))) if part)
@@ -330,11 +348,10 @@ def _show_native_build(console, card):
             line(console, "  Required files: " + _join(required))
 
 
-def _show_legacy_build(console, card):
+def _show_legacy_build(console, card, requirements):
     workflow = card.get("Workflow") or {}
     line(console, str(workflow.get("name", "build")), style="bold")
-    if workflow.get("platforms"):
-        line(console, "Platform: " + _join(workflow["platforms"]))
+    _show_host_requirements(console, requirements)
     modules = []
     for group in ("LibDeps", "Calculators"):
         entries = (card.get(group) or {}).get("Modules") or []
@@ -355,14 +372,15 @@ def _show_legacy_build(console, card):
                 line(console, "    requires: " + str(module["workflow"]))
 
 
-def show_build(console, card, *, path, sha256, ordered=None):
+def show_build(console, card, *, path, sha256, requirements, ordered=None):
     """Summarize a build card. JSON output keeps the original mapping."""
     if isinstance(card, dict) and "name" in card and "Workflow" not in card:
-        _show_native_build(console, card)
+        _show_native_build(console, card, requirements)
     elif isinstance(card, dict) and "Workflow" in card:
-        _show_legacy_build(console, card)
+        _show_legacy_build(console, card, requirements)
     else:
         line(console, "Build card", style="bold")
+        _show_host_requirements(console, requirements)
     if ordered:
         line(console)
         line(console, f"Steps ({len(ordered)}):", style="bold")
@@ -391,13 +409,31 @@ def show_build(console, card, *, path, sha256, ordered=None):
 
 
 def apt_update(console, values):
-    line(console, "Spack recipes: " + str(values.get("status", "completed")), style="bold")
+    source = "Homebrew metadata" if values.get("backend") == "homebrew" else "Spack recipes"
+    line(console, source + ": " + str(values.get("status", "completed")), style="bold")
+    catalog = values.get("build_catalog")
+    if catalog:
+        line(console, f"Build recipes for {catalog['platform']} · {len(catalog['builds'])} available"
+             f" · {len(catalog['excluded_builds'])} for other platforms")
     for key in ("available", "repository_commit", "updated_at", "note", "operation_id", "path"):
         if key in values:
             field(console, "logs" if key == "path" else key, values[key])
     for key, value in values.items():
-        if key not in {"available", "repository_commit", "updated_at", "note", "operation_id", "path", "status"}:
+        if key not in {"available", "repository_commit", "updated_at", "note", "operation_id", "path", "status",
+                       "build_catalog"}:
             field(console, key, value, compact=True)
+
+
+def homebrew_formula(console, values):
+    formula = values["package"]
+    line(console, f"{formula['name']} · Homebrew", style="bold")
+    for key in ("desc", "homepage", "license", "dependencies"):
+        if formula.get(key):
+            field(console, "description" if key == "desc" else key, formula[key])
+    line(console)
+    package_rows(console, values["installed_instances"])
+    for item in values["installed_instances"]:
+        line(console, "  " + item["prefix"], style="dim")
 
 
 def _build_catalog_rows(console, entries, *, libraries=False):
@@ -450,12 +486,12 @@ def build_catalog(console, command, values):
         line(console, "Download recipes with jforge build update.", style="dim")
 
 
-def build_artifacts(console, values):
-    artifacts = values["artifacts"]
+def build_artifacts(console, artifacts, *, installed=False):
     if not artifacts:
-        line(console, "No recorded build artifacts.")
+        line(console, "No installed build outputs." if installed else "No recorded build artifacts.")
         return
-    line(console, f"Build artifacts ({len(artifacts)})", style="bold")
+    title = "Installed builds" if installed else "Build artifacts"
+    line(console, f"{title} ({len(artifacts)})", style="bold")
     for item in artifacts:
         line(console)
         line(console, f"  {item['build_id']} {item['version']} · {item['output']} · {item['status']}", style="cyan")
@@ -463,6 +499,18 @@ def build_artifacts(console, values):
         line(console, "    " + item["prefix"])
     line(console)
     line(console, "Find the activation script with jforge build env <artifact-id> --path.", style="dim")
+
+
+def apt_profile_list(console, profiles):
+    if not profiles:
+        line(console, "No configured package profiles.")
+        return
+    line(console, f"Package profiles ({len(profiles)})", style="bold")
+    for profile in profiles:
+        state = ("pending setup" if profile.get("configured") is False else "active" if profile["active"]
+                 else "archived" if profile["backend"] == "archived" else "inactive")
+        line(console, f"  {profile['id']} · {state}")
+        line(console, f"    {profile['path']}", style="dim")
 
 
 def build_result(console, values, prog, resume_command, *, handed_off=False):
@@ -506,18 +554,22 @@ def shell_repair(console, values):
     if values.get("scope") == "managed":
         changed = "would change" if preview else "changed"
         line(console, f"  {len(values['targets'])} checked · {values['changed']} {changed} · {values['removed']} invalid paths · "
-             f"{values['deferred']} waiting for a workspace · {len(values['errors'])} failed")
+             f"{values['deferred']} deferred · {len(values['errors'])} failed")
         for target in values["targets"]:
             state = "would repair" if preview else "repaired"
             if not target["changed"]:
-                state = "waiting for a workspace" if target["deferred"] else "checked"
+                state = "deferred" if target["deferred"] else "checked"
             line(console, f"  {target['kind']} {target['name']} · {state}")
+            for reason in target.get("deferred_roots", {}).values():
+                line(console, "    " + reason, style="dim")
             if target.get("report"):
                 line(console, "    " + target["report"], style="dim")
         return
     line(console, values["activation"])
     removed = "would remove" if preview else "removed"
     line(console, f"  {len(values['settings'])} recorded · {values['removed']} {removed} · {values['unchecked']} unchecked")
+    for reason in values.get("deferred_roots", {}).values():
+        line(console, "  " + reason)
     for item in values["settings"]:
         if item["status"] == "removed":
             name = item.get("name", item["kind"])
@@ -535,14 +587,20 @@ def render(console, command, values):
     if command == "env repair":
         shell_repair(console, values)
         return
+    if command == "build list" and values.get("view") == "installed":
+        build_artifacts(console, values["builds"], installed=True)
+        return
     if command in {"build list", "build update"}:
         build_catalog(console, command, values)
         return
     if command == "build artifacts":
-        build_artifacts(console, values)
+        build_artifacts(console, values["artifacts"])
         return
     if command in {"apt list", "apt search"}:
         apt_packages(console, values)
+        return
+    if command == "apt show" and values.get("backend") == "homebrew":
+        homebrew_formula(console, values)
         return
     if command in {"apt install", "apt reinstall", "apt remove", "apt upgrade", "apt full-upgrade", "apt satisfy", "apt check"}:
         apt_transaction(console, command, values)
@@ -550,7 +608,17 @@ def render(console, command, values):
     if command == "apt update":
         apt_update(console, values)
         return
-    if command == "apt switch" and "profile" in values:
+    if command == "env list" and "profiles" in values:
+        profiles = values["profiles"]
+        named = [item for item in values["environments"] if item["name"] != "apt" or not profiles]
+        field(console, "named_environments", named, compact=True)
+        line(console)
+        apt_profile_list(console, profiles)
+        return
+    if command in {"apt profile", "apt switch"} and "environments" in values:
+        apt_profile_list(console, values["environments"])
+        return
+    if command in {"apt profile", "apt switch"} and "profile" in values:
         line(console, "APT environment: " + str(values["profile"]), style="bold")
         for key in ("source", "user_home", "apt_home", "packages", "activation", "status"):
             if key in values:

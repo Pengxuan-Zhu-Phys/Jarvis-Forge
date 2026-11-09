@@ -257,6 +257,10 @@ def verified_archive(home, source, log_path, *, progress=None):
 
 
 def environment_path(home):
+    from . import homebrew_backend
+
+    if homebrew_backend.configured(home):
+        return homebrew_backend.environment_path(home)
     file = home.root / "apt/state.json"
     state = read_json(file) if file.exists() else {}
     if not state.get("spack"):

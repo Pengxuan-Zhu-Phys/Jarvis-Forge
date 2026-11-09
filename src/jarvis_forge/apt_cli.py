@@ -1,4 +1,4 @@
-"""APT-shaped commands with a single Spack package backend."""
+"""Package commands for the selected Spack or Homebrew profile."""
 
 from __future__ import annotations
 
@@ -10,13 +10,17 @@ from typing import Optional
 
 import typer
 
-from . import spack_backend as backend
+from . import homebrew_backend, spack_backend as backend
 from .apt_profiles import (
     active_home,
     archived_packages,
+    backend_name,
+    create_homebrew,
     ensure_active,
+    initialize_profile,
     profiles,
     switch,
+    use,
 )
 from .package_operations import environment_path
 from .storage import ForgeError
@@ -24,7 +28,7 @@ from .storage import ForgeError
 app = typer.Typer(
     invoke_without_command=True,
     no_args_is_help=False,
-    help="Manage user-local software with Spack.\n\nCommand help: jforge apt COMMAND -h",
+    help="Manage native packages with Spack or Homebrew.\n\nCommand help: jforge apt COMMAND -h",
 )
 
 
@@ -42,6 +46,12 @@ def _progress(ctx):
 def _ready(ctx):
     ctx.obj.home = ensure_active(ctx.obj.user_home, progress=_progress(ctx))
     return ctx.obj.home
+
+
+def _spack_only(ctx):
+    if backend_name(ctx.obj.home) == "homebrew":
+        raise ForgeError(f"apt {ctx.info_name} is only available for Spack profiles.",
+                         hint="jforge apt profile")
 
 
 def _confirm(ctx, yes, message):
@@ -63,6 +73,15 @@ def _transact(
     dry_run=False,
     command=None,
 ):
+    if backend_name(ctx.obj.home) == "homebrew":
+        if command == "satisfy":
+            _spack_only(ctx)
+        if action == "install" and not dry_run and not homebrew_backend.configured(ctx.obj.home):
+            _ready(ctx)
+        _emit(ctx, command or action, **homebrew_backend.transact(
+            ctx.obj.home, action, packages, jobs=jobs, timeout=timeout, cache=cache,
+            dry_run=dry_run, progress=_progress(ctx)))
+        return
     preview = backend.transact(
         ctx.obj.home,
         action,
@@ -101,11 +120,12 @@ def apt(ctx: typer.Context):
                                      check=ctx.invoked_subcommand == "check")
     ctx.call_on_close(ctx.obj.apt_progress.close)
     ctx.obj.user_home = ctx.obj.home
-    if ctx.invoked_subcommand not in {"switch", "import"}:
+    if ctx.invoked_subcommand not in {"switch", "import", "profile"}:
         ctx.obj.home = active_home(ctx.obj.home)
     if ctx.invoked_subcommand is None:
         if ctx.obj.as_json:
-            _emit(ctx, "help", commands=sorted(ctx.command.commands))
+            _emit(ctx, "help", commands=sorted(name for name, command in ctx.command.commands.items()
+                                               if not command.hidden))
         else:
             typer.echo(ctx.get_help())
 
@@ -117,7 +137,10 @@ def list_packages(
         "*", help="Package name pattern.", metavar="<pattern>"
     ),
     installed_only: bool = typer.Option(
-        False, "--installed", help="Show active environment packages."
+        False, "--installed", help="Show installed packages, the default.", rich_help_panel="Legacy options"
+    ),
+    available: bool = typer.Option(
+        False, "--available", help="Show the selected backend's package catalog."
     ),
     upgradable: bool = typer.Option(
         False, "--upgradable", help="Explain dependency-based upgrade planning."
@@ -126,41 +149,49 @@ def list_packages(
         False, "--archived", help="Read old source installation records."
     ),
 ):
-    """List cached Spack packages or archived source installation records."""
+    """List packages installed in the selected profile."""
     if upgradable:
+        _spack_only(ctx)
         raise ForgeError(
             "Upgrades require solving the Spack environment.",
             hint="jforge apt check; jforge apt upgrade",
         )
-    rows = (
-        archived_packages(ctx.obj.user_home)
-        if archived
-        else (
-            backend.current(ctx.obj.home)["packages"]
-            if installed_only
-            else backend.catalog(ctx.obj.home, pattern=pattern)
-        )
-    )
+    if available and (installed_only or archived):
+        raise ForgeError("--available cannot be combined with --installed or --archived.")
+    driver = homebrew_backend if backend_name(ctx.obj.home) == "homebrew" else backend
+    if archived:
+        rows = archived_packages(ctx.obj.user_home)
+        view = "archived"
+    elif available:
+        rows = driver.catalog(ctx.obj.home, pattern=pattern)
+        view = "available"
+    else:
+        if driver is homebrew_backend:
+            rows = homebrew_backend.inventory(ctx.obj.home) if homebrew_backend.configured(ctx.obj.home) else []
+        else:
+            rows = backend.current(ctx.obj.home)["packages"]
+        view = "installed"
     rows = [r for r in rows if fnmatch.fnmatchcase(r["name"], pattern)]
-    if not ctx.obj.as_json and len(rows) > 1000:
+    if available and not ctx.obj.as_json and len(rows) > 1000:
         sys.stdout.write("".join(r["name"] + "\n" for r in rows))
     else:
-        _emit(ctx, "list", backend="spack", packages=rows)
+        _emit(ctx, "list", backend="homebrew" if driver is homebrew_backend else "spack", view=view, packages=rows)
 
 
 @app.command()
 def search(
     ctx: typer.Context,
     query: str = typer.Argument(
-        ..., help="Match cached Spack package names.", metavar="<query>"
+        ..., help="Match package names in the selected backend.", metavar="<query>"
     ),
 ):
-    """Search cached package names without downloading."""
+    """Search the selected backend's package catalog."""
+    driver = homebrew_backend if backend_name(ctx.obj.home) == "homebrew" else backend
     _emit(
         ctx,
         "search",
-        backend="spack",
-        packages=backend.catalog(ctx.obj.home, query=query),
+        backend="homebrew" if driver is homebrew_backend else "spack",
+        packages=driver.catalog(ctx.obj.home, query=query),
     )
 
 
@@ -171,7 +202,13 @@ def show(
         ..., help="Package name or quoted Spack spec.", metavar="<package>"
     ),
 ):
-    """Show Spack recipe metadata and recorded installation locations."""
+    """Show package metadata and installed instances."""
+    if backend_name(ctx.obj.home) == "homebrew":
+        formula = homebrew_backend.details(ctx.obj.home, package)
+        _emit(ctx, "show", backend="homebrew", package=formula,
+              installed_instances=[row for row in homebrew_backend.inventory(ctx.obj.home)
+                                   if row["name"] == formula["name"]])
+        return
     _emit(
         ctx,
         "show",
@@ -192,16 +229,16 @@ def install_packages(
     ),
     jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Parallel build jobs."),
     timeout: float = typer.Option(
-        3600, "--timeout", min=0.1, help="Timeout per Spack command, in seconds."
+        3600, "--timeout", min=0.1, help="Installation command timeout, in seconds."
     ),
     cache: str = typer.Option(
         "auto", "--cache", help="Binary cache policy: auto, only or never."
     ),
     dry_run: bool = typer.Option(
-        False, "--dry-run", "-s", help="Preview requests without downloads or solving."
+        False, "--dry-run", "-s", help="Preview requests without installing packages."
     ),
 ):
-    """Install requested packages and their Spack dependencies."""
+    """Install or select packages and their dependencies."""
     _transact(ctx, "install", packages, jobs, timeout, cache, dry_run)
 
 
@@ -306,7 +343,7 @@ def remove_packages(
         _confirm(
             ctx,
             yes,
-            "Remove roots from the Spack environment? Saved revisions are retained.",
+            "Remove roots from the selected profile? Saved revisions are retained.",
         )
     _transact(ctx, "remove", packages, dry_run=dry_run)
 
@@ -322,6 +359,7 @@ def autoremove(
     ),
 ):
     """Collect unused Spack packages, preserving saved environment revisions."""
+    _spack_only(ctx)
     if not dry_run:
         _confirm(
             ctx, yes, "Collect unused Spack packages? Saved environments are retained."
@@ -339,11 +377,25 @@ def autoremove(
 
 @app.command("update")
 def update_sources(ctx: typer.Context):
-    """Refresh the engine-compatible Spack recipes and package-name cache."""
-    _emit(ctx, "update", **backend.update(_ready(ctx), progress=_progress(ctx)))
+    """Refresh the active package catalog and this system's build recipes."""
+    from . import build_catalog
+
+    initialize_profile(ctx.obj.user_home)
+    target = _ready(ctx)
+    driver = backend_name(target)
+    result = (homebrew_backend.update(target) if driver == "homebrew"
+              else backend.update(target, progress=_progress(ctx)))
+    _progress(ctx)("Refresh build recipes for this system")
+    try:
+        catalog = build_catalog.update(ctx.obj.user_home)
+    except (ForgeError, OSError) as exc:
+        detail = getattr(exc, "hint", None)
+        raise ForgeError(f"{driver.capitalize()} metadata was refreshed. Build recipe refresh failed.\n{exc}",
+                         code=1, hint=detail or "Retry the build catalog with jforge build update.") from exc
+    _emit(ctx, "update", **{**result, "backend": driver, "build_catalog": catalog})
 
 
-@app.command("switch")
+@app.command("switch", hidden=True)
 def switch_source(
     ctx: typer.Context,
     source: Optional[str] = typer.Argument(
@@ -363,7 +415,7 @@ def switch_source(
         False, "--archived", help="Include read-only old source directories."
     ),
 ):
-    """Select a Spack package profile or list saved profiles."""
+    """Legacy command. See jforge apt profile."""
     if source is None:
         if direct or name != "default":
             raise ForgeError("Select spack before setting --name or --direct.")
@@ -386,6 +438,41 @@ def switch_source(
                 progress=_progress(ctx),
             ),
         )
+
+
+@app.command("profile")
+def manage_profile(
+    ctx: typer.Context,
+    name: Optional[str] = typer.Argument(None, metavar="<name>", help="Package profile name or ID. Omit to list."),
+    create: bool = typer.Option(False, "--create", help="Create and select the named profile."),
+    archived: bool = typer.Option(False, "--archived", help="Include archived source profiles in the list."),
+    profile_backend: Optional[str] = typer.Option(None, "--backend", metavar="<spack|homebrew>",
+                                                   help="Backend for a new profile. Defaults to spack."),
+):
+    """List profiles, or select the named package profile."""
+    home = ctx.obj.user_home
+    if profile_backend is not None and not create:
+        raise ForgeError("--backend requires --create.")
+    if profile_backend not in {None, "spack", "homebrew"}:
+        raise ForgeError("Choose spack or homebrew for --backend.")
+    if name is None:
+        if create:
+            raise ForgeError("--create requires a profile name.")
+        _emit(ctx, "profile", environments=profiles(home, archived=archived))
+        return
+    if archived:
+        raise ForgeError("--archived applies when listing profiles without a name.")
+    if not create:
+        _emit(ctx, "profile", **use(home, name))
+        return
+    if profile_backend == "homebrew":
+        _emit(ctx, "profile", **create_homebrew(home, name))
+        return
+    if name == "direct":
+        raise ForgeError("The direct profile is reserved for an existing root Spack installation.",
+                         hint="jforge apt profile direct")
+    _emit(ctx, "profile", **switch(home, name=name.removeprefix("spack-"),
+                                  create_only=True, progress=_progress(ctx)))
 
 
 @app.command("import")
@@ -417,6 +504,7 @@ def sources(
     yes: bool = typer.Option(False, "--yes", "-y", help="Confirm mirror removal."),
 ):
     """List or manage Spack binary mirrors and trusted signing keys."""
+    _spack_only(ctx)
     backend.validate_sources(add=add, url=url, remove=remove, trust_key=trust_key)
     if remove:
         _confirm(ctx, yes, "Remove this Spack mirror?")
@@ -438,6 +526,7 @@ def sources(
 @app.command("edit-sources")
 def edit_sources(ctx: typer.Context):
     """Show Spack mirrors; use apt sources options to edit them."""
+    _spack_only(ctx)
     _emit(ctx, "edit-sources", **backend.sources(ctx.obj.home))
 
 
@@ -448,7 +537,7 @@ def env(
         False, "--path", help="Print only the activation script path."
     ),
 ):
-    """Locate the current Spack environment activation script."""
+    """Locate the current package profile activation script."""
     if path and ctx.obj.as_json:
         raise ForgeError("--path and --json are mutually exclusive.")
     activation = environment_path(ctx.obj.home)
@@ -487,6 +576,7 @@ def spack_compilers(
     ),
 ):
     """Report or discover Spack compilers."""
+    _spack_only(ctx)
     _emit(
         ctx,
         "compilers",
@@ -525,9 +615,10 @@ jforge() {
         esac
     done
     if [ "$_jf_command" = apt ]; then
-        case "$_jf_action" in install|reinstall|upgrade|full-upgrade|satisfy|switch|import|remove|autoremove) _jf_change=1 ;; esac
+        case "$_jf_action" in install|reinstall|upgrade|full-upgrade|satisfy|switch|profile|import|remove|autoremove|update) _jf_change=1 ;; esac
     fi
-    if [ "$_jf_skip" = 1 ] || { [ "$_jf_action" = switch ] && [ "$_jf_target" = 0 ]; }; then _jf_change=0; fi
+    if [ "$_jf_skip" = 1 ]; then _jf_change=0; fi
+    case "$_jf_action:$_jf_target" in switch:0|profile:0) _jf_change=0 ;; esac
     case "$-:$_jf_command:$_jf_action:$_jf_skip:$_jf_no_activate" in
         *i*:build:run:0:0|*i*:build:resume:0:0)
             if _jf_handoff=$(mktemp "${TMPDIR:-/tmp}/jforge-build-activate.XXXXXXXX"); then

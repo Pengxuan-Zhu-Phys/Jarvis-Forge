@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console
 
-from jarvis_forge import apt_cli, spack_backend
+from jarvis_forge import apt_cli, build_catalog, spack_backend
 from jarvis_forge.apt_progress import AptProgress
 from jarvis_forge.cli import main
 from jarvis_forge.package_operations import operation, run_command
@@ -236,6 +236,11 @@ def test_callbacks_use_the_supplied_context_without_a_click_stack(
         return {"status": "passed"}
 
     monkeypatch.setattr(apt_cli, "ensure_active", ready)
+    if callback == "update_sources":
+        monkeypatch.setattr(apt_cli, "initialize_profile", lambda home: None)
+        monkeypatch.setattr(build_catalog, "update", lambda home: {
+            "platform": "linux", "builds": [], "excluded_builds": {},
+        })
     monkeypatch.setattr(apt_cli if backend == "switch" else spack_backend, backend, run)
     getattr(apt_cli, callback)(ctx, **kwargs)
     assert json.loads(capsys.readouterr().out)["ok"]
@@ -258,9 +263,13 @@ def test_update_command_passes_one_progress_instance_through_preparation(
         return {"status": "passed", "available": 12}
 
     monkeypatch.setattr(apt_cli, "ensure_active", ready)
+    monkeypatch.setattr(apt_cli, "initialize_profile", lambda home: None)
     monkeypatch.setattr(spack_backend, "update", update)
+    catalog = {"platform": "linux", "builds": [], "excluded_builds": {}}
+    monkeypatch.setattr(build_catalog, "update", lambda home: catalog)
     assert main(["--home", str(tmp_path / "absent"), "apt", "update", "--json"]) == 0
     output = capsys.readouterr()
     assert json.loads(output.out)["available"] == 12
+    assert json.loads(output.out)["build_catalog"] == catalog
     assert "Updated package catalog" in output.err
     assert seen[0].closed

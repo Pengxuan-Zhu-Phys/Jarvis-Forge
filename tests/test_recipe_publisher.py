@@ -415,9 +415,10 @@ def test_root_release_bundle_is_accepted_by_current_client(tmp_path, monkeypatch
     output = tmp_path / "assets"
     manifest = publisher.build_projects("2026.11.05.1", source, output)
     root = next(row for row in manifest["builds"] if row["id"] == "root-build")
+    assert root["platforms"] == ["linux"]
     assert any(resource["path"] == "scripts/root_acceptance.py" for resource in root["files"])
     monkeypatch.setattr(build_catalog, "fetch", lambda url, target, logs: target.write_bytes((output / url.rsplit("/", 1)[1]).read_bytes()))
     home = ForgeHome(tmp_path / "home")
     home.initialize()
-    build_catalog.update(home)
+    build_catalog.update(home, platform="linux")
     assert build_catalog.resolve(home, "root-build").is_file()

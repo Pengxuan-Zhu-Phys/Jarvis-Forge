@@ -2,7 +2,7 @@
 
 Jarvis-Forge is an independent Python package for user-space software environments and command-based acceptance workflows on scientific workstations and HPC systems. Its CLI is `jforge`.
 
-Forge runs local command suites and preserves their evidence. Its `jforge apt` command delegates package recipes, dependency resolution, binary-cache reuse and builds to a pinned, user-local Spack installation. Spack is the only package backend; old source installations remain queryable as archived records. Named environments keep private, versioned shell copies in one shared user directory. Managed services, Slurm submission, scientific comparison policies, and the `Jarvis forge` forwarding command are planned extensions.
+Forge runs local command suites and preserves their evidence. Its `jforge apt` command uses a pinned, user-local Spack installation on Linux and an existing Homebrew installation on macOS by default. Old source installations remain queryable as archived records. Named environments keep private, versioned shell copies in one shared user directory. Managed services, Slurm submission, scientific comparison policies, and the `Jarvis forge` forwarding command are planned extensions.
 
 ## Install
 
@@ -10,9 +10,11 @@ Python 3.10 or newer and a POSIX system with Bash are required for execution. Us
 
 ```bash
 python3 -m pip install Jarvis-Forge
-jforge --version
-jforge --help
+jforge init
+jforge apt profile
 ```
+
+The pyenv setup script runs `jforge init` automatically. Initialization selects `spack-default` on Linux and `homebrew-mac` on macOS, and preserves a profile already selected on this system. Spack is prepared on first use. On macOS, Forge registers an existing Homebrew. If Homebrew is absent, the profile stays pending until it is available.
 
 The distribution name is `Jarvis-Forge`. For development from a checkout:
 
@@ -64,7 +66,7 @@ To register the hook for future shells, run `jforge env repair --hook` or use th
 
 The hook loads the selected package environment at startup and refreshes it after successful package changes. It uses the selected Forge home, including an explicit `--home`. Source switching removes previous managed package paths and restores exported values while preserving user PATH additions. The hook is intended for interactive use.
 
-Spack package names are cached during import/update. Listings read that local cache without starting Spack or accessing the network; complete distribution listings are printed as compact lines. `apt list --installed` shows one row per package, with version, requested/dependency kind and state. Requested packages appear first, followed by dependencies, sorted by name. Use `apt show <package>` for full installation paths and instance metadata, or `--json` for complete records. Installation summaries show selected roots and the dependency count; `apt check` shows the complete plan. `jforge list` also includes saved installation instances.
+Spack package names are cached during import/update. `apt list` shows installed packages in the selected profile, with version, requested/dependency kind and state. Requested packages appear first, followed by dependencies, sorted by name. Use `apt list --available` or `apt search` for the cached package catalog. Complete catalog listings are printed as compact lines. Use `apt show <package>` for installation paths and instance metadata, or `--json` for complete records. `jforge list` also includes saved installation instances.
 
 ## User directories and package queries
 
@@ -101,13 +103,13 @@ Operations save the complete concrete graph in `dag.json` and the initial requir
 Existing environments retain their original layout and multi-instance policy, including when regenerating configuration or selecting another Python. To adopt package-name directories with an existing Forge home, choose a previously unused environment name:
 
 ```bash
-jforge apt switch                         # List saved package environments.
-jforge apt switch spack --name root-env    # Create/select this independent package environment.
+jforge apt profile
+jforge apt profile root-env --create
 jforge apt install libeigen3-dev libgsl-dev sqlite3
 jforge info eigen --path
 ```
 
-`jforge paths` reports the selected native store. Old prefixes and installed ROOT references are preserved. Each `build` dependency profile follows the same one-build-per-name rule when newly created. Saved Spack environment revisions are installation history, distinct from the user-selected apt profiles; named shell environments are listed separately by `jforge env list`.
+`jforge paths` reports the selected native store. Old prefixes and installed ROOT references are preserved. Each `build` dependency profile follows the same one-build-per-name rule when newly created. Saved Spack environment revisions are installation history. `jforge env list` shows both named shell environments and configured Spack profiles.
 
 You select and prepare Python environments with pyenv or your existing tools. `doctor --shell` sources your trusted Bash script and reports the resulting CC/CXX/FC selections, compiler and build-tool paths and versions, Python interpreter paths and versions, virtual environment prefixes, installed Python packages, and selected module/pyenv variables. It does not choose an environment or switch to a fallback. Without `--shell`, it inspects the inherited environment. Missing tools and failed version probes are reported individually; activation errors fail the command. `--timeout` limits the complete inspection, including activation. Shell output is kept separate from JSON results. Inspection creates no Forge user state.
 
@@ -130,32 +132,32 @@ Each `env add ... --replace` saves a new revision. Use `env show cbs --revision 
 
 Scripts are copied, not relocated together with their dependencies: use stable absolute paths for external files. If the original script changes, register the update with `env add cbs --shell /path/to/cbs-env.sh --replace`. For reproducibility, files in published revisions are not intended for direct editing. Full usage and storage details are in [the environment guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/ENVIRONMENTS.md).
 
-Run `jforge env repair` from any directory to discover and repair Forge-managed environments. It checks named environments, published Spack profiles, build workspaces and independent build exports, and the setup script's bootstrap activation when installed. Use `--dry-run` to preview or `--json` for per-setting results. The command saves a report for each changed target and keeps going if an individual target fails.
+Run `jforge env repair` from any directory to discover and repair Forge-managed environments. It checks named environments, published package profiles, build workspaces and independent build exports, and the setup script's bootstrap activation when installed. Use `--dry-run` to preview or `--json` for per-setting results. The command saves a report for each changed target and keeps going if an individual target fails.
 
 Literal references to a known build workspace's `activate.sh` are skipped while it is missing and used again when the workspace is rebuilt. Use `--shell PATH`, a registered environment name, or `apt` to target a single file, named environment, or active package profile. Repair checks literal paths without executing activation scripts.
 
 ## User-local packages with Spack
 
-All package operations use Spack. Native Spack extension recipes are downloaded from a dedicated recipe Release and refreshed with apt update, independently of Python package releases. Existing source installations are retained as read-only history; the first package write prepares the default Spack profile:
+Spack is the default package backend on Linux. Native Spack extension recipes are downloaded from a dedicated recipe Release and refreshed with apt update, independently of Python package releases. Existing source installations are retained as read-only history. The first Spack write prepares the default profile:
 
 ```bash
 jforge apt import spack
 # Or prepare and select a named package environment:
-jforge apt switch spack --name gambit
+jforge apt profile gambit --create
 jforge apt compilers
 jforge apt compilers --find
-jforge apt list
+jforge apt list --available
 jforge apt search eigen
 jforge apt show libgsl-dev
 jforge apt check sqlite3 libgsl-dev libeigen3-dev
 jforge apt install sqlite3 libgsl-dev libeigen3-dev --jobs 4
-jforge apt list --installed
+jforge apt list
 jforge info libgsl-dev --path
 ```
 
-Maintainers publish all package recipes, project build YAMLs, library cards and companion scripts with one standalone command: `./jfrecipes <recipe-revision>`. `--dry` prepares and checks both catalogs without network access. The script needs Python, PyYAML and an authenticated GitHub CLI; it does not import Forge or read its version. Compatibility comes from `recipes/release.json` and `builds/release.json`. The fixed `recipes/recipes.json` and `builds/builds.json` download entries remain unchanged across recipe and client releases. Clients refresh them with `jforge apt update` and `jforge build update`, respectively. See the [recipe publishing guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/RELEASING.md#%E7%8B%AC%E7%AB%8B%E5%8F%91%E5%B8%83%E6%89%A9%E5%B1%95%E9%85%8D%E6%96%B9).
+Maintainers publish all package recipes, project build YAMLs, library cards and companion scripts with `./jfrecipes <recipe-revision>`. Use `--dry` to prepare and check both catalogs without network access. The fixed `recipes/recipes.json` and `builds/builds.json` entries keep their independent release cycles. `jforge apt update` refreshes the selected package backend and the build recipes supported by this OS. Use `jforge build update` to refresh just the build catalog. See the [recipe publishing guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/RELEASING.md#%E7%8B%AC%E7%AB%8B%E5%8F%91%E5%B8%83%E6%89%A9%E5%B1%95%E9%85%8D%E6%96%B9).
 
-`import spack` selects `spack-default`. `switch spack --name NAME` selects a separate store, configuration and saved environments under the shared Forge home. Re-selecting an existing environment retains its configuration and installations. Select Python before creating a profile. Forge registers the active interpreter as an external Spack dependency and keeps it for the life of the profile. A package plan that requires a Spack-managed interpreter or virtual environment is rejected. The interpreter running Forge executes Spack itself. Select compilers/variants explicitly with native quoted specs when needed:
+`apt import spack` prepares and selects `spack-default`. `apt profile NAME --create` creates and selects a separate store and configuration. Use `apt profile` to list configured profiles and `apt profile NAME` to select an existing one. Select Python before creating a profile. Forge registers the active interpreter as an external Spack dependency and keeps it for the life of the profile. A package plan that requires a Spack-managed interpreter or virtual environment is rejected. The interpreter running Forge executes Spack itself. Select compilers and variants with native quoted specs when needed:
 
 ```bash
 jforge apt install 'gsl@2.8 %gcc@13' 'hdf5~mpi' 'root +python'
@@ -166,7 +168,7 @@ jforge apt sources --trust-key /path/to/site-signing-key.asc
 jforge apt update
 jforge apt upgrade
 jforge apt remove sqlite3 --yes
-jforge apt switch
+jforge apt profile default
 ```
 
 Common Debian development names are aliases to Spack names, for example `libgsl-dev` → `gsl`, `libeigen3-dev` → `eigen`, and `sqlite3` → `sqlite`. Native Spack specs and `name=version` are accepted. This does not import Ubuntu/Debian binary packages: Spack owns the dependency graph and uses its own recipes and signed build caches. Search/list use cached package names; show fetches detailed metadata from the managed local Spack installation.
@@ -193,23 +195,43 @@ Existing source prefixes, manifests, shell files and operation logs stay on disk
 jforge list --archived
 jforge info libgsl-dev --archived --path
 jforge apt list --archived
-jforge apt switch --archived
+jforge apt profile --archived
 ```
 
-Archive queries read records without running old shell or recipe commands. Archived records do not satisfy Spack dependencies and cannot be upgraded or removed by the package CLI. Reinstall the packages you need with Spack. Use `apt switch spack --direct` to select an existing root-level Spack store that uses external Python. Reload `apt shell-init` once after upgrading; subsequent successful package changes automatically refresh the current shell.
+Archive queries read records without running old shell or recipe commands. Archived records do not satisfy Spack dependencies and cannot be upgraded or removed by the package CLI. Reinstall the packages you need with Spack. Use `apt profile direct` to select an existing root-level Spack store that uses external Python. Reload `apt shell-init` once after upgrading. Subsequent successful package changes automatically refresh the current shell.
 
 See [APT usage](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md), [backend design](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_DEPENDENCIES.md), and [compatibility](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT_COMPATIBILITY.md).
 
+## Native packages with Homebrew on macOS
+
+With Homebrew installed, initialize Forge to register it and select the native formulas you need.
+
+```bash
+jforge init
+jforge apt profile
+jforge apt install eigen gsl --dry-run
+jforge apt install eigen gsl
+jforge apt list
+jforge info eigen --path
+jforge apt env --path
+```
+
+Each Homebrew profile records its selected formulas and shares the existing Cellar. `apt list` includes shared installations, and `apt remove eigen --yes` drops the profile's selection while keeping the keg. Forge reuses installed kegs when possible. Installing missing formulas runs Homebrew as your user and requires a writable prefix. `apt update` refreshes Homebrew metadata.
+
+Use pyenv for Python. Forge rejects formulas that require Homebrew Python, including the official ROOT formula. Activation adds the selected kegs' CMake and pkg-config paths while preserving the current PATH and Python. `jforge env repair` refreshes these paths after external Homebrew changes.
+
+Current build recipes with `apt.install` use Spack. See the [Homebrew profile design](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/HOMEBREW_PROFILE_DESIGN.md).
+
 ## Project builds and regression checker
 
-`jforge build` prepares, configures, compiles, installs and verifies software projects using CMake and reusable installation outputs. The `workflow` command namespace is reserved for future orchestration design. It is parallel to `apt`. Recipe dependencies install into the active apt Spack environment; with no `apt switch`, that environment is `spack-default`. Build YAML sources are distributed independently from PyPI through GitHub Release assets. From a development checkout:
+`jforge build` prepares, configures, compiles, installs and verifies software projects using CMake and reusable installation outputs. The `workflow` command namespace is reserved for future orchestration design. It is parallel to `apt`. Recipe dependencies install into the selected Spack profile, normally `spack-default` until another profile is selected. Build YAML sources are distributed independently from PyPI through GitHub Release assets. From a development checkout:
 
 ```bash
 jforge build validate builds/root-build.yaml
 jforge build plan builds/root-build.yaml --env hep
 jforge build run builds/root-build.yaml --env hep --jobs 8
 jforge build resume <run-id> --jobs 8
-jforge build artifacts
+jforge build list
 source "$(jforge build env <artifact-id> --path)"
 ```
 
@@ -280,11 +302,13 @@ User cards declare prerequisite modules with `required_modules`; the expanded ex
 
 `build run` and `build resume` show numbered stages, dependency and download progress, and a concise result. Failures show the stage, diagnostic, log paths and a resume command. Use `--verbose` or `--debug` to stream command lines and raw output. The attempt keeps the timestamped `build.log`, individual command logs and check reports in every mode.
 
+`build list` lists installed outputs with their artifact IDs and prefixes. `build list --available` lists cached recipes and libraries. `build artifacts` lists all recorded outputs, including historical installations.
+
 Independent recipe distribution (once the maintainer publishes the assets):
 
 ```bash
 jforge build update
-jforge build list
+jforge build list --available
 jforge build fetch root-build --output root.yaml
 PYTHONPATH=src python3 tools/build_project_assets.py --version r1 --output /tmp/forge-build-release
 ```

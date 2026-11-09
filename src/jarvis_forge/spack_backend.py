@@ -186,7 +186,7 @@ def current(home):
     if file.exists() and not value:
         raise ForgeError(
             "This is an archived source package environment.",
-            hint="jforge apt switch spack; jforge list --archived",
+            hint="jforge apt import spack\njforge list --archived",
         )
     return value or {
         "schema_version": 1,
@@ -453,7 +453,7 @@ def bootstrap(home, *, progress=None, extensions=None):
         ):
             raise ForgeError(
                 "Source package data is archived; select a Spack profile.",
-                hint="jforge apt switch spack",
+                hint="jforge apt import spack",
             )
         if configured(home) and current(home).get("environment"):
             value = settings(home)
@@ -865,7 +865,7 @@ def _validate_name_only_plan(plan, envdir):
             raise ForgeError(f"Spack returned an unexpected name-only prefix: {prefix}", code=1)
         if (prefix.exists() or prefix.is_symlink()) and not package["installed"] and not package.get("prefix_matches"):
             raise ForgeError(f"{package['name']} already occupies {prefix} with another build; its metadata and files are preserved.",
-                             code=1, hint="jforge apt switch spack --name <new-name>; then install the requested packages there.")
+                             code=1, hint="Run jforge apt profile <new-name> --create, then install the requested packages there.")
 
 
 def _validate_external_python(home, packages):

@@ -17,10 +17,15 @@ app = typer.Typer(help="Build projects and compose verified build outputs.",
 
 
 @app.command("list")
-def list_builds(ctx: typer.Context):
-    """List cached Release builds without network access."""
+def list_builds(ctx: typer.Context,
+                available: bool = typer.Option(False, "--available", help="Show cached build recipes and libraries.")):
+    """List installed build outputs."""
     from .cli import emit
-    emit(ctx, "build list", builds=catalog.entries(ctx.obj.home), libraries=catalog.libraries(ctx.obj.home))
+    if available:
+        emit(ctx, "build list", view="available", builds=catalog.entries(ctx.obj.home),
+             libraries=catalog.libraries(ctx.obj.home))
+    else:
+        emit(ctx, "build list", view="installed", builds=_artifacts(ctx.obj.home, installed_only=True), libraries=[])
 
 
 @app.command()
@@ -43,17 +48,20 @@ def show(ctx: typer.Context, build: str = typer.Argument(..., metavar="<build>")
         value = yaml.load(source.read_text(), Loader=UniqueLoader)
         if not isinstance(value, dict):
             raise ForgeError("Expected a build card mapping.")
+        requirements = builds.host_requirements(value)
         if ctx.obj.as_json:
-            emit(ctx, "build show", path=str(source), sha256=digest(source), build=value)
+            emit(ctx, "build show", path=str(source), sha256=digest(source), build=value, host_requirements=requirements)
         else:
-            show_build(_console(), value, path=source, sha256=digest(source))
+            show_build(_console(), value, path=source, sha256=digest(source), requirements=requirements)
         return
     value = builds.load(source, home=ctx.obj.home)
+    requirements = builds.host_requirements(value["config"])
     if ctx.obj.as_json:
-        emit(ctx, "build show", path=value["path"], sha256=value["sha256"], build=value["config"])
+        emit(ctx, "build show", path=value["path"], sha256=value["sha256"], build=value["config"],
+             host_requirements=requirements)
     else:
         show_build(_console(), value["raw_config"], path=value["path"], sha256=value["sha256"],
-                   ordered=value["ordered"])
+                   ordered=value["ordered"], requirements=requirements)
 
 
 @app.command()
@@ -134,9 +142,18 @@ def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directo
         else:
             build = str(catalog.acquire(ctx.obj.home, build))
     console = _console(stderr=True)
-    result = builds.execute(ctx.obj.home, build, parameters=parameters(setting), environment_name=env,
-                               jobs=jobs, resume=resume, verbose=ctx.obj.verbose, as_json=ctx.obj.as_json,
-                               progress=lambda message: line(console, message))
+    command_name = "build resume" if resume else "build run"
+    try:
+        result = builds.execute(ctx.obj.home, build, parameters=parameters(setting), environment_name=env,
+                                jobs=jobs, resume=resume, verbose=ctx.obj.verbose, as_json=ctx.obj.as_json,
+                                progress=lambda message: line(console, message))
+    except ForgeError as exc:
+        if not ctx.obj.as_json:
+            raise
+        emit(ctx, command_name, ok=False, error={
+            "type": type(exc).__name__, "message": str(exc), "hint": exc.hint,
+        })
+        raise typer.Exit(exc.code) from exc
     values = builds.summary(result)
     passed = result["status"] == "passed"
     handed_off = False
@@ -149,7 +166,7 @@ def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directo
         if not passed:
             values["error"] = {"type": "VerificationFailed", "message": values["error"],
                                "hint": values.pop("hint", None)}
-        emit(ctx, "build resume" if resume else "build run", ok=passed, **values)
+        emit(ctx, command_name, ok=passed, **values)
     else:
         root = ctx.find_root()
         prog = root.info_name or "jforge"
@@ -180,16 +197,24 @@ def resume(ctx: typer.Context, run_id: str = typer.Argument(..., metavar="<run_i
     _execute(ctx, jobs=jobs, resume=run_id, no_activate=no_activate)
 
 
+def _artifacts(home, *, installed_only=False):
+    from .storage import read_json
+
+    rows = []
+    for path in sorted((home.root / "builds/artifacts").glob("*/manifest.json")):
+        value = read_json(path)
+        if installed_only and (value["status"] != "ready" or not Path(value["prefix"]).is_dir()):
+            continue
+        rows.append({k: value[k] for k in ("artifact_id", "build_id", "output", "prefix", "version", "status")})
+    return rows
+
+
 @app.command("artifacts")
 def artifacts(ctx: typer.Context):
-    """List recorded cross-build installation outputs."""
+    """List all build artifact records, including historical installations."""
     from .cli import emit
-    from .storage import read_json
-    rows = []
-    for path in sorted((ctx.obj.home.root / "builds/artifacts").glob("*/manifest.json")):
-        value = read_json(path)
-        rows.append({k: value[k] for k in ("artifact_id", "build_id", "output", "prefix", "version", "status")})
-    emit(ctx, "build artifacts", artifacts=rows)
+
+    emit(ctx, "build artifacts", artifacts=_artifacts(ctx.obj.home))
 
 
 @app.command("env")

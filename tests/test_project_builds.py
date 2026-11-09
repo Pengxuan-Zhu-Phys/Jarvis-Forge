@@ -4,6 +4,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -250,6 +251,42 @@ def test_catalog_is_independent_and_failure_retains_cache(tmp_path, home):
     assert (home.root / 'builds/catalog/index.json').read_bytes() == old
 
 
+def test_catalog_refresh_downloads_only_supported_builds(tmp_path, home, monkeypatch):
+    def row(name, platforms):
+        path = tmp_path / f"{name}.yaml"
+        if platforms:
+            save(path, id=name, platforms=platforms,
+                 steps=[{"id": "x", "uses": "command", "with": {"argv": ["true"]}}])
+        else:
+            path.write_text(yaml.safe_dump({"name": name, "platforms": ["linux"],
+                                            "checks": {"after": {"scripts": ["missing.py"]}}}))
+        return {"id": name, "revision": "r1", "url": path.as_uri(), "sha256": digest(path)}
+
+    linux = {**row("linux-only", ["linux"]), "platforms": ["linux"]}
+    mac = {**row("mac-only", ["darwin"]), "platforms": ["darwin"]}
+    legacy = {**row("legacy-linux", None), "files": [
+        {"path": "missing.py", "url": (tmp_path / "missing.py").as_uri(), "sha256": "a" * 64}
+    ]}
+    index = tmp_path / "index.json"
+    write_json(index, {"schema_version": 1, "requires_forge": ">=1.1.0", "builds": [linux, mac, legacy]})
+    downloaded = []
+    fetch = build_catalog.fetch
+
+    def track(url, *args):
+        downloaded.append(url)
+        return fetch(url, *args)
+
+    monkeypatch.setattr(build_catalog, "fetch", track)
+    result = build_catalog.update(home, index.as_uri(), platform="darwin")
+    assert result["builds"] == [mac]
+    assert result["excluded_builds"] == {"linux-only": ["linux"], "legacy-linux": ["linux"]}
+    assert downloaded == [index.as_uri(), mac["url"], legacy["url"]]
+    monkeypatch.setattr(build_catalog, "sys", SimpleNamespace(platform="darwin"))
+    with pytest.raises(ForgeError, match="Build linux-only requires platform linux"):
+        build_catalog.acquire(home, "linux-only")
+    assert len(downloaded) == 3
+
+
 def test_build_cli_json_and_read_only_plan(tmp_path, capsys):
     path = save(tmp_path / 'flow.yaml', id='test', steps=[{'id':'x','uses':'command','with':{'argv':['true']}}])
     absent = tmp_path / 'absent'
@@ -411,7 +448,7 @@ def test_self_contained_release_card_can_be_edited_offline(home,tmp_path):
     assets=tmp_path/'assets'
     built=build('compact-v1',assets,source=source,base_url=assets.as_uri())
     assert built['libraries']==[]
-    build_catalog.update(home,(assets/'builds.json').as_uri())
+    build_catalog.update(home, (assets/'builds.json').as_uri(), platform="linux")
     cached=build_catalog.resolve(home,'root-build')
     editable=tmp_path/'my-root.yaml'; build_catalog.copy_bundle(cached, editable, home=home)
     config=yaml.safe_load(editable.read_text())
@@ -596,6 +633,7 @@ def test_build_show_summarizes_root_recipe(tmp_path, capsys):
     assert main(["--home", str(home), "build", "show", str(root)]) == 0
     shown = capsys.readouterr().out
     assert "root-build" in shown and "ROOT 6.40.04" in shown
+    assert "Platform: linux" in shown and "APT profile: Spack" in shown
     assert "-Dall=ON" in shown and "Off: fcgi, dcache, r, qt6web, cuda, tmva-gpu, tmva-cudnn" in shown
     assert "Required features: pyroot, roofit, opengl, mathmore, arrow, davix, vecgeom, pythia8" in shown
     assert "Apt packages (" in shown and "pythia8" in shown
@@ -609,6 +647,44 @@ def test_build_show_summarizes_root_recipe(tmp_path, capsys):
     assert main(["--home", str(home), "--json", "build", "show", str(root)]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["build"]["build"]["cmake"]["options"]["all"] is True
+    assert payload["host_requirements"] == {"platforms": ["linux"], "apt_backend": "spack"}
+
+
+@pytest.mark.parametrize("name", ["root-build", "CEPC-build"])
+def test_linux_recipe_rejected_on_macos_before_run(home, name, monkeypatch, capsys):
+    path = Path(__file__).parents[1] / "builds" / f"{name}.yaml"
+    monkeypatch.setattr(builds, "sys", SimpleNamespace(platform="darwin"))
+    args = ["--home", str(home.root), "--json", "build"]
+    assert main([*args, "plan", str(path)]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["nodes"][-1]["host_requirements"] == {"platforms": ["linux"], "apt_backend": "spack"}
+    assert main([*args, "run", str(path)]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "build run"
+    error = payload["error"]
+    assert f"Build {name} requires platform linux. Current platform is darwin." == error["message"]
+    assert not list((home.root / "runs").iterdir())
+
+
+def test_dependency_host_requirements_are_checked_before_parent(home, tmp_path, monkeypatch):
+    child = save(tmp_path / "child.yaml", id="child", platforms=["linux"], steps=[
+        {"id": "packages", "uses": "apt.install", "with": {"specs": ["gsl"]}}
+    ])
+    parent = save(tmp_path / "parent.yaml", id="parent",
+                  requires={"child": {"build": str(child), "output": "installation"}},
+                  steps=[{"id": "command", "uses": "command", "with": {"argv": ["true"]}}])
+    monkeypatch.setattr(cmake, "capture", lambda *args: pytest.fail("Environment captured before compatibility checks"))
+    monkeypatch.setattr(builds, "sys", SimpleNamespace(platform="darwin"))
+    with pytest.raises(ForgeError, match="Build child requires platform linux"):
+        builds.execute(home, parent)
+    monkeypatch.setattr(builds, "sys", SimpleNamespace(platform="linux"))
+    profile = home.root / "apt/profiles/homebrew-mac"
+    write_json(profile / "config.json", {})
+    write_json(profile / "apt/homebrew.json", {})
+    write_json(home.root / "apt/selection.json", {"schema_version": 1, "id": profile.name})
+    with pytest.raises(ForgeError, match="Build child requires a Spack apt profile.*homebrew-mac"):
+        builds.execute(home, parent)
+    assert not list((home.root / "runs").iterdir())
 
 
 def test_package_install_uses_active_apt_profile(home, tmp_path, monkeypatch):

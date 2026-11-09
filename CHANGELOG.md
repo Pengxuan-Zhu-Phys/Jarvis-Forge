@@ -2,7 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- Register an existing macOS Homebrew installation with `apt profile NAME --create --backend homebrew`. Audit native formula dependencies, reuse shared kegs, and activate their CMake and pkg-config paths while preserving pyenv Python.
+
 ### Changed
+
+- Select a host package profile at initialization and refresh both package metadata and OS-compatible build recipes with `apt update`. Include the selected profile in initialization output and build-catalog results in update JSON.
+
+- Default `apt list` and `build list` to installed items. Use `--available` for the previous catalog view and its JSON records. `env list` also includes configured Spack profiles.
+- Use `apt profile` to list Spack profiles, `apt profile NAME` to select one, and `apt profile NAME --create` to create and select one. Keep `apt switch` as a hidden compatibility command.
 
 - Make `jforge env repair` discover and repair managed environments from any directory. Keep references to known workspaces usable across same-path rebuilds.
 - Activate a successful build or resume in the calling interactive Bash or Zsh session when the Forge shell hook is loaded. Use `--no-activate` to opt out.
@@ -10,6 +19,7 @@
 
 ### Fixed
 
+- Reject unsupported build platforms and apt backends before execution, including for dependent recipes. Show host requirements in build inspection and planning.
 - Rebuild a deleted workspace installation at the original path without manually removing its old artifact record.
 - Omit missing search directories when generating build runtime activation scripts.
 

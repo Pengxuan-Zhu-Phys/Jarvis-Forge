@@ -193,8 +193,15 @@ def build_projects(revision, source, output):
         content = file.read_bytes()
         filename = f"{name}-{revision}-{sha(content)[:12]}.yaml"
         write_asset(output / filename, content)
-        rows.append(dict(id=name, revision=revision, url=BUILDS_URL + filename, sha256=sha(content),
-                         description=card.get("description", ""), files=companions))
+        row = dict(id=name, revision=revision, url=BUILDS_URL + filename, sha256=sha(content),
+                   description=card.get("description", ""), files=companions)
+        workflow = card.get("Workflow")
+        platforms = card.get("platforms", workflow.get("platforms") if isinstance(workflow, dict) else None)
+        if platforms is not None:
+            if not isinstance(platforms, list) or not platforms or any(p not in ("linux", "darwin") for p in platforms):
+                raise ValueError(f"Invalid supported platforms: {file}")
+            row["platforms"] = platforms
+        rows.append(row)
     if not rows:
         raise ValueError("No build YAML recipes found")
     manifest = dict(schema_version=1, requires_forge=metadata["requires_forge"], builds=rows, libraries=libraries)
