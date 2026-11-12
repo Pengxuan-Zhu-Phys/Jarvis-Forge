@@ -750,14 +750,59 @@ def test_build_show_summarizes_root_recipe(tmp_path, capsys):
     assert payload["host_requirements"] == {"platforms": ["linux"], "apt_backend": "spack"}
 
 
-@pytest.mark.parametrize("name", ["root-build", "CEPC-build"])
-def test_linux_recipe_rejected_on_macos_before_run(home, name, monkeypatch, capsys):
+def test_higgstools_recipe_patches_before_cmake_and_pins_the_bridges():
+    import hashlib
+    import importlib.util
+
+    root = Path(__file__).parents[1]
+    path = root / "builds/higgstools-build.yaml"
+    loaded = builds.load(path)
+    config = loaded["config"]
+    steps = config["steps"]
+    assert [step["id"] for step in steps] == [
+        "preflight.command-1", "preflight.command-2", "HiggsTools.install", "HiggsTools.command-1",
+    ]
+    prepare, cmake_step, install = steps[1], steps[2], steps[3]
+    assert prepare["uses"] == "command" and cmake_step["uses"] == "cmake.project"
+    assert install["uses"] == "command"
+    assert "${sources.HiggsTools}" in prepare["with"]["argv"]
+    assert "preflight.command-2" in cmake_step["needs"]
+    assert "HiggsTools.install" in install["needs"]
+    cache = cmake_step["with"]["cache"]
+    assert cache["HiggsTools_BUILD_PYTHON_MODULE"]["value"] is True
+    assert cache["HiggsTools_BUILD_EXAMPLES"]["value"] is False
+    assert cache["HiggsTools_BUILD_TESTING"]["value"] is False
+    assert cache["HiggsTools_USE_BUNDLED_DEPS"]["value"] is True
+    assert cache["FETCHCONTENT_FULLY_DISCONNECTED"]["value"] is True
+    assert cache["Python_EXECUTABLE"] == {"type": "FILEPATH", "value": "${python}"}
+    assert cmake_step["with"]["targets"] == ["_Higgs", "HiggsTools"]
+    source = config["sources"]["HiggsTools"]
+    assert source["sha256"] == "6a7c928080c0ba5c9b93fc062c8b894412027a86d0447d255d25438a51fabf12"
+    assert source["subdir"] == "higgstools"
+    assert config["outputs"]["installation"]["publish_after"] == ["HiggsTools.command-1"]
+    assert config["platforms"] == ["linux"]
+    module_path = root / "builds/scripts/higgstools_prepare.py"
+    spec = importlib.util.spec_from_file_location("higgstools_prepare", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert hashlib.sha256(module.ASSIGNMENT).hexdigest() == module.ASSIGNMENT_SHA256
+    assert hashlib.sha256(module.BREAKDOWN).hexdigest() == module.BREAKDOWN_SHA256
+    assert module.ASSIGNMENT_SHA256 == "b05f09c3e4085baee0e331660bf7d01927f9a705b9cb25c0cec690f5d0e87b09"
+    assert module.BREAKDOWN_SHA256 == "930332a764e0e6364870bfb201a437843971bc8fe7019aa94692850c803f81c8"
+
+
+@pytest.mark.parametrize("name,requirements", [
+    ("root-build", {"platforms": ["linux"], "apt_backend": "spack"}),
+    ("CEPC-build", {"platforms": ["linux"], "apt_backend": "spack"}),
+    ("higgstools-build", {"platforms": ["linux"]}),
+])
+def test_linux_recipe_rejected_on_macos_before_run(home, name, requirements, monkeypatch, capsys):
     path = Path(__file__).parents[1] / "builds" / f"{name}.yaml"
     monkeypatch.setattr(builds, "sys", SimpleNamespace(platform="darwin"))
     args = ["--home", str(home.root), "--json", "build"]
     assert main([*args, "plan", str(path)]) == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan["nodes"][-1]["host_requirements"] == {"platforms": ["linux"], "apt_backend": "spack"}
+    assert plan["nodes"][-1]["host_requirements"] == requirements
     assert main([*args, "run", str(path)]) == 2
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "build run"
