@@ -514,6 +514,8 @@ def apt_profile_list(console, profiles):
                  else "archived" if profile["backend"] == "archived" else "inactive")
         line(console, f"  {profile['id']} · {state}")
         line(console, f"    {profile['path']}", style="dim")
+    line(console)
+    line(console, "Select a package profile with jforge apt profile <name>.", style="dim")
 
 
 def build_result(console, values, prog, resume_command, *, handed_off=False):
@@ -544,6 +546,12 @@ def build_result(console, values, prog, resume_command, *, handed_off=False):
             line(console, "  " + shlex.join(["source", row["activation"]]))
     if workspace_activation and not handed_off:
         line(console, shlex.join(["source", str(Path(values["workspace"]) / "activate.sh")]))
+    if status == "passed" and values.get("environment_entry"):
+        line(console, "Added to the apt environment:")
+        line(console, "  " + values["environment_entry"])
+    elif status == "passed" and values.get("environment_entry_error"):
+        line(console, "Could not add this installation to the apt environment.")
+        line(console, "  " + values["environment_entry_error"])
     field(console, "build_log", str(Path(values["attempt"]) / "build.log"))
     if failed_step:
         line(console, "Resume this run:")
@@ -586,6 +594,47 @@ def shell_repair(console, values):
         line(console, "Report " + values["report"])
 
 
+def environment_list(console, environments, profiles):
+    if not environments:
+        line(console, "No shell environments.")
+    else:
+        line(console, f"Environments ({len(environments)})", style="bold")
+        for item in environments:
+            line(console, f"  {item['name']} [{item.get('status') or 'ready'}]")
+            if item.get("description"):
+                line(console, "    " + item["description"])
+            if item.get("path"):
+                line(console, "    " + item["path"], style="dim")
+    line(console)
+    line(console, "Load one with jforge env switch <name>. Use apt for packages.", style="dim")
+    line(console)
+    apt_profile_list(console, profiles)
+
+
+def environment_selection(console, command, values):
+    if command == "env detach":
+        line(console, "Detached.", style="bold")
+        if values.get("previous"):
+            field(console, "previous", values["previous"])
+    elif command == "env drop":
+        line(console, "Removed from the apt environment: " + values["build_id"], style="bold")
+        field(console, "path", values["path"])
+        if values.get("description"):
+            field(console, "description", values["description"])
+    else:
+        line(console, "Selected environment: " + str(values.get("selected")), style="bold")
+        if values.get("description"):
+            field(console, "description", values["description"])
+        field(console, "path", values["path"])
+    if values.get("shell") == "pending":
+        line(console, "This shell applies the change when the command returns.")
+    elif values.get("shell") == "unchanged" and command == "env drop":
+        line(console, "The apt file no longer sources it. This shell is unchanged.")
+    elif values.get("shell") == "unchanged":
+        line(console, "Saved for new shells. This shell is unchanged.")
+        line(console, 'Load the hook with: eval "$(command jforge apt shell-init)"', style="dim")
+
+
 def render(console, command, values):
     if command == "env repair":
         shell_repair(console, values)
@@ -612,11 +661,10 @@ def render(console, command, values):
         apt_update(console, values)
         return
     if command == "env list" and "profiles" in values:
-        profiles = values["profiles"]
-        named = [item for item in values["environments"] if item["name"] != "apt" or not profiles]
-        field(console, "named_environments", named, compact=True)
-        line(console)
-        apt_profile_list(console, profiles)
+        environment_list(console, values["environments"], values["profiles"])
+        return
+    if command in {"env switch", "env detach", "env drop"}:
+        environment_selection(console, command, values)
         return
     if command in {"apt profile", "apt switch"} and "environments" in values:
         apt_profile_list(console, values["environments"])

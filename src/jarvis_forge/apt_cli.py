@@ -556,7 +556,12 @@ def env(
     """Locate the current package profile activation script."""
     if path and ctx.obj.as_json:
         raise ForgeError("--path and --json are mutually exclusive.")
-    activation = environment_path(ctx.obj.home)
+    from .env_entries import publish_apt
+
+    backend = environment_path(ctx.obj.home)
+    base = ctx.obj.user_home or ctx.obj.home
+    entry = publish_apt(base, ctx.obj.home, backend)
+    activation = entry["activation"]
     if path:
         print(activation)
     else:
@@ -564,6 +569,7 @@ def env(
             ctx,
             "env",
             activation=activation,
+            backend_activation=str(backend),
             source_command="source " + shlex.quote(activation),
         )
 
@@ -610,7 +616,7 @@ def shell_init(ctx: typer.Context):
     print(r"""# Add eval "$(command jforge apt shell-init)" to your shell startup file.
 jforge() {
     local _jf_arg _jf_next=0 _jf_home='' _jf_change=0 _jf_path _jf_command='' _jf_action='' _jf_skip=0 _jf_target=0
-    local _jf_no_activate=0 _jf_handoff _jf_status _jf_hook
+    local _jf_no_activate=0 _jf_handoff _jf_status _jf_hook _jf_env_switch=0 _jf_env_detach=0 _jf_env_reload=0
     for _jf_arg in "$@"; do
         if [ "$_jf_next" = 1 ]; then _jf_home=$_jf_arg; _jf_next=0; continue; fi
         case "$_jf_arg" in
@@ -635,6 +641,13 @@ jforge() {
     fi
     if [ "$_jf_skip" = 1 ]; then _jf_change=0; fi
     case "$_jf_action:$_jf_target" in switch:0|profile:0) _jf_change=0 ;; esac
+    if [ "$_jf_skip" = 0 ] && [ "$_jf_command" = env ]; then
+        case "$_jf_action" in
+            switch) _jf_env_switch=1 ;;
+            detach) _jf_env_detach=1 ;;
+            drop) _jf_env_reload=1 ;;
+        esac
+    fi
     case "$-:$_jf_command:$_jf_action:$_jf_skip:$_jf_no_activate" in
         *i*:build:run:0:0|*i*:build:resume:0:0)
             if _jf_handoff=$(mktemp "${TMPDIR:-/tmp}/jforge-build-activate.XXXXXXXX"); then
@@ -671,24 +684,38 @@ jforge() {
                 fi
                 ;;
         esac
-        if [ "$_jf_change" = 1 ]; then
+        if [ "$_jf_env_detach" = 1 ]; then
+            if typeset -f _jforge_env_restore >/dev/null 2>&1; then
+                _jforge_env_restore || printf '%s\n' 'jforge: Could not unload the selected environment.' >&2
+            elif typeset -f _jforge_apt_restore >/dev/null 2>&1; then
+                _jforge_apt_restore || printf '%s\n' 'jforge: Could not unload the selected environment.' >&2
+            fi
+        elif [ "$_jf_env_switch" = 1 ] || [ "$_jf_env_reload" = 1 ] || [ "$_jf_change" = 1 ]; then
             if [ -n "$_jf_home" ]; then
-                _jf_path=$(command jforge --home "$_jf_home" apt env --path) || _jf_path=''
+                if [ "$_jf_env_switch" = 1 ] || [ "$_jf_env_reload" = 1 ]; then
+                    _jf_path=$(command jforge --home "$_jf_home" env current --path) || _jf_path=''
+                else
+                    _jf_path=$(command jforge --home "$_jf_home" apt env --path) || _jf_path=''
+                fi
+            elif [ "$_jf_env_switch" = 1 ] || [ "$_jf_env_reload" = 1 ]; then
+                _jf_path=$(command jforge env current --path) || _jf_path=''
             else
                 _jf_path=$(command jforge apt env --path) || _jf_path=''
             fi
-            if [ -z "$_jf_path" ] || ! source "$_jf_path" >&2; then
-                printf '%s\n' 'jforge: Package command succeeded. Could not refresh the shell environment.' >&2
+            if [ "$_jf_env_reload" = 1 ] && [ -z "$_jf_path" ]; then
+                :
+            elif [ -z "$_jf_path" ] || ! source "$_jf_path" >&2; then
+                printf '%s\n' 'jforge: Command succeeded. Could not refresh the shell environment.' >&2
             fi
         fi
     else
         return $?
     fi
 }
-_jforge_apt_initial=$(command jforge__JFORGE_HOME_ARGS__ apt env --path 2>/dev/null) || _jforge_apt_initial=''
-if [ -n "$_jforge_apt_initial" ] && ! source "$_jforge_apt_initial" >&2; then
-    printf '%s\n' 'jforge: Could not load the selected package environment.' >&2
+_jforge_env_initial=$(command jforge__JFORGE_HOME_ARGS__ env current --path 2>/dev/null) || _jforge_env_initial=''
+if [ -n "$_jforge_env_initial" ] && ! source "$_jforge_env_initial" >&2; then
+    printf '%s\n' 'jforge: Could not load the selected environment.' >&2
 fi
-unset _jforge_apt_initial
-_JFORGE_HOOK_LOADED=1
+unset _jforge_env_initial
+export _JFORGE_HOOK_LOADED=1
 """.replace("__JFORGE_HOME_ARGS__", home_args))

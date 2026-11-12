@@ -51,7 +51,8 @@ def test_registry_queries_do_not_initialize_or_execute_scripts(home, tmp_path, c
     result = json.loads(capsys.readouterr().out)["environment"]
     assert result["status"] == "ready" and not marker.exists()
     assert main(["env", "show", "cbs", "--path", "--home", str(home.root)]) == 0
-    assert capsys.readouterr().out.strip() == result["activation"]
+    assert capsys.readouterr().out.strip() == result["entry"]
+    assert result["activation"] in Path(result["entry"]).read_text()
     assert not marker.exists()
 
 
@@ -192,7 +193,11 @@ def test_apt_environment_can_be_listed_but_not_overwritten(home, script, linux_a
     activation.write_text("export TEST_APT=1\n")
     write_json(target.root / "apt/state.json", {"backend":"spack", "spack":{"roots":[], "packages":[]}, "activation": str(activation), "last_operation_id": "op"})
     assert list_environments(home)[0]["name"] == "apt"
-    assert show(home, "apt", strict=True)["activation"] == str(activation)
+    shown = show(home, "apt", strict=True)
+    assert shown["backend_activation"] == str(activation)
+    assert shown["activation"] == str(home.root / "env" / "apt" / "activate.sh")
+    assert str(activation) in Path(shown["activation"]).read_text()
+    assert "revisions" not in shown["activation"]
     with pytest.raises(ForgeError, match="managed by jforge apt"):
         add(home, "apt", script)
 
@@ -229,7 +234,8 @@ def test_registry_does_not_write_through_symlinked_environment_directory(home, s
     assert not list(outside.iterdir())
 
 
-@pytest.mark.parametrize("command", [["env"], ["env", "add"], ["env", "list"], ["env", "show"], ["env", "repair"]])
+@pytest.mark.parametrize("command", [["env"], ["env", "add"], ["env", "list"], ["env", "show"], ["env", "repair"],
+                                     ["env", "switch"], ["env", "detach"], ["env", "drop"], ["env", "current"]])
 def test_environment_cli_help(command, capsys):
     assert main([*command, "-h"]) == 0
     assert "Usage:" in capsys.readouterr().out

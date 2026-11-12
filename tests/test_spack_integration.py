@@ -88,7 +88,9 @@ def test_real_dependency_install_activation_and_failure(tmp_path, capsys):
     )
     assert {p["name"] for p in first["packages"]} == {"forge-app", "forge-lib"}
     assert main(["--home", str(base.root), "apt", "env", "--path"]) == 0
-    assert capsys.readouterr().out.strip() == first["activation"]
+    printed = capsys.readouterr().out.strip()
+    assert first["activation"] in Path(printed).read_text()
+    assert "revisions" not in printed
     for shell in ["bash", "zsh"]:
         if not shutil.which(shell):
             continue

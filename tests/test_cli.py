@@ -9,6 +9,18 @@ from jarvis_forge.cli import main
 from jarvis_forge.storage import ForgeHome, write_json
 
 
+def test_root_help_keeps_daily_commands_ahead_of_acceptance(capsys):
+    assert main(["-h"]) == 0
+    output = capsys.readouterr().out
+    assert "Daily commands" in output
+    assert "Acceptance runs" in output
+    # Rich boxes each command, so the row is "│ apt " rather than a line that starts with "apt".
+    # The intro also mentions apt before the table.
+    assert output.index("│ apt ") < output.index("Acceptance runs")
+    assert output.index("Acceptance runs") < output.index("│ example ")
+    assert "\x1b[" not in output
+
+
 @pytest.mark.parametrize("command", [[], ["init"], ["paths"], ["doctor"], ["list"], ["info"],
     ["example"], ["validate"], ["plan"], ["run"], ["history"], ["show"], ["logs"], ["compare"]])
 def test_help(command, capsys):

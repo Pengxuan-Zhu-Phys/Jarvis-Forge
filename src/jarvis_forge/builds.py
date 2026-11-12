@@ -832,6 +832,14 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
             if request.get("workspace"):
                 from .build_workspace import publish
                 publish(Path(request["workspace"]), result)
+            try:
+                from .env_entries import attach_root_build
+
+                attached = attach_root_build(home, result)
+                if attached:
+                    result["environment_entry"] = attached["activation"]
+            except ForgeError as exc:
+                result["environment_entry_error"] = str(exc)
         except KeyboardInterrupt:
             result.update(status="interrupted", error="Interrupted.")
         except (ForgeError, OSError, ValueError) as exc:
@@ -849,7 +857,8 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
         return result
 
 
-def _step(home, step, options, work, logs, environment, observed, context, records, dependencies, jobs, progress, previous, *, workspace=None, verbose=False, as_json=False, apt_profile=None):
+def _step(home, step, options, work, logs, environment, observed, context, records, dependencies, jobs, progress,
+          previous, *, workspace=None, verbose=False, as_json=False, apt_profile=None):
     used = []
     for name in options.get("dependencies", []):
         used.append(dependencies[name[9:]] if name.startswith("requires.") else records[name])

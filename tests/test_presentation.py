@@ -55,6 +55,31 @@ def test_available_and_installed_search_results_have_unambiguous_states(command)
     assert "available" in output and "active, external" in output and "archived" in output
 
 
+def test_env_list_names_the_command_for_each_section():
+    output = displayed("env list", {
+        "environments": [{"name": "apt", "status": "ready", "description": "Active user-local packages + ROOT",
+                          "path": "/forge/env/apt/activate.sh"}],
+        "profiles": [{"id": "spack-default", "active": True, "path": "/forge/apt/profiles/spack-default",
+                      "backend": "spack"}],
+    })
+    assert "jforge env switch <name>" in output
+    assert "jforge apt profile <name>" in output
+    assert "Active user-local packages + ROOT" in output
+    assert output.index("apt") < output.index("spack-default")
+
+
+def test_switch_says_when_this_shell_stays_unchanged():
+    output = displayed("env switch", {"selected": "apt", "path": "/forge/env/apt/activate.sh",
+                                      "description": "Active user-local packages", "shell": "unchanged"})
+    assert "Selected environment: apt" in output
+    assert "This shell is unchanged" in output
+    assert "shell-init" in output
+    pending = displayed("env drop", {"build_id": "root-build", "path": "/forge/env/apt/activate.sh",
+                                     "description": "Active user-local packages", "shell": "pending"})
+    assert "Removed from the apt environment: root-build" in pending
+    assert "when the command returns" in pending
+
+
 def test_empty_query_is_short_and_clear():
     output = displayed("apt search", dict(backend="spack", packages=[]))
     assert "0 packages" in output and "No matching packages." in output

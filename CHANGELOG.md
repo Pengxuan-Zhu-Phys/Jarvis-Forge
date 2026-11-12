@@ -4,6 +4,10 @@
 
 ### Added
 
+- Give each environment a stable entry at `<home>/env/<name>/activate.sh` with metadata in `env.json`. `jforge apt env --path` and `jforge env list` print this short path. The revision script stays in its operation directory.
+- Select the environment loaded by new shells with `jforge env switch <name>`, show it with `jforge env current`, and unload it with `jforge env detach`. The shell hook applies the change in the current interactive shell. `jforge env drop <build-id>` removes one attached build from the apt environment without deleting its installation.
+- After a successful `root-build`, source that build's activation script from the apt environment entry. A ready root-build already on disk is added the next time the entry is published. A failed build does not change that entry.
+
 - Register an existing macOS Homebrew installation with `apt profile NAME --create --backend homebrew`. Audit native formula dependencies, reuse shared kegs, and activate their CMake and pkg-config paths while preserving pyenv Python.
 
 ### Changed
@@ -12,6 +16,7 @@
 
 - Default `apt list` and `build list` to installed items. Use `--available` for the previous catalog view and its JSON records. `env list` also includes configured Spack profiles.
 - Use `apt profile` to list Spack profiles, `apt profile NAME` to select one, and `apt profile NAME --create` to create and select one. Keep `apt switch` as a hidden compatibility command.
+- Group `jforge -h` so apt, env, and build stay in the main command list and acceptance commands stay under Acceptance runs. `env list` names the next command for an environment and for a package profile. `env switch` and `env detach` say whether this shell changes.
 
 - Make `jforge env repair` discover and repair managed environments from any directory. Keep references to known workspaces usable across same-path rebuilds.
 - Activate a successful build or resume in the calling interactive Bash or Zsh session when the Forge shell hook is loaded. Use `--no-activate` to opt out.

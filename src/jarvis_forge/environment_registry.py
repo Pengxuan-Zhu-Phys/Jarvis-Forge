@@ -66,6 +66,9 @@ def verify(record):
 def show(home, name, revision=None, *, strict=False):
     if name == "apt":
         from .apt_profiles import active_home
+        from .env_entries import publish_apt
+
+        base = home
         home = active_home(home)
         if revision:
             raise ForgeError("Use jforge apt env for the current apt activation script.")
@@ -73,20 +76,32 @@ def show(home, name, revision=None, *, strict=False):
         state = read_json(state_path) if state_path.exists() else {}
         if not state.get("activation"):
             raise ForgeError("No apt environment has been published.", hint="jforge apt install PACKAGE")
-        activation = _inside(home, Path(state["activation"]))
-        if strict and activation.is_file():
+        backend = _inside(home, Path(state["activation"]))
+        if strict and backend.is_file():
             from .package_operations import environment_path
 
-            activation = Path(environment_path(home))
+            backend = Path(environment_path(home))
         elif not strict and state.get("activation_repair"):
             from .spack_backend import repaired_runtime_environment
 
-            activation, _ = repaired_runtime_environment(home, state, materialize=False)
-        record = {"schema_version": 1, "managed_by": "jforge-apt", "home": str(home.root),
-                  "name": "apt", "revision": state["last_operation_id"], "path": str(activation.parent),
-                  "activation": str(activation), "description": "Active user-local packages",
-                  "files": {activation.name: digest(activation)} if activation.is_file() else {}}
-        record["status"] = "ready" if activation.is_file() else "missing"
+            backend, _ = repaired_runtime_environment(home, state, materialize=False)
+            if not backend.is_file():
+                backend = _inside(home, Path(state["activation"]))
+        if backend.is_file():
+            entry = publish_apt(base, home, backend)
+            activation = Path(entry["activation"])
+            record = {"schema_version": 1, "managed_by": "jforge-apt", "home": str(base.root),
+                      "name": "apt", "revision": state["last_operation_id"], "path": str(activation.parent),
+                      "activation": str(activation), "entry": str(activation),
+                      "backend_activation": str(backend), "description": entry["description"],
+                      "builds": entry["builds"], "profile": entry["profile"],
+                      "files": {"activate.sh": digest(activation)}}
+        else:
+            record = {"schema_version": 1, "managed_by": "jforge-apt", "home": str(base.root),
+                      "name": "apt", "revision": state["last_operation_id"], "path": str(backend.parent),
+                      "activation": str(backend), "backend_activation": str(backend),
+                      "description": "Active user-local packages", "builds": [], "files": {}}
+        record["status"] = "ready" if Path(record["activation"]).is_file() else "missing"
     else:
         base = _base(home, name)
         if revision is None:
@@ -114,6 +129,11 @@ def show(home, name, revision=None, *, strict=False):
             record["status"] = "legacy_python" if record.get("python") else "ready"
         except ForgeError:
             record["status"] = "modified_or_missing"
+        current = read_json(base / "current.json").get("revision")
+        if record["status"] == "ready" and revision == current:
+            from .env_entries import publish_named
+
+            record["entry"] = publish_named(home, record)["activation"]
     if strict:
         if record["status"] == "legacy_python":
             raise ForgeError(f"Environment {name!r} has a retired Python override.",

@@ -36,7 +36,9 @@ from .suite import load_suite, make_plan
 
 app = typer.Typer(add_completion=False, pretty_exceptions_enable=False,
                   context_settings={"help_option_names": ["-h", "--help"]},
-                  help="Prepare user environments and preserve command acceptance evidence.\n\n"
+                  help="Prepare user environments and build scientific software.\n\n"
+                       "Daily commands: jforge apt, jforge env, jforge build, jforge apt profile.\n"
+                       "env switch chooses the shell environment. apt profile chooses the package profile.\n\n"
                        "Command help: jforge COMMAND -h")
 
 
@@ -90,7 +92,7 @@ def root(ctx: typer.Context,
             typer.echo(ctx.get_help())
 
 
-@app.command()
+@app.command(rich_help_panel="Setup")
 def init(ctx: typer.Context):
     """Initialize user directories and remember this default location."""
     from .apt_profiles import initialize_profile
@@ -102,7 +104,7 @@ def init(ctx: typer.Context):
          default_saved=True, default_home_file=str(preference), apt_profile=profile)
 
 
-@app.command()
+@app.command(rich_help_panel="Setup")
 def paths(ctx: typer.Context):
     """Show resolved paths without creating directories."""
     from .apt_profiles import active_home
@@ -124,7 +126,7 @@ def paths(ctx: typer.Context):
     emit(ctx, "paths", **paths, default_home_file=str(default_home_file()))
 
 
-@app.command()
+@app.command(rich_help_panel="Inspect")
 def doctor(ctx: typer.Context,
            env: Optional[str] = typer.Option(None, "--env", help="Inspect this registered environment.", metavar="<name>"),
            shell: Optional[Path] = typer.Option(None, "--shell", help="Source this user-selected environment script.", metavar="<path>"),
@@ -165,7 +167,7 @@ def doctor(ctx: typer.Context,
             line(_console(stderr=True), f"Activation {stream}:\n{content}")
 
 
-@app.command("list")
+@app.command("list", rich_help_panel="Inspect")
 def list_packages(ctx: typer.Context,
                   archived: bool = typer.Option(False,"--archived",help="Read old source installation records.")):
     """List package instances in the selected profile or archive."""
@@ -179,7 +181,7 @@ def list_packages(ctx: typer.Context,
     emit(ctx, "list", packages=records)
 
 
-@app.command()
+@app.command(rich_help_panel="Inspect")
 def info(ctx: typer.Context,
          package: str = typer.Argument(..., help="Package name.", metavar="<package>"),
          version: Optional[str] = typer.Option(None,"--package-version",help="Select a recorded version.",metavar="<str>"),
@@ -212,7 +214,7 @@ def info(ctx: typer.Context,
         emit(ctx,"info",packages=records)
 
 
-@app.command()
+@app.command(rich_help_panel="Acceptance runs")
 def example(ctx: typer.Context,
             output: Path = typer.Option(..., "--output", "-o", help="Write the bundled smoke suite.", metavar="<path>")):
     """Write a small runnable acceptance suite without overwriting files."""
@@ -224,7 +226,7 @@ def example(ctx: typer.Context,
     emit(ctx, "example", path=str(output))
 
 
-@app.command()
+@app.command(rich_help_panel="Acceptance runs")
 def validate(ctx: typer.Context,
              suite: Path = typer.Argument(..., help="Acceptance YAML file.", metavar="<suite_yaml>"),
              env: Optional[str] = typer.Option(None, "--env", help="Explicitly select a registered environment.", metavar="<name>")):
@@ -234,7 +236,7 @@ def validate(ctx: typer.Context,
     emit(ctx, "validate", suite_id=plan["suite_id"], steps=len(plan["steps"]), path=loaded["path"])
 
 
-@app.command()
+@app.command(rich_help_panel="Acceptance runs")
 def plan(ctx: typer.Context,
          suite: Path = typer.Argument(..., help="Acceptance YAML file.", metavar="<suite_yaml>"),
         env: Optional[str] = typer.Option(None, "--env", help="Explicitly select a registered environment.", metavar="<name>")):
@@ -242,7 +244,7 @@ def plan(ctx: typer.Context,
     emit(ctx, "plan", **make_plan(load_suite(suite), ctx.obj.home.root / "runs" / "planned-run", ctx.obj.home, env))
 
 
-@app.command()
+@app.command(rich_help_panel="Acceptance runs")
 def run(ctx: typer.Context,
         suite: Path = typer.Argument(..., help="Acceptance YAML file.", metavar="<suite_yaml>"),
         env: Optional[str] = typer.Option(None, "--env", help="Explicitly select a registered environment.", metavar="<name>")):
@@ -259,14 +261,14 @@ def run(ctx: typer.Context,
     raise typer.Exit(0 if result["status"] == "passed" else 130 if result["status"] == "interrupted" else 1)
 
 
-@app.command()
+@app.command(rich_help_panel="Acceptance runs")
 def history(ctx: typer.Context,
             suite: Optional[str] = typer.Option(None, "--suite", help="Filter by stable suite ID.", metavar="<str>")):
     """List all runs, including failed or unfinished runs."""
     emit(ctx, "history", runs=ctx.obj.home.history(suite))
 
 
-@app.command()
+@app.command(rich_help_panel="Acceptance runs")
 def show(ctx: typer.Context,
          run_id: str = typer.Argument(..., help="Exact run ID.", metavar="<run_id>"),
          step: Optional[str] = typer.Option(None, "--step", help="Show one step record.", metavar="<str>")):
@@ -289,7 +291,7 @@ def show(ctx: typer.Context,
         emit(ctx, "show", **result)
 
 
-@app.command()
+@app.command(rich_help_panel="Acceptance runs")
 def logs(ctx: typer.Context,
          run_id: str = typer.Argument(..., help="Exact run ID.", metavar="<run_id>"),
          step: str = typer.Option(..., "--step", help="Step ID.", metavar="<str>"),
@@ -328,7 +330,7 @@ def logs(ctx: typer.Context,
             time.sleep(0.2)
 
 
-@app.command("compare")
+@app.command("compare", rich_help_panel="Acceptance runs")
 def compare_runs(ctx: typer.Context,
                  older: str = typer.Argument(..., help="Older run ID.", metavar="<old_run>"),
                  newer: str = typer.Argument(..., help="Newer run ID.", metavar="<new_run>"),

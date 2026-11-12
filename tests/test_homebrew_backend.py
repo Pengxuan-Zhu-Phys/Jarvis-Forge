@@ -120,7 +120,9 @@ def test_profile_inventory_selection_and_reversible_shell(setup_brew):
     # The alternate profile shares the same physical installation.
     empty = cli("apt", "profile", "alternate", "--create", "--backend", "homebrew")["activation"]
     assert cli("apt", "list", "eigen")["packages"][0]["selected"] is False
-    assert cli("apt", "profile", "mac")["activation"] == active
+    selected = cli("apt", "profile", "mac")
+    assert cli("apt", "env", "--path", as_json=False).strip() == active
+    assert selected["activation"] in Path(active).read_text()
     assert not writes()
     for shell in ("bash", "zsh"):
         executable = shutil.which(shell)
@@ -231,7 +233,8 @@ def test_explicit_update_and_missing_binding(setup_brew, monkeypatch):
     assert [call["args"] for call in writes()] == [["update"]]
     (prefix / "bin/brew").unlink()
     # Login can still load the previously generated script from its evidence.
-    assert cli("apt", "env", "--path", as_json=False).strip() == brew.current(home)["activation"]
+    printed = cli("apt", "env", "--path", as_json=False).strip()
+    assert brew.current(home)["activation"] in Path(printed).read_text()
     result = cli("apt", "list", status=1)
     assert "Homebrew launcher" in result["error"]["message"]
 
