@@ -607,8 +607,51 @@ def environment_list(console, environments, profiles):
                 line(console, "    " + item["path"], style="dim")
     line(console)
     line(console, "Load one with jforge env switch <name>. Use apt for packages.", style="dim")
+    line(console, "Show metadata with jforge env metadata <name>.", style="dim")
     line(console)
     apt_profile_list(console, profiles)
+
+
+def environment_metadata(console, record, path):
+    kind = record.get("kind") or "shell"
+    line(console, f"{record.get('name', 'environment')} [{kind}]", style="bold")
+    if record.get("description"):
+        line(console, "  " + record["description"])
+    line(console)
+    field(console, "metadata", path)
+    if record.get("activation"):
+        field(console, "activation", record["activation"])
+    if record.get("profile"):
+        field(console, "profile", record["profile"])
+    field(console, "revision", record.get("revision"))
+    backend = record.get("backend_activation")
+    if backend:
+        field(console, "packages" if kind == "apt" else "revision_script", backend)
+    builds = record.get("builds") if isinstance(record.get("builds"), list) else []
+    line(console, f"Builds ({len(builds)}):", style="bold")
+    if not builds:
+        line(console, "  none")
+    for item in builds:
+        if not isinstance(item, dict):
+            line(console, "  " + scalar(item))
+            continue
+        title = item.get("build_id") or "build"
+        output = item.get("output")
+        if output and output != title:
+            title += " · " + str(output)
+        line(console, "  " + title)
+        if item.get("artifact_id"):
+            line(console, "    artifact " + str(item["artifact_id"]), style="dim")
+        if item.get("activation"):
+            line(console, "    " + item["activation"], style="dim")
+    if kind == "apt":
+        omitted = record.get("omitted_builds")
+        names = [item for item in omitted if isinstance(item, str)] if isinstance(omitted, list) else []
+        line(console, f"Omitted ({len(names)}):", style="bold")
+        if not names:
+            line(console, "  none")
+        for item in names:
+            line(console, "  " + item)
 
 
 def environment_selection(console, command, values):
@@ -665,6 +708,9 @@ def render(console, command, values):
         return
     if command in {"env switch", "env detach", "env drop"}:
         environment_selection(console, command, values)
+        return
+    if command == "env metadata" and "metadata" in values:
+        environment_metadata(console, values["metadata"], values.get("path"))
         return
     if command in {"apt profile", "apt switch"} and "environments" in values:
         apt_profile_list(console, values["environments"])

@@ -16,6 +16,7 @@ app = typer.Typer(add_completion=False, pretty_exceptions_enable=False,
                   help="Choose the environment a shell loads.\n\n"
                        "jforge env switch <name> selects apt or a named environment.\n"
                        "jforge apt profile <name> selects the package profile used by apt.\n"
+                       "jforge env metadata [name] shows that environment's metadata file.\n"
                        "jforge env drop root-build removes that build from the apt environment.\n\n"
                        "Command help: jforge env COMMAND -h")
 
@@ -39,6 +40,20 @@ def list_environment(ctx: typer.Context):
     rows = [{"name": r["name"], "revision": r["revision"], "status": r["status"],
              "path": r.get("entry") or r["activation"], "description": r["description"]} for r in records]
     emit(ctx, "env list", environments=rows, profiles=profiles(ctx.obj.home))
+
+
+@app.command("metadata")
+def show_metadata(ctx: typer.Context,
+                  name: Optional[str] = typer.Argument(None, help="Environment name. Defaults to the selected environment.", metavar="[name]")):
+    """Show one environment's metadata file."""
+    from .env_entries import directory, load_metadata, read_selection
+
+    if name is None:
+        name = read_selection(ctx.obj.home)
+        if name is None:
+            raise ForgeError("No environment is selected.", hint="jforge env switch apt")
+    record = load_metadata(ctx.obj.home, name)
+    emit(ctx, "env metadata", path=str(directory(ctx.obj.home, name) / "env.json"), metadata=record)
 
 
 @app.command("show")

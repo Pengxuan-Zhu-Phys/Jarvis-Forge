@@ -10,7 +10,7 @@ import pytest
 
 from jarvis_forge.apt_profiles import active_home
 from jarvis_forge.cli import main
-from jarvis_forge.env_entries import attach_build, attach_root_build, drop_build, publish_apt
+from jarvis_forge.env_entries import attach_build, attach_root_build, drop_build, publish_apt, write_selection
 from jarvis_forge.environment_registry import add
 from jarvis_forge.storage import ForgeHome, write_json
 
@@ -252,3 +252,51 @@ printf 'detach %s\n' "${FIXTURE_ENV-unset}"
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines()[-2:] == ["switch selected", "detach unset"]
+
+
+def test_metadata_command_reads_the_file_without_rewriting_it(home, linux_apt, capsys, tmp_path):
+    profile = active_home(home)
+    profile.initialize()
+    backend = write_backend(profile)
+    script = home.root / "root-activate.sh"
+    script.write_text("export ROOTSYS=/opt/root\n")
+    entry = attach_build(home, profile, build_id="root-build", output="ROOT", artifact_id="root-1", activation=script)
+    path = home.root / "env/apt/env.json"
+    record = json.loads(path.read_text())
+    record["description"] = "kept by metadata"
+    path.write_text(json.dumps(record))
+    before = path.read_bytes()
+    assert main(["--home", str(home.root), "env", "metadata"]) == 0
+    shown = capsys.readouterr().out
+    assert "apt [apt]" in shown
+    assert "kept by metadata" in shown
+    assert "root-build · ROOT" in shown
+    assert str(backend) in shown and str(script) in shown
+    assert "Omitted (0):" in shown
+    assert path.read_bytes() == before
+    assert entry["activation"] in shown
+    assert main(["--home", str(home.root), "env", "metadata", "apt", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "env metadata"
+    assert payload["path"] == str(path)
+    assert payload["metadata"]["builds"][0]["artifact_id"] == "root-1"
+    assert payload["metadata"]["description"] == "kept by metadata"
+    assert path.read_bytes() == before
+    assert main(["--home", str(home.root), "env", "drop", "root-build"]) == 0
+    capsys.readouterr()
+    assert main(["--home", str(home.root), "env", "metadata", "apt"]) == 0
+    omitted = capsys.readouterr().out
+    assert "Builds (0):" in omitted and "Omitted (1):" in omitted and "root-build" in omitted
+    shell = tmp_path / "hep.sh"
+    shell.write_text("export HEP=1\n")
+    add(home, "hep", shell, description="HEP stack")
+    assert main(["--home", str(home.root), "env", "metadata", "hep"]) == 0
+    named = capsys.readouterr().out
+    assert "hep [shell]" in named and "HEP stack" in named
+    assert "Omitted" not in named
+    assert str(home.root / "env/hep/env.json") in named
+    assert main(["--home", str(home.root), "env", "metadata", "missing"]) == 2
+    assert "No metadata" in capsys.readouterr().err
+    write_selection(home, None)
+    assert main(["--home", str(home.root), "env", "metadata"]) == 2
+    assert "No environment is selected" in capsys.readouterr().err

@@ -7,6 +7,7 @@
 - Give each environment a stable entry at `<home>/env/<name>/activate.sh` with metadata in `env.json`. `jforge apt env --path` and `jforge env list` print this short path. The revision script stays in its operation directory.
 - Select the environment loaded by new shells with `jforge env switch <name>`, show it with `jforge env current`, and unload it with `jforge env detach`. The shell hook applies the change in the current interactive shell. `jforge env drop <build-id>` removes one attached build from the apt environment without deleting its installation.
 - After a successful `root-build`, source that build's activation script from the apt environment entry. A ready root-build already on disk is added the next time the entry is published. A failed build does not change that entry.
+- Show one environment's metadata file with `jforge env metadata [name]`. The default name is the selected environment. The command reads `env/<name>/env.json` and leaves that file unchanged.
 
 - Register an existing macOS Homebrew installation with `apt profile NAME --create --backend homebrew`. Audit native formula dependencies, reuse shared kegs, and activate their CMake and pkg-config paths while preserving pyenv Python.
 

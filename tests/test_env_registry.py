@@ -234,8 +234,9 @@ def test_registry_does_not_write_through_symlinked_environment_directory(home, s
     assert not list(outside.iterdir())
 
 
-@pytest.mark.parametrize("command", [["env"], ["env", "add"], ["env", "list"], ["env", "show"], ["env", "repair"],
-                                     ["env", "switch"], ["env", "detach"], ["env", "drop"], ["env", "current"]])
+@pytest.mark.parametrize("command", [["env"], ["env", "add"], ["env", "list"], ["env", "metadata"], ["env", "show"],
+                                     ["env", "repair"], ["env", "switch"], ["env", "detach"], ["env", "drop"],
+                                     ["env", "current"]])
 def test_environment_cli_help(command, capsys):
     assert main([*command, "-h"]) == 0
     assert "Usage:" in capsys.readouterr().out

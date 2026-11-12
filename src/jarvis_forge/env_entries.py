@@ -91,6 +91,16 @@ def _metadata(home, name):
     return value
 
 
+def load_metadata(home, name):
+    """Read one environment's metadata file without rewriting the entry."""
+    identifier(name)
+    record = _metadata(home, name)
+    if record is None:
+        hint = "jforge apt env" if name == "apt" else f"jforge env show {name}"
+        raise ForgeError(f"No metadata for environment {name!r}.", hint=hint)
+    return record
+
+
 def _referenced(script):
     text = script.read_text(encoding="utf-8", errors="replace")
     files = [script]
@@ -312,7 +322,7 @@ def drop_build(base, profile, build_id):
     if not attached and not on_disk and build_id not in omitted:
         raise ForgeError(
             f"The apt environment has no attached build {build_id!r}.",
-            hint="jforge env show apt",
+            hint="jforge env metadata apt",
         )
     builds = [item for item in builds if item["build_id"] != build_id]
     if build_id not in omitted:

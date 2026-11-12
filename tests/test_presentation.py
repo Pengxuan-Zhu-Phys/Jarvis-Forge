@@ -64,8 +64,36 @@ def test_env_list_names_the_command_for_each_section():
     })
     assert "jforge env switch <name>" in output
     assert "jforge apt profile <name>" in output
+    assert "jforge env metadata <name>" in output
     assert "Active user-local packages + ROOT" in output
     assert output.index("apt") < output.index("spack-default")
+
+
+def test_env_metadata_lists_attached_and_omitted_builds():
+    output = displayed("env metadata", {
+        "path": "/forge/env/apt/env.json",
+        "metadata": {
+            "name": "apt", "kind": "apt", "description": "Active user-local packages + ROOT",
+            "revision": "op-1", "profile": "spack-default",
+            "backend_activation": "/forge/revisions/op-1/activate.sh",
+            "activation": "/forge/env/apt/activate.sh",
+            "builds": [{"build_id": "root-build", "output": "installation", "artifact_id": "root-1",
+                        "activation": "/forge/root/activate.sh"}],
+            "omitted_builds": [],
+        },
+    })
+    assert "apt [apt]" in output
+    assert "spack-default" in output
+    assert "root-build · installation" in output
+    assert "artifact root-1" in output
+    assert "/forge/env/apt/env.json" in output
+    assert "Omitted (0):" in output and "none" in output
+    omitted = displayed("env metadata", {
+        "path": "/forge/env/apt/env.json",
+        "metadata": {"name": "apt", "kind": "apt", "description": "Active user-local packages",
+                     "builds": [], "omitted_builds": ["root-build"], "activation": "/forge/env/apt/activate.sh"},
+    })
+    assert "Builds (0):" in omitted and "root-build" in omitted
 
 
 def test_switch_says_when_this_shell_stays_unchanged():
