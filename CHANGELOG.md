@@ -11,6 +11,7 @@
 
 - Register an existing macOS Homebrew installation with `apt profile NAME --create --backend homebrew`. Audit native formula dependencies, reuse shared kegs, and activate their CMake and pkg-config paths while preserving pyenv Python.
 - Add `higgstools-build` for HiggsTools 1.1.3 with the GMFit assignment-trace bridge v2 and HS measurement-breakdown bridge v1. The build installs the Python package into the `python3` on `PATH`.
+- Install pinned HBDataSet v1.7 and HSDataSet v1.1 with `higgstools-build`, and export their paths for Jarvis-Operas and GMFit.
 
 ### Changed
 

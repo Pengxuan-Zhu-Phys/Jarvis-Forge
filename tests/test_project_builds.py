@@ -760,14 +760,18 @@ def test_higgstools_recipe_patches_before_cmake_and_pins_the_bridges():
     config = loaded["config"]
     steps = config["steps"]
     assert [step["id"] for step in steps] == [
-        "preflight.command-1", "preflight.command-2", "HiggsTools.install", "HiggsTools.command-1",
+        "preflight.command-1", "preflight.command-2", "HiggsTools.install",
+        "HiggsTools.command-1", "HiggsTools.command-2",
     ]
-    prepare, cmake_step, install = steps[1], steps[2], steps[3]
+    prepare, cmake_step, install, datasets = steps[1], steps[2], steps[3], steps[4]
     assert prepare["uses"] == "command" and cmake_step["uses"] == "cmake.project"
-    assert install["uses"] == "command"
+    assert install["uses"] == "command" and datasets["uses"] == "command"
     assert "${sources.HiggsTools}" in prepare["with"]["argv"]
+    assert datasets["with"]["argv"][-1] == "${work}/install/HiggsTools.install"
     assert "preflight.command-2" in cmake_step["needs"]
     assert "HiggsTools.install" in install["needs"]
+    assert "HiggsTools.command-1" in datasets["needs"]
+    assert cmake_step["with"]["export"]["activation"] == "share/HiggsTools/datasets.sh"
     cache = cmake_step["with"]["cache"]
     assert cache["HiggsTools_BUILD_PYTHON_MODULE"]["value"] is True
     assert cache["HiggsTools_BUILD_EXAMPLES"]["value"] is False
@@ -779,8 +783,9 @@ def test_higgstools_recipe_patches_before_cmake_and_pins_the_bridges():
     source = config["sources"]["HiggsTools"]
     assert source["sha256"] == "6a7c928080c0ba5c9b93fc062c8b894412027a86d0447d255d25438a51fabf12"
     assert source["subdir"] == "higgstools"
-    assert config["outputs"]["installation"]["publish_after"] == ["HiggsTools.command-1"]
+    assert config["outputs"]["installation"]["publish_after"] == ["HiggsTools.command-2"]
     assert config["platforms"] == ["linux"]
+    assert any(item.get("path") == "scripts/higgstools_datasets.py" for item in loaded["card_sources"])
     module_path = root / "builds/scripts/higgstools_prepare.py"
     spec = importlib.util.spec_from_file_location("higgstools_prepare", module_path)
     module = importlib.util.module_from_spec(spec)
@@ -789,6 +794,61 @@ def test_higgstools_recipe_patches_before_cmake_and_pins_the_bridges():
     assert hashlib.sha256(module.BREAKDOWN).hexdigest() == module.BREAKDOWN_SHA256
     assert module.ASSIGNMENT_SHA256 == "b05f09c3e4085baee0e331660bf7d01927f9a705b9cb25c0cec690f5d0e87b09"
     assert module.BREAKDOWN_SHA256 == "930332a764e0e6364870bfb201a437843971bc8fe7019aa94692850c803f81c8"
+    dataset_path = root / "builds/scripts/higgstools_datasets.py"
+    dataset_spec = importlib.util.spec_from_file_location("higgstools_datasets", dataset_path)
+    datasets_module = importlib.util.module_from_spec(dataset_spec)
+    dataset_spec.loader.exec_module(datasets_module)
+    assert module.DATASET_ACTIVATION == datasets_module.activation_script()
+
+
+def test_higgstools_dataset_install_matches_the_pin(tmp_path):
+    import hashlib
+    import importlib.util
+    import tarfile
+
+    spec = importlib.util.spec_from_file_location(
+        "higgstools_datasets", Path(__file__).parents[1] / "builds/scripts/higgstools_datasets.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    root = tmp_path / "hbdataset-test"
+    (root / "neutral").mkdir(parents=True)
+    (root / "neutral" / "limit.json").write_text('{"id": 1, "limit": 0.5}\n', encoding="utf-8")
+    archive = tmp_path / "hb.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(root, arcname=root.name)
+    unpacked = tmp_path / "unpacked"
+    unpacked.mkdir()
+    extracted = module._extract(archive, unpacked)
+    inspected = module.inspect_tree(extracted)
+    entry = {
+        "kind": "HBDataSet", "version": "v1.7", "revision": "test",
+        "url": "https://example.invalid/hb.tar.gz",
+        "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "fingerprint": inspected["fingerprint"], "json_count": inspected["json_count"],
+        "max_archive_bytes": 1024 * 1024,
+        "names": ("HIGGSTOOLS_HBDATASET", "HIGGSTOOLS_HB_DATASET"),
+    }
+    prefix = tmp_path / "prefix"
+    installed = module.install_entry(prefix, entry, archive=archive)
+    assert installed == module.dataset_path(prefix, entry)
+    assert module.inspect_tree(installed)["fingerprint"] == entry["fingerprint"]
+    assert (installed / "VERSION").read_text(encoding="utf-8") == "v1.7\n"
+    again = module.install_entry(prefix, entry, archive=archive)
+    assert again == installed
+    site = tmp_path / "site-packages"
+    site.mkdir()
+    script = prefix / "share" / "HiggsTools" / "datasets.sh"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(module.activation_script(), encoding="utf-8")
+    # The synthetic entry is not the pinned catalog, so only the path file writer is checked here.
+    destination = module.install_python_environment(prefix, site_packages=site)
+    text = destination.read_text(encoding="utf-8")
+    assert text.startswith("import os;")
+    assert "HIGGSTOOLS_HBDATASET" in text and "HIGGSTOOLS_HSDATASET" in text
+    assert "JARVIS_OPERAS_HTS_DATASET_CACHE_ROOT" in text
+    bad = dict(entry, sha256="0" * 64)
+    with pytest.raises(RuntimeError, match="SHA-256"):
+        module.install_entry(tmp_path / "other", bad, archive=archive)
 
 
 @pytest.mark.parametrize("name,requirements", [
