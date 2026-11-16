@@ -363,6 +363,10 @@ from .checker_cli import app as checker_app
 
 app.add_typer(checker_app, name="checker")
 
+from .testing_cli import app as testing_app
+
+app.add_typer(testing_app, name="test")
+
 
 def _globals(argv: list[str]) -> list[str]:
     """Allow common options before/after commands, without parsing after '--'."""

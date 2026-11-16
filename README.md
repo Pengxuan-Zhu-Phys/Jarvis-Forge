@@ -340,7 +340,20 @@ jforge logs <checker-run-id> --step build-engine
 
 The development checker covers all existing local test modules plus ROOT YAML validation. Build checks can run real ROOT/CBS/MadGraph acceptance separately; `--full` reruns checks but does not erase CMake incremental builds or force successful build artifacts to rebuild. `history`, `show` and `logs` work for both types. Byte/scientific comparison policies for these new run types are not yet part of `compare`.
 
-Both executors run in the foreground and clean up their child processes on interruption; use tmux for long SSH builds. See the [build implementation and design](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/BUILDS.md) and [checker guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/CHECKER.md).
+`jforge test` runs schema 2 test cards and test catalogs. A card selects pytest files into groups by globs and markers, names profiles such as `daily` and `acceptance`, and can require that every test file belongs to an acceptance group. `validate` and `plan` read only the YAML and the file tree. `run` executes the selected groups, records counts, skip reasons, per-case results, the Git source identity and the installed packages, and reuses unchanged groups. A project passes acceptance when `jforge test status` exits 0: an accepted `acceptance` report exists for the current committed source tree.
+
+```bash
+jforge test validate tests/jforge-tests.yaml
+jforge test plan tests/jforge-tests.yaml --profile acceptance --batch 2/4
+jforge test run tests/jforge-tests.yaml --profile acceptance
+jforge test run tests/jforge-tests.yaml --profile acceptance --batch 2/4 --acceptance-id ID
+jforge test summarize --acceptance-id ID
+jforge test status tests/jforge-tests.yaml
+jforge test history --case test_resume
+jforge test report RUN_ID
+```
+
+Both executors run in the foreground and clean up their child processes on interruption; use tmux for long SSH builds. See the [build implementation and design](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/BUILDS.md), [checker guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/CHECKER.md) and [ecosystem acceptance contract](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Ecosystem/JARVIS_ACCEPTANCE.md).
 
 ## Acceptance suite format
 

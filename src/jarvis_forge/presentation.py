@@ -678,7 +678,169 @@ def environment_selection(console, command, values):
         line(console, 'Load the hook with: eval "$(command jforge apt shell-init)"', style="dim")
 
 
+def _card_title(card):
+    return card["suite_id"] + (f" (catalog card {card['project_id']})" if card.get("project_id") else "")
+
+
+def test_validate(console, values):
+    for card in values["cards"]:
+        line(console, f"Card {_card_title(card)}: valid", style="bold")
+        line(console, f"  {card['path']}", style="dim")
+        line(console, f"  Groups: {card['groups']}   Checks: {card['checks']}   "
+                      f"Coverage: {'declared' if card['coverage'] else 'not declared'}")
+        for name, ids in card["profiles"].items():
+            default = " (default)" if name == card["default_profile"] else ""
+            line(console, f"  Profile {name}{default}: {', '.join(ids)}")
+        for warning in card["warnings"]:
+            line(console, f"  Warning: {warning}", style="yellow")
+
+
+def test_plan(console, values):
+    batch = values["batch"]
+    for number, card in enumerate(values["cards"]):
+        if number:
+            line(console)
+        heading = f"suite: {card['suite_id']}"
+        if card.get("project_id"):
+            heading += f"   project: {card['project_id']}"
+        heading += f"   profile: {card['profile'] or 'none'}   batch: {batch['index']}/{batch['count']}"
+        line(console, heading, style="bold")
+        rows = [("step", "kind", "isolate", "markers", "files")]
+        for step in card["steps"]:
+            if step["kind"] == "pytest":
+                rows.append((step["id"], "pytest", step["isolate"], step["markers"] or "-",
+                             f"{len(step['paths'])}/{step['files']}"))
+            else:
+                rows.append((step["id"], step["kind"], "", "", ""))
+        widths = [max(len(row[column]) for row in rows) for column in range(5)]
+        for row in rows:
+            line(console, "  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
+        for step in card["steps"]:
+            if step["kind"] != "pytest":
+                continue
+            line(console, f"{step['id']}:" + (" empty batch" if not step["paths"] else ""), style="dim")
+            for path in step["paths"]:
+                line(console, f"  {path}", style="dim")
+        for warning in card["warnings"]:
+            line(console, f"Warning: {warning}", style="yellow")
+
+
+def _table(console, rows, *, right=()):
+    widths = [max(len(str(row[column])) for row in rows) for column in range(len(rows[0]))]
+    for row in rows:
+        cells = [str(cell).rjust(width) if column in right else str(cell).ljust(width)
+                 for column, (cell, width) in enumerate(zip(row, widths))]
+        line(console, "  ".join(cells).rstrip())
+
+
+def _count(step, key):
+    counts = step.get("counts")
+    return counts.get(key, 0) if counts else "-"
+
+
+def test_run(console, values):
+    for number, run in enumerate(values["runs"]):
+        if number:
+            line(console)
+        heading = f"suite: {run['suite_id']}"
+        if run.get("project_id"):
+            heading += f"   project: {run['project_id']}"
+        heading += f"   profile: {run.get('profile') or 'groups'}   acceptance_id: {run.get('acceptance_id')}"
+        line(console, heading, style="bold")
+        source = run.get("source") or {}
+        environment = run.get("environment") or {}
+        state = "not in Git" if not source else ("dirty" if source.get("dirty") else "clean")
+        line(console, f"source: {(source.get('commit') or '-')[:8]} ({state})   "
+                      f"env: {environment.get('name') or environment.get('shell') or 'inherited'}   "
+                      f"packages: {(run.get('packages_digest') or '-')[:12]}")
+        rows = [("step", "batch", "status", "passed", "failed", "skipped", "duration", "reused")]
+        for step in run["steps"]:
+            step_batch = step.get("batch")
+            duration = step.get("duration_seconds")
+            rows.append((step["id"], f"{step_batch['index']}/{step_batch['count']}" if step_batch else "-",
+                         step["status"], _count(step, "passed"), _count(step, "failed") if not step.get("counts")
+                         else step["counts"].get("failed", 0) + step["counts"].get("errors", 0),
+                         _count(step, "skipped"), f"{duration:.1f}s" if duration is not None else "-",
+                         "yes" if step["status"] == "reused" else "no"))
+        _table(console, rows, right={3, 4, 5, 6})
+        for step in run["steps"]:
+            if step.get("reason") and step["status"] != "reused":
+                line(console, f"{step['id']}: {step['reason']}", style="red" if step["status"] == "failed" else "dim")
+            for skip in step.get("unexpected_skips", [])[:10]:
+                line(console, f"  unexpected skip {skip['node']}: {skip['message']}", style="red")
+        for warning in run.get("warnings", []):
+            line(console, f"Warning: {warning}", style="yellow")
+        if run.get("error"):
+            line(console, f"Error: {run['error']}", style="red")
+        line(console, f"Run {run['run_id']}: {run['status']}", style="bold")
+    summary = values.get("summary")
+    if summary:
+        line(console)
+        test_summary(console, summary)
+
+
+def test_summary(console, report):
+    line(console, f"Acceptance {report['acceptance_id']}: {report['status']}, "
+                  f"accepted: {'yes' if report['accepted'] else 'no'}", style="bold")
+    for entry in report["entries"]:
+        verdict = "accepted" if entry["accepted"] else entry["status"]
+        line(console, f"  {entry['entry']} ({entry.get('profile') or 'groups'}): {verdict}")
+        for reason in entry["reasons"]:
+            line(console, f"    {reason}", style="yellow")
+    if report.get("path"):
+        line(console, f"Report: {report['path']}", style="dim")
+
+
+def test_status(console, values):
+    for card in values["cards"]:
+        title = card["suite_id"] + (f" (catalog card {card['project_id']})" if card.get("project_id") else "")
+        if card["accepted"]:
+            line(console, f"{title}: accepted by {card['acceptance_id']}", style="green")
+        else:
+            line(console, f"{title}: not accepted. {card['reason']}", style="red")
+
+
+def test_history(console, values):
+    runs = values["runs"]
+    if not runs:
+        line(console, "No jforge test runs.")
+        return
+    rows = [("run", "suite", "profile", "batch", "status", "commit", "acceptance")]
+    for run in runs:
+        batch = run.get("batch") or {}
+        rows.append((run["run_id"], run.get("project_id") or run["suite_id"], run.get("profile") or "groups",
+                     f"{batch.get('index', 1)}/{batch.get('count', 1)}", run["status"],
+                     (run.get("commit") or "-")[:8] + ("*" if run.get("dirty") else ""), run.get("acceptance_id") or "-"))
+    _table(console, rows)
+    if values.get("case") is not None:
+        for run in runs:
+            for case in run.get("cases", []):
+                line(console, f"{run['run_id']}  {case['outcome']:<8} {case['node']}")
+
+
 def render(console, command, values):
+    if command == "test validate":
+        test_validate(console, values)
+        return
+    if command == "test plan":
+        test_plan(console, values)
+        return
+    if command == "test run":
+        test_run(console, values)
+        return
+    if command == "test summarize":
+        test_summary(console, values)
+        return
+    if command == "test status":
+        test_status(console, values)
+        return
+    if command == "test history":
+        test_history(console, values)
+        return
+    if command == "test report":
+        if values.get("markdown"):
+            console.print(values["markdown"], markup=False, highlight=False, end="")
+            return
     if command == "toolchain list":
         toolchains = values["toolchains"]
         line(console, f"Installed toolchains ({len(toolchains)})", style="bold")

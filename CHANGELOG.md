@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Test catalogs with `jforge test validate` and `jforge test plan`. Schema 2 checker cards define pytest groups by file globs, markers and `omit`, named profiles with a `default_profile`, a `coverage` rule, and the gate profiles `acceptance` and `release`, which require `skip_allow` on every pytest group. A `kind: test-catalog` file lists cards across repositories. `plan --batch k/n` shows stable hash-based file shards. Neither command runs pytest, imports the project or creates the Forge home.
+- `jforge test run` runs schema 2 cards and catalogs. Forge builds the pytest command, reads the JUnit XML for counts, skip reasons and per-case results, and fails a group on an unlisted skip, a collection error, unreadable evidence or a signal. Each run records the Git source identity, the installed packages and the environment. Unchanged groups are reused by fingerprint; gate profiles reuse only results from the same source tree. Shards of one group can run in parallel processes (`--batch k/n --acceptance-id ID`), and a step that is already running exits 1 with "Test step is busy".
+- `isolate: installed` groups run pytest outside the checkout against the installed distributions and fail on editable installs or imports from the source tree. The `package` standard check probes an installed distribution, imports its modules and runs smoke commands.
+- `jforge test summarize` combines the runs of one acceptance ID; `jforge test status` exits 0 only when an accepted report matches the current committed source tree; `jforge test history` (with `--case`) and `jforge test report` read the records.
+- `jforge test run --rerun-failed RUN_ID` runs again only the tests that failed in that run, with its selection and shard. Steps that passed are kept as reused. The run is marked partial and never counts toward an acceptance.
+- Tests receive `JFORGE_RUN_DIR` and `JFORGE_STEP_DIR` for their own artifacts.
+
+### Changed
+
+- `jforge checker list`, `validate` and `run` hand schema 2 cards to `jforge test plan`, `validate` and `run`. A schema 1 card that uses schema 2 fields is rejected with their names.
+
 ## 1.1.9 — 2026-11-16
 
 ### Added

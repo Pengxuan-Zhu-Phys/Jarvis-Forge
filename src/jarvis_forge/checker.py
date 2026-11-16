@@ -15,27 +15,18 @@ from .storage import ForgeError, digest, identifier, new_id, now, read_json, wri
 from .suite import UniqueLoader
 
 
-def load(path):
-    path = Path(path).expanduser().resolve()
-    try:
-        text = path.read_text()
-        config = yaml.load(text, Loader=UniqueLoader)
-    except (OSError, yaml.YAMLError) as exc:
-        raise ForgeError(f"Cannot read checker configuration: {exc}") from exc
-    if not isinstance(config, dict) or config.get("kind") != "checker" or config.get("schema_version") != 1:
-        raise ForgeError("Checker YAML requires kind: checker and schema_version: 1.")
-    if set(config) - {"schema_version", "kind", "id", "project", "environment", "checks"}:
-        raise ForgeError("Unknown checker configuration fields.")
-    identifier(config.get("id", ""))
-    project = (path.parent / config.get("project", ".")).resolve()
-    if not project.is_dir():
-        raise ForgeError(f"Checker project directory missing: {project}")
-    checks = config.get("checks")
-    if not isinstance(checks, list) or not checks:
-        raise ForgeError("Checker requires a nonempty checks list.")
+CHECK_FIELDS = frozenset({"id", "inputs", "needs", "argv", "build", "workflow", "check", "parameters",
+                          "cache", "timeout_seconds", "artifacts"})
+SCHEMA2_FIELDS = frozenset({"groups", "profiles", "default_profile", "coverage"})
+
+
+def validate_checks(checks, *, extra_fields=frozenset(), standard=None):
+    """Validate check entries in place and return their IDs in card order."""
+    if standard is None:
+        from .standard_checks import validate as standard
     ids = []
     for check in checks:
-        if not isinstance(check, dict) or set(check) - {"id", "inputs", "needs", "argv", "build", "workflow", "check", "parameters", "cache", "timeout_seconds", "artifacts"}:
+        if not isinstance(check, dict) or set(check) - CHECK_FIELDS - set(extra_fields):
             raise ForgeError("Invalid checker check fields.")
         ids.append(identifier(check.get("id", "")))
         if sum(key in check for key in ("argv", "build", "workflow", "check")) != 1:
@@ -43,8 +34,7 @@ def load(path):
         if "workflow" in check:
             check["build"] = check.pop("workflow")
         if "check" in check:
-            from .standard_checks import validate
-            validate(check["check"])
+            standard(check["check"])
         if "argv" in check and (not isinstance(check["argv"], list) or not check["argv"] or not all(isinstance(x, str) for x in check["argv"])):
             raise ForgeError("Checker argv must be a nonempty string list.")
         if check.get("cache", "check" not in check) and not check.get("inputs"):
@@ -60,6 +50,40 @@ def load(path):
             raise ForgeError("Checker timeout must be finite and positive.")
     if len(ids) != len(set(ids)):
         raise ForgeError("Checker check IDs must be unique.")
+    return ids
+
+
+def validate_environment(environment):
+    if not isinstance(environment, dict) or set(environment) - {"name", "shell", "revision", "variables"}:
+        raise ForgeError("Invalid checker environment.")
+    if environment.get("name") and environment.get("shell"):
+        raise ForgeError("Select an environment name or shell, not both.")
+    return environment
+
+
+def load(path):
+    path = Path(path).expanduser().resolve()
+    try:
+        text = path.read_text()
+        config = yaml.load(text, Loader=UniqueLoader)
+    except (OSError, yaml.YAMLError) as exc:
+        raise ForgeError(f"Cannot read checker configuration: {exc}") from exc
+    if isinstance(config, dict) and config.get("kind") == "checker" and config.get("schema_version") == 2:
+        raise ForgeError("Checker schema 2 cards are read by jforge test.", hint=f"jforge test validate {path}")
+    if not isinstance(config, dict) or config.get("kind") != "checker" or config.get("schema_version") != 1:
+        raise ForgeError("Checker YAML requires kind: checker and schema_version: 1.")
+    if set(config) & SCHEMA2_FIELDS:
+        raise ForgeError("Fields " + ", ".join(sorted(set(config) & SCHEMA2_FIELDS)) + " require schema_version: 2.")
+    if set(config) - {"schema_version", "kind", "id", "project", "environment", "checks"}:
+        raise ForgeError("Unknown checker configuration fields.")
+    identifier(config.get("id", ""))
+    project = (path.parent / config.get("project", ".")).resolve()
+    if not project.is_dir():
+        raise ForgeError(f"Checker project directory missing: {project}")
+    checks = config.get("checks")
+    if not isinstance(checks, list) or not checks:
+        raise ForgeError("Checker requires a nonempty checks list.")
+    validate_checks(checks)
     pending, ordered, done = list(checks), [], set()
     while pending:
         ready = [c for c in pending if set(c.get("needs", [])) <= done]
@@ -69,11 +93,7 @@ def load(path):
             pending.remove(check)
             done.add(check["id"])
             ordered.append(check)
-    environment = config.get("environment", {})
-    if not isinstance(environment, dict) or set(environment) - {"name", "shell", "revision", "variables"}:
-        raise ForgeError("Invalid checker environment.")
-    if environment.get("name") and environment.get("shell"):
-        raise ForgeError("Select an environment name or shell, not both.")
+    validate_environment(config.get("environment", {}))
     return {"config": config, "text": text, "path": str(path), "project": str(project), "ordered": ordered}
 
 
@@ -88,6 +108,133 @@ def input_manifest(project, patterns):
                 matches.append((str(path.relative_to(project)), digest(path)))
         records[pattern] = matches  # Keep empty matches and deletions visible.
     return records
+
+
+def prepare_environment(home, directory, environment_config, card_dir, environment_name=None):
+    """Capture the selected environment once per run; return (environment, observed, origin, script, name)."""
+    name = environment_name or environment_config.get("name")
+    shell = None
+    origin = {"inherited": True}
+    if name:
+        profile = registered_environment(home, name, environment_config.get("revision"), strict=True)
+        shell = Path(profile["activation"])
+        origin = {"name": name, "revision": profile["revision"], "files": profile["files"]}
+    elif environment_config.get("shell"):
+        shell = (Path(card_dir) / environment_config["shell"]).resolve()
+        origin = {"shell": str(shell), "sha256": digest(shell)}
+    variables = environment_config.get("variables", {})
+    environment = builds.safe_environment({**cmake.capture(shell), **variables}, variables)
+    observed = cmake.tools(environment)
+    write_json(directory / "environment.json", {"variables": environment, "tools": observed, "source": origin})
+    script = cmake.write_environment(directory / "environment.sh", base=environment)
+    return environment, observed, origin, script, name
+
+
+def run_check(home, check, context, step_dir, *, cached, prerequisites, full, run_id, progress=None,
+              event=None, executors=None):
+    """Run or reuse one argv, build or standard check.
+
+    prerequisites maps each need to (status, token). Returns (record, token, slot): slot is the
+    new success slot, or None; a None slot with a reused record keeps the old slot.
+    """
+    check_id, project = check["id"], Path(context["project"])
+    record = {"id": check_id, "started_at": now(), "status": "running"}
+    inputs = input_manifest(project, check.get("inputs", []))
+    target = build_graph = None
+    if check.get("build"):
+        from .build_catalog import resolve
+        target = resolve(home, check["build"], Path(context["card_dir"]))
+        build_graph = builds.graph(home, str(target), parameters=check.get("parameters"))
+    executor = (executors or {}).get(next(iter(check["check"]))) if "check" in check else None
+    standard = digest(Path(__file__).with_name("standard_checks.py")) if "check" in check else None
+    if executor is not None:
+        standard = executor["digest"]
+    signature = builds.fingerprint({"check": check, "inputs": inputs, "build": build_graph,
+        "standard_checks": standard,
+        "environment": context["environment"], "environment_origin": context["environment_origin"],
+        "tools": context["observed"], "prerequisites": {n: token for n, (_, token) in prerequisites.items()}})
+    token, slot = signature, None
+    write_json(step_dir / "inputs.json", {"fingerprint": signature, "inputs": inputs})
+    cacheable = check.get("cache", "check" not in check)
+    can_reuse = bool(cacheable and not full and cached and cached["fingerprint"] == signature)
+    if can_reuse:
+        for filename, sha in cached.get("evidence", {}).items():
+            if not Path(filename).is_file() or digest(Path(filename)) != sha:
+                can_reuse = False
+        for artifact_id in cached.get("build_artifacts", []):
+            try:
+                builds.artifact(home, artifact_id)
+            except ForgeError:
+                can_reuse = False
+    if any(status not in {"passed", "reused"} for status, _ in prerequisites.values()):
+        record.update(status="blocked", reason="A prerequisite did not pass.")
+    elif can_reuse:
+        record.update(status="reused", reused_from=cached["run_id"], reason="Declared inputs, commands, dependencies and environment unchanged.")
+        token = cached.get("dependency_token", signature)
+    else:
+        if event is not None:
+            event(f"Check {check_id}: running")
+        try:
+            evidence, artifact_ids, output_hashes = {}, [], []
+            if build_graph:
+                child = builds.execute(home, str(target), parameters=check.get("parameters"),
+                                       environment_name=context["environment_name"], jobs=context["jobs"], progress=progress)
+                record["build_run_id"] = child["run_id"]
+                if child["status"] != "passed":
+                    raise ForgeError(child.get("error", "Build check failed."), code=1)
+                artifact_ids = [v["artifact_id"] for v in child.get("outputs", {}).values()]
+                child_result = Path(child["path"]) / "result.json"
+                evidence[str(child_result)] = digest(child_result)
+            else:
+                python = context["observed"].get("python", {}).get("path", "python3")
+                bindings = {"project": str(project), "python": python,
+                            "project_python": python, "controller_python": sys.executable,
+                            "run_dir": str(context["run_dir"]), "step_dir": str(step_dir)}
+                def invoke(argv):
+                    return run_command(argv, project, context["env_script"], step_dir, "1",
+                                       check.get("timeout_seconds", 3600), progress=progress,
+                                       process_env=context["environment"])
+                try:
+                    if executor is not None:
+                        executor["run"](check["check"], context, step_dir)
+                        evidence[str(step_dir / "checks.json")] = digest(step_dir / "checks.json")
+                    elif "check" in check:
+                        from .standard_checks import execute
+                        execute(check["check"], bindings["python"], invoke, step_dir)
+                        evidence[str(step_dir / "checks.json")] = digest(step_dir / "checks.json")
+                    else:
+                        invoke(builds.interpolate(check["argv"], bindings))
+                finally:
+                    for stream in ("stdout", "stderr"):
+                        source = step_dir / ("command-1." + stream + ".log")
+                        if source.is_file():
+                            shutil.copyfile(source, step_dir / (stream + ".log"))
+                for artifact in check.get("artifacts", []):
+                    file = project / artifact
+                    if not file.resolve().is_relative_to(project) or not file.is_file():
+                        raise ForgeError(f"Missing checker output: {file}", code=1)
+                    destination = step_dir / "artifacts" / artifact
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(file, destination)
+                    evidence[str(destination)] = digest(destination)
+                    output_hashes.append((artifact, digest(destination)))
+                for stream in ("stdout", "stderr"):
+                    file = step_dir / (stream + ".log")
+                    if file.is_file() or executor is None:
+                        evidence[str(file)] = digest(file)
+            # A check that rewrites its declared inputs cannot cache its old result.
+            unchanged = inputs == input_manifest(project, check.get("inputs", []))
+            record.update(status="passed", inputs_unchanged=unchanged)
+            if unchanged:
+                token = builds.fingerprint({"signature": signature, "outputs": output_hashes,
+                    "execution": run_id if not cacheable else None})
+                slot = {"fingerprint": signature, "run_id": run_id, "evidence": evidence,
+                        "build_artifacts": artifact_ids, "dependency_token": token}
+            else:
+                token = builds.fingerprint({"signature": signature, "execution": run_id})
+        except ForgeError as exc:
+            record.update(status="failed", error=str(exc))
+    return record, token, slot
 
 
 def run(home, path, *, full=False, selected=(), environment_name=None, jobs=1, progress=None):
@@ -107,22 +254,11 @@ def run(home, path, *, full=False, selected=(), environment_name=None, jobs=1, p
     request = {"kind": "checker", "run_id": run_id, "suite_id": config["id"], "started_at": now(), "full": full}
     write_json(directory / "request.json", request)
     (directory / "checker.yaml").write_text(loaded["text"])
-    environment_config = config.get("environment", {})
-    name = environment_name or environment_config.get("name")
-    shell = None
-    environment_origin = {"inherited": True}
-    if name:
-        profile = registered_environment(home, name, environment_config.get("revision"), strict=True)
-        shell = Path(profile["activation"])
-        environment_origin = {"name": name, "revision": profile["revision"], "files": profile["files"]}
-    elif environment_config.get("shell"):
-        shell = (Path(loaded["path"]).parent / environment_config["shell"]).resolve()
-        environment_origin = {"shell": str(shell), "sha256": digest(shell)}
-    variables = environment_config.get("variables", {})
-    environment = builds.safe_environment({**cmake.capture(shell), **variables}, variables)
-    observed = cmake.tools(environment)
-    write_json(directory / "environment.json", {"variables": environment, "tools": observed, "source": environment_origin})
-    env_script = cmake.write_environment(directory / "environment.sh", base=environment)
+    environment, observed, origin, env_script, name = prepare_environment(
+        home, directory, config.get("environment", {}), Path(loaded["path"]).parent, environment_name)
+    context = {"project": project, "card_dir": Path(loaded["path"]).parent, "environment": environment,
+               "environment_origin": origin, "observed": observed, "env_script": env_script,
+               "environment_name": name, "jobs": jobs, "run_dir": directory}
     key = builds.fingerprint({"id": config["id"], "project": str(project)})
     state_file = home.root / "checker/state" / (key + ".json")
     result = {**request, "path": str(directory), "status": "running", "steps": []}
@@ -139,96 +275,16 @@ def run(home, path, *, full=False, selected=(), environment_name=None, jobs=1, p
                 check_id = check["id"]
                 if check_id not in wanted:
                     continue
-                record = {"id": check_id, "started_at": now(), "status": "running"}
                 step_dir = directory / "steps" / check_id
                 step_dir.mkdir(parents=True)
-                inputs = input_manifest(project, check.get("inputs", []))
-                build_graph = None
-                if check.get("build"):
-                    from .build_catalog import resolve
-                    target = resolve(home, check["build"], Path(loaded["path"]).parent)
-                    build_graph = builds.graph(home, str(target), parameters=check.get("parameters"))
-                signature = builds.fingerprint({"check": check, "inputs": inputs, "build": build_graph,
-                    "standard_checks": digest(Path(__file__).with_name("standard_checks.py")) if "check" in check else None,
-                    "environment": environment, "environment_origin": environment_origin, "tools": observed,
-                    "prerequisites": {n: fingerprints[n] for n in check.get("needs", [])}})
-                fingerprints[check_id] = signature
-                write_json(step_dir / "inputs.json", {"fingerprint": signature, "inputs": inputs})
-                cached = baseline["checks"].get(check_id)
-                can_reuse = bool(check.get("cache", "check" not in check) and not full and cached and cached["fingerprint"] == signature)
-                if can_reuse:
-                    for filename, sha in cached.get("evidence", {}).items():
-                        if not Path(filename).is_file() or digest(Path(filename)) != sha:
-                            can_reuse = False
-                    for artifact_id in cached.get("build_artifacts", []):
-                        try:
-                            builds.artifact(home, artifact_id)
-                        except ForgeError:
-                            can_reuse = False
-                prerequisites = [statuses[n] for n in check.get("needs", [])]
-                if any(s not in {"passed", "reused"} for s in prerequisites):
-                    record.update(status="blocked", reason="A prerequisite did not pass.")
-                elif can_reuse:
-                    record.update(status="reused", reused_from=cached["run_id"], reason="Declared inputs, commands, dependencies and environment unchanged.")
-                    fingerprints[check_id] = cached.get("dependency_token", signature)
-                else:
-                    event(f"Check {check_id}: running")
-                    try:
-                        evidence, artifact_ids, output_hashes = {}, [], []
-                        if build_graph:
-                            child = builds.execute(home, str(target), parameters=check.get("parameters"), environment_name=name, jobs=jobs, progress=progress)
-                            record["build_run_id"] = child["run_id"]
-                            if child["status"] != "passed":
-                                raise ForgeError(child.get("error", "Build check failed."), code=1)
-                            artifact_ids = [v["artifact_id"] for v in child.get("outputs", {}).values()]
-                            child_result = Path(child["path"]) / "result.json"
-                            evidence[str(child_result)] = digest(child_result)
-                        else:
-                            python = observed.get("python", {}).get("path", "python3")
-                            bindings = {"project": str(project), "python": python,
-                                        "project_python": python, "controller_python": sys.executable,
-                                        "run_dir": str(directory), "step_dir": str(step_dir)}
-                            def invoke(argv):
-                                return run_command(argv, project, env_script, step_dir, "1", check.get("timeout_seconds", 3600), progress=progress, process_env=environment)
-                            try:
-                                if "check" in check:
-                                    from .standard_checks import execute
-                                    execute(check["check"], bindings["python"], invoke, step_dir)
-                                    evidence[str(step_dir / "checks.json")] = digest(step_dir / "checks.json")
-                                else:
-                                    invoke(builds.interpolate(check["argv"], bindings))
-                            finally:
-                                for stream in ("stdout", "stderr"):
-                                    source = step_dir / ("command-1." + stream + ".log")
-                                    if source.is_file():
-                                        shutil.copyfile(source, step_dir / (stream + ".log"))
-                            for artifact in check.get("artifacts", []):
-                                file = project / artifact
-                                if not file.resolve().is_relative_to(project) or not file.is_file():
-                                    raise ForgeError(f"Missing checker output: {file}", code=1)
-                                destination = step_dir / "artifacts" / artifact
-                                destination.parent.mkdir(parents=True, exist_ok=True)
-                                shutil.copyfile(file, destination)
-                                evidence[str(destination)] = digest(destination)
-                                output_hashes.append((artifact, digest(destination)))
-                            for stream in ("stdout", "stderr"):
-                                file = step_dir / (stream + ".log")
-                                evidence[str(file)] = digest(file)
-                        # A check that rewrites its declared inputs cannot cache its old result.
-                        unchanged = inputs == input_manifest(project, check.get("inputs", []))
-                        record.update(status="passed", inputs_unchanged=unchanged)
-                        if unchanged:
-                            token = builds.fingerprint({"signature": signature, "outputs": output_hashes,
-                                "execution": run_id if not check.get("cache", "check" not in check) else None})
-                            fingerprints[check_id] = token
-                            baseline["checks"][check_id] = {"fingerprint": signature, "run_id": run_id,
-                                "evidence": evidence, "build_artifacts": artifact_ids, "dependency_token": token}
-                        else:
-                            fingerprints[check_id] = builds.fingerprint({"signature": signature, "execution": run_id})
-                            baseline["checks"].pop(check_id, None)
-                    except ForgeError as exc:
-                        record.update(status="failed", error=str(exc))
-                if record["status"] in {"failed", "blocked"}:
+                record, token, slot = run_check(
+                    home, check, context, step_dir, cached=baseline["checks"].get(check_id),
+                    prerequisites={n: (statuses[n], fingerprints[n]) for n in check.get("needs", [])},
+                    full=full, run_id=run_id, progress=progress, event=event)
+                fingerprints[check_id] = token
+                if slot is not None:
+                    baseline["checks"][check_id] = slot
+                elif record["status"] != "reused":
                     baseline["checks"].pop(check_id, None)
                 record["finished_at"] = now()
                 statuses[check_id] = record["status"]

@@ -181,13 +181,13 @@ def interpolate(value, bindings):
 
 
 @contextmanager
-def file_lock(path):
+def file_lock(path, *, blocking=False, message=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+") as handle:
         try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         except BlockingIOError as exc:
-            raise ForgeError(f"Build instance is busy: {path}", code=1) from exc
+            raise ForgeError(message or f"Build instance is busy: {path}", code=1) from exc
         try:
             yield
         finally:
