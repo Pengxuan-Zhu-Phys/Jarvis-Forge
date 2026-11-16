@@ -679,6 +679,13 @@ def environment_selection(console, command, values):
 
 
 def render(console, command, values):
+    if command == "toolchain list":
+        toolchains = values["toolchains"]
+        line(console, f"Installed toolchains ({len(toolchains)})", style="bold")
+        for toolchain in toolchains:
+            line(console, f"  {toolchain['id']}")
+            line(console, "    " + toolchain["prefix"], style="dim")
+        return
     if command == "env repair":
         shell_repair(console, values)
         return

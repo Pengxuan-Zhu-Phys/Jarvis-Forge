@@ -501,6 +501,8 @@ def _matches_legacy_configure(saved, requested, argv, logs, source, environment)
 
 
 def execute(home, reference=None, *, parameters=None, environment_name=None, jobs=1, resume=None, progress=None, verbose=False, as_json=False):
+    from . import toolchains
+
     if jobs < 1:
         raise ForgeError("Jobs must be positive.")
     run_id = identifier(resume) if resume else new_id("build")
@@ -521,7 +523,13 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                    "workspace": selected_graph["nodes"][selected_graph["root"]].get("workspace")}
         if apt_profile:
             request["apt_profile"] = apt_profile
+        from .apt_profiles import active_home
+
+        target = ForgeHome(Path(apt_profile["path"])) if apt_profile else active_home(home)
+        if toolchain := toolchains.binding(target):
+            request["toolchain"] = toolchain
     apt_profile = request.get("apt_profile")
+    toolchain = request.get("toolchain")
     directory.mkdir(parents=True, exist_ok=True)
     with file_lock(directory / "run.lock"):
         state_path = directory / "graph.lock.json"
@@ -579,6 +587,9 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                 variables = config_env.get("variables", {})
                 captured = cmake.capture(original)
                 environment = safe_environment({**captured, **variables}, variables)
+                if toolchain:
+                    environment = toolchains.environment(toolchain, environment)
+                    environment_origin["toolchain"] = toolchain["id"]
                 observed = cmake.tools(environment)
             context = {"tools": observed, "platform": sys.platform, "machine": os.uname().machine,
                        "cxx_standard": str(node["parameters"].get("cxx_standard", "unspecified"))}
@@ -767,7 +778,8 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     try:
                         record = _step(home, step, options, work, step_dir, environment, observed,
                                        context, records, dependencies, jobs, event, row["steps"].get(step_id),
-                                       workspace=workspace, verbose=verbose, as_json=as_json, apt_profile=node_profile)
+                                       workspace=workspace, verbose=verbose, as_json=as_json, apt_profile=node_profile,
+                                       toolchain=toolchain)
                         records[step_id] = record
                         row["steps"][step_id] = record
                         if record.get("prefix"):
@@ -858,7 +870,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
 
 
 def _step(home, step, options, work, logs, environment, observed, context, records, dependencies, jobs, progress,
-          previous, *, workspace=None, verbose=False, as_json=False, apt_profile=None):
+          previous, *, workspace=None, verbose=False, as_json=False, apt_profile=None, toolchain=None):
     used = []
     for name in options.get("dependencies", []):
         used.append(dependencies[name[9:]] if name.startswith("requires.") else records[name])
@@ -928,6 +940,7 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
         from .apt_profiles import ensure_active
         from .apt_progress import AptProgress
         from .cli import _console
+        from .toolchains import binding
         # Package dependencies belong in the selected apt profile. By default
         # that is spack-default, the same store and compilers as `jforge apt`.
         # The screen uses the same phase and package display as `jforge apt install`.
@@ -938,6 +951,9 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
                 target = ensure_active(home, progress=reporter,
                                        selected=ForgeHome(Path(apt_profile["path"])) if apt_profile else None)
                 _require_spack_profile(target)
+                if apt_profile and binding(target) != toolchain:
+                    raise ForgeError("The project's toolchain binding changed since the build started.",
+                                     hint="Start a new build run with the selected toolchain.")
                 installed = backend.transact(target, "install", options["specs"], jobs=jobs,
                                              timeout=step.get("timeout_seconds", 86400), progress=reporter,
                                              project_python=project_python)
@@ -987,6 +1003,10 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
     build.mkdir(parents=True, exist_ok=True)
     configured = json.loads(json.dumps(options))
     cache = configured.setdefault("cache", {})
+    if toolchain:
+        from .toolchains import cmake_runtime_paths
+
+        cmake_runtime_paths(toolchain, cache)
     python_artifacts = {}
     for dependency in used:
         python = dependency.get("report", {}).get("python", {})

@@ -123,6 +123,11 @@ def _new_install_tree(home):
     else:
         name = "_direct"
     store = _inside(base, base.root / "apps" / name)
+    if config.get("toolchain_store"):
+        return {"root": str(store), "padded_length": False, "projections": {
+            "gcc": "{name}-{version}-{architecture.target}",
+            "all": "{name}-{version}-{architecture}-{hash:7}",
+        }}
     return {"root": str(store), "padded_length": False,
             "projections": {"all": INSTALL_PROJECTION}}
 
@@ -670,11 +675,13 @@ def _gcc_runtime_target(home):
     return _generic_host_target(home)
 
 
-def _candidate(home, op, roots, previous):
+def _candidate(home, op, roots, previous, *, reuse_buildcache=True):
     from .recipe_releases import ensure
+    from .toolchains import binding, spack_requirements
 
     profile = settings(home)
     _check_python_location(home, profile["python"])
+    toolchain = binding(home)
     if profile.get("extension_recipes", True):
         ensure(home, op)
     directory = root(home) / "environments" / op.name
@@ -683,17 +690,20 @@ def _candidate(home, op, roots, previous):
         "spack": {
             "specs": roots,
             "view": False,
-            "concretizer": {"unify": True, "reuse": _python_reuse()},
+            "concretizer": {"unify": True, "reuse": _python_reuse(buildcache=reuse_buildcache and not toolchain)},
         }
     }
-    target = _gcc_runtime_target(home)
+    target = (toolchain and toolchain.get("target")) or _gcc_runtime_target(home)
     if target:
         document["spack"]["packages"] = {"gcc-runtime": {"require": [f"target={target}"]}}
     (directory / "spack.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
     shutil.copytree(root(home) / "config", directory / ".jforge-config")
     package_config = directory / ".jforge-config/packages.yaml"
     config = yaml.safe_load(package_config.read_text()) if package_config.is_file() else {}
-    config.setdefault("packages", {}).update(_python_externals(profile["python"]))
+    packages = config.setdefault("packages", {})
+    packages.update(_python_externals(profile["python"]))
+    if toolchain:
+        spack_requirements(toolchain, packages)
     package_config.write_text(yaml.safe_dump(config, sort_keys=False))
     if previous and (Path(previous) / "spack.lock").is_file():
         shutil.copy2(Path(previous) / "spack.lock", directory / "spack.lock")
@@ -1151,8 +1161,10 @@ def transact(
     dry_run=False,
     progress=None,
     project_python=None,
+    build_stage=None,
 ):
     from .package_operations import locked, operation
+    from .toolchains import binding
 
     if cache not in {"auto", "only", "never"}:
         raise ForgeError("Build cache mode must be auto, only or never.")
@@ -1182,10 +1194,19 @@ def transact(
         ) as (op, result),
     ):
         before = current(home)
+        toolchain = binding(home)
         roots = _requested_roots(before, action, translated)
         result["roots"] = roots
         previous = before.get("environment") if action not in {"upgrade", "full-upgrade"} else None
-        envdir = _candidate(home, op, roots, previous)
+        if cache == "never":
+            envdir = _candidate(home, op, roots, previous, reuse_buildcache=False)
+        else:
+            envdir = _candidate(home, op, roots, previous)
+        if build_stage is not None:
+            config_file = envdir / ".jforge-config/config.yaml"
+            config = yaml.safe_load(config_file.read_text())
+            config["config"]["build_stage"] = [str(build_stage)]
+            config_file.write_text(yaml.safe_dump(config, sort_keys=False))
         # In a flat store, validate binary and source work separately. Historical
         # build dependencies of installed/binary packages need no local prefix.
         cache_first = (bool(roots) and action != "remove" and cache == "auto"
@@ -1210,6 +1231,11 @@ def transact(
             nonlocal runtime_retried
             write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
             _validate_external_python(home, plan["packages"])
+            if toolchain:
+                for compiler in read_json(op / "dag.json")["packages"]:
+                    if compiler["name"] == "gcc" and (
+                            not compiler["external"] or Path(compiler["prefix"]).resolve() != Path(toolchain["prefix"])):
+                        raise ForgeError(f"Spack selected GCC at {compiler['prefix']}, expected {toolchain['prefix']}.")
             try:
                 _validate_name_only_plan(plan, envdir)
             except ForgeError:
@@ -1606,6 +1632,7 @@ def sources(home, *, add=None, url=None, remove=None, trust_key=None, progress=N
 
 def compilers(home, *, find=False, progress=None):
     from .package_operations import locked, operation
+    from .toolchains import binding
 
     if not configured(home):
         bootstrap(home, progress=progress)
@@ -1624,6 +1651,8 @@ def compilers(home, *, find=False, progress=None):
         result.update(
             backend="spack", compilers=run(home, ["compiler", "list"], op, "compilers")
         )
+        if toolchain := binding(home):
+            result["toolchain"] = {"id": toolchain["id"], "prefix": toolchain["prefix"]}
         return result
 
 

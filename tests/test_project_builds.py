@@ -784,7 +784,7 @@ def test_higgstools_recipe_patches_before_cmake_and_pins_the_bridges():
     assert source["sha256"] == "6a7c928080c0ba5c9b93fc062c8b894412027a86d0447d255d25438a51fabf12"
     assert source["subdir"] == "higgstools"
     assert config["outputs"]["installation"]["publish_after"] == ["HiggsTools.command-2"]
-    assert config["platforms"] == ["linux"]
+    assert config["platforms"] == ["linux", "darwin"]
     assert any(item.get("path") == "scripts/higgstools_datasets.py" for item in loaded["card_sources"])
     module_path = root / "builds/scripts/higgstools_prepare.py"
     spec = importlib.util.spec_from_file_location("higgstools_prepare", module_path)
@@ -854,7 +854,6 @@ def test_higgstools_dataset_install_matches_the_pin(tmp_path):
 @pytest.mark.parametrize("name,requirements", [
     ("root-build", {"platforms": ["linux"], "apt_backend": "spack"}),
     ("CEPC-build", {"platforms": ["linux"], "apt_backend": "spack"}),
-    ("higgstools-build", {"platforms": ["linux"]}),
 ])
 def test_linux_recipe_rejected_on_macos_before_run(home, name, requirements, monkeypatch, capsys):
     path = Path(__file__).parents[1] / "builds" / f"{name}.yaml"

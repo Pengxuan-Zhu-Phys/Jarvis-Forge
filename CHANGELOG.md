@@ -9,9 +9,12 @@
 - After a successful `root-build`, source that build's activation script from the apt environment entry. A ready root-build already on disk is added the next time the entry is published. A failed build does not change that entry.
 - Show one environment's metadata file with `jforge env metadata [name]`. The default name is the selected environment. The command reads `env/<name>/env.json` and leaves that file unchanged.
 
+- Manage user-local GCC, G++ and GFortran suites with `jforge toolchain`. Install into a dedicated Spack profile, bind a toolchain to a project profile, and verify compilers and runtime libraries on a compute node.
+
 - Register an existing macOS Homebrew installation with `apt profile NAME --create --backend homebrew`. Audit native formula dependencies, reuse shared kegs, and activate their CMake and pkg-config paths while preserving pyenv Python.
 - Add `higgstools-build` for HiggsTools 1.1.3 with the GMFit assignment-trace bridge v2 and HS measurement-breakdown bridge v1. The build installs the Python package into the `python3` on `PATH`.
 - Install pinned HBDataSet v1.7 and HSDataSet v1.1 with `higgstools-build`, and export their paths for Jarvis-Operas and GMFit.
+- Allow `higgstools-build` on macOS and Linux.
 
 ### Changed
 

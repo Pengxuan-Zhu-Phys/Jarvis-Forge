@@ -261,7 +261,8 @@ def create_homebrew(base, name):
 
 
 def switch(
-    base, origin="spack", *, name="default", direct=False, progress=None, create_only=False, select=True
+    base, origin="spack", *, name="default", direct=False, progress=None, create_only=False, select=True, extensions=None,
+    toolchain_store=False,
 ):
     from . import spack_backend as backend
 
@@ -301,8 +302,12 @@ def switch(
         target.initialize()
         config = read_json(target.root / "config.json")
         config["apt_base_home"] = str(base.root)
+        if toolchain_store:
+            config["toolchain_store"] = True
         write_json(target.root / "config.json", config)
-        result["bootstrap"] = backend.bootstrap(
-            target, progress=progress
-        )
-        return _save_selection(base, target, profile_id, result) if select else result
+        options = {} if extensions is None else {"extensions": extensions}
+        result["bootstrap"] = backend.bootstrap(target, progress=progress, **options)
+        if select:
+            return _save_selection(base, target, profile_id, result)
+        result.update(profile=profile_id, apt_home=str(target.root))
+        return result

@@ -355,6 +355,10 @@ from .build_cli import app as build_app
 
 app.add_typer(build_app, name="build")
 
+from .toolchain_cli import app as toolchain_app
+
+app.add_typer(toolchain_app, name="toolchain")
+
 from .checker_cli import app as checker_app
 
 app.add_typer(checker_app, name="checker")

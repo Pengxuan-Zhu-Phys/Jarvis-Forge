@@ -7,7 +7,7 @@
 # interpreter. scripts/higgstools_datasets.py installs HBDataSet v1.7 and
 # HSDataSet v1.1 and points the interpreter at those directories.
 name: higgstools-build
-platforms: [linux]
+platforms: [linux, darwin]
 build:
   name: HiggsTools
   version: 1.1.3

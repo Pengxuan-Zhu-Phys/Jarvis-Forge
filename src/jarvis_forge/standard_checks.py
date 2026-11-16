@@ -6,6 +6,7 @@ import argparse
 import importlib
 import importlib.metadata
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -100,7 +101,8 @@ def probe(spec):
             parts = shlex.split(selection)
             if len(parts) != 1:
                 raise ValueError("Select a single executable path")
-            executable = shutil.which(parts[0])
+            compiler = {"cc": "CC", "c++": "CXX", "gfortran": "FC"}.get(parts[0])
+            executable = shutil.which(os.environ.get(compiler, parts[0]) if compiler else parts[0])
             if not executable:
                 raise FileNotFoundError(selection)
             result = subprocess.run([executable, "--version"], capture_output=True, text=True, errors="replace", timeout=30)
