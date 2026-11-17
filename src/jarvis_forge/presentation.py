@@ -822,7 +822,39 @@ def test_history(console, values):
                 line(console, f"{run['run_id']}  {case['outcome']:<8} {case['node']}")
 
 
+def playlist(console, command, values):
+    library = values["library"]
+    if command == "playlist project list":
+        projects = values["projects"]
+        line(console, f"{library} · {len(projects)} projects", style="bold")
+        for row in projects:
+            status = row["root_source"] if row["available"] else "unavailable"
+            line(console, f"  {row['id']}  {row['title']} · {status}")
+            if row["root"]:
+                line(console, f"    {row['root']}")
+    elif command == "playlist project path":
+        line(console, f"Registered {values['id']} in {library}")
+        line(console, values["root"])
+    elif command in {"playlist cases", "playlist sync", "playlist verify"}:
+        cases = values["cases"]
+        line(console, f"{library} · {len(cases)} cases", style="bold")
+        if command == "playlist cases":
+            for case in cases:
+                profiles = ", ".join(case["profiles"])
+                detail = f" · {profiles}" if profiles else ""
+                line(console, f"  {case['id']}  {case['kind']}{detail}")
+        else:
+            line(console, "Inventory updated." if command == "playlist sync" else "Library verified.")
+    else:
+        action = "Created" if command == "playlist init" else "Selected"
+        line(console, f"{action} playlist library {library}")
+        line(console, values["path"])
+
+
 def render(console, command, values):
+    if command.startswith("playlist "):
+        playlist(console, command, values)
+        return
     if command == "test validate":
         test_validate(console, values)
         return

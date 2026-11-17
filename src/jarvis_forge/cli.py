@@ -38,7 +38,7 @@ app = typer.Typer(add_completion=False, pretty_exceptions_enable=False,
                   context_settings={"help_option_names": ["-h", "--help"]},
                   help="Prepare user environments and run scientific software.\n\n"
                        "Environment: jforge apt, jforge env, jforge build.\n"
-                       "Acceptance: jforge test, jforge bench, jforge suite.\n"
+                       "Acceptance: jforge test, jforge bench, jforge suite, jforge playlist.\n"
                        "Runs: jforge history, jforge show, jforge logs.\n"
                        "Setup: jforge init, jforge doctor.\n\n"
                        "Command help: jforge COMMAND -h")
@@ -306,6 +306,7 @@ from .env_cli import app as env_app
 from .build_cli import app as build_app
 from .testing_cli import app as testing_app
 from .bench_cli import app as bench_app
+from .playlist_cli import app as playlist_app
 
 # Leaf commands are merged from unnamed groups so the help panels follow
 # this registration order. Named groups are emitted before root commands.
@@ -323,6 +324,7 @@ app.add_typer(build_app, name="build", rich_help_panel="Environment")
 app.add_typer(testing_app, name="test", rich_help_panel="Acceptance")
 app.add_typer(bench_app, name="bench", rich_help_panel="Acceptance")
 app.add_typer(suite_app, name="suite", rich_help_panel="Acceptance")
+app.add_typer(playlist_app, name="playlist", rich_help_panel="Acceptance")
 app.add_typer(runs_app)
 app.add_typer(setup_app)
 

@@ -13,6 +13,7 @@ profiles:
   - cli
   - toolchains
   - bench
+  - playlist
   - root-recipe
   acceptance: *forge-all
   release:
@@ -25,6 +26,7 @@ profiles:
   - cli
   - toolchains
   - bench
+  - playlist
   - root-recipe
   - wheel-smoke
 default_profile: daily
@@ -196,6 +198,20 @@ groups:
   - pyproject.toml
   - src/jarvis_forge/card/*.yaml
   - tests/test_presentation.py
+  skip_allow: []
+- id: playlist
+  match:
+  - tests/test_playlist*.py
+  inputs:
+  - src/jarvis_forge/playlist*.py
+  - src/jarvis_forge/cli.py
+  - src/jarvis_forge/presentation.py
+  - src/jarvis_forge/testing.py
+  - src/jarvis_forge/checker.py
+  - src/jarvis_forge/storage.py
+  - tests/test_playlist*.py
+  - tests/checker.yaml
+  - pyproject.toml
   skip_allow: []
 - id: bench
   match:

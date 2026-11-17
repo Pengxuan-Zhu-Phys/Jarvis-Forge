@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Use `jforge playlist` to register a library of projects and inspect the pytest groups and checks declared by their schema 2 test cards. Keep checkout paths per machine, filter cases by shelf or project, and validate or refresh the local inventory without running tests.
+
 ## 1.1.10 — 2026-11-17
 
 ### Added

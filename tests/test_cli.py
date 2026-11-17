@@ -9,17 +9,18 @@ from jarvis_forge.cli import main
 from jarvis_forge.storage import ForgeHome, write_json
 
 
-def test_root_help_lists_the_eleven_commands(capsys):
+def test_root_help_lists_commands_by_group(capsys):
     assert main(["-h"]) == 0
     output = capsys.readouterr().out
     assert "Environment" in output and "Acceptance" in output
     assert "Runs" in output and "Setup" in output
     # Rich boxes each command, so the row is "│ apt " rather than a line that starts with "apt".
     for earlier, later in (("│ apt ", "│ test "), ("│ test ", "│ suite "),
-                           ("│ suite ", "│ history "), ("│ history ", "│ init ")):
+                           ("│ suite ", "│ playlist "), ("│ playlist ", "│ history "),
+                           ("│ history ", "│ init ")):
         assert output.index(earlier) < output.index(later)
     for removed in ("│ paths ", "│ example ", "│ checker ", "│ toolchain ", "│ executor ",
-                    "│ list ", "│ info ", "│ playlist "):
+                    "│ list ", "│ info "):
         assert removed not in output
     assert "\x1b[" not in output
 
@@ -104,7 +105,7 @@ def test_json_version(args, capsys):
 
 
 @pytest.mark.parametrize("args", [["unknown"], ["--unknown"], ["run"], ["checker"], ["toolchain"],
-                                   ["executor"], ["paths"], ["example"], ["playlist"], ["--home"]])
+                                   ["executor"], ["paths"], ["example"], ["--home"]])
 def test_json_errors(args, capsys):
     assert main([*args, "--json"]) == 2
     result = capsys.readouterr()

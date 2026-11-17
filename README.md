@@ -4,7 +4,7 @@ Jarvis-Forge is an independent Python package for user-space software environmen
 
 Forge runs local command suites, test cards, and benchmark cards, and preserves their evidence. Its `jforge apt` command uses a pinned, user-local Spack installation on Linux and an existing Homebrew installation on macOS by default. Old source installations remain queryable as archived records. Named environments keep private, versioned shell copies in one shared user directory. Benchmark cards can submit Slurm array jobs through `jforge bench`. Managed services, suite-level scientific comparison policies, and the `Jarvis forge` forwarding command are planned extensions.
 
-The root commands are `apt`, `env`, `build`, `test`, `bench`, `suite`, `history`, `show`, `logs`, `init`, and `doctor`.
+The root commands are `apt`, `env`, `build`, `test`, `bench`, `suite`, `playlist`, `history`, `show`, `logs`, `init`, and `doctor`. Use `playlist` to register and inspect test cards across projects. See the [playlist library guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/PLAYLIST.md).
 
 ## Install
 
