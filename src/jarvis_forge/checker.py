@@ -15,8 +15,8 @@ from .storage import ForgeError, digest, identifier, new_id, now, read_json, wri
 from .suite import UniqueLoader
 
 
-CHECK_FIELDS = frozenset({"id", "inputs", "needs", "argv", "build", "workflow", "check", "parameters",
-                          "cache", "timeout_seconds", "artifacts"})
+CHECK_FIELDS = frozenset({"id", "inputs", "needs", "argv", "build", "workflow", "check", "uses",
+                          "parameters", "cache", "timeout_seconds", "artifacts"})
 SCHEMA2_FIELDS = frozenset({"groups", "profiles", "default_profile", "coverage"})
 
 
@@ -29,12 +29,16 @@ def validate_checks(checks, *, extra_fields=frozenset(), standard=None):
         if not isinstance(check, dict) or set(check) - CHECK_FIELDS - set(extra_fields):
             raise ForgeError("Invalid checker check fields.")
         ids.append(identifier(check.get("id", "")))
-        if sum(key in check for key in ("argv", "build", "workflow", "check")) != 1:
-            raise ForgeError("Each check selects argv, build or a standard check.")
+        if sum(key in check for key in ("argv", "build", "workflow", "check", "uses")) != 1:
+            raise ForgeError("Each check selects argv, build, a standard check, or uses.")
         if "workflow" in check:
             check["build"] = check.pop("workflow")
         if "check" in check:
             standard(check["check"])
+        if "uses" in check:
+            _validate_uses(check["uses"])
+            if "cache" not in check:
+                check["cache"] = False
         if "argv" in check and (not isinstance(check["argv"], list) or not check["argv"] or not all(isinstance(x, str) for x in check["argv"])):
             raise ForgeError("Checker argv must be a nonempty string list.")
         if check.get("cache", "check" not in check) and not check.get("inputs"):
@@ -51,6 +55,15 @@ def validate_checks(checks, *, extra_fields=frozenset(), standard=None):
     if len(ids) != len(set(ids)):
         raise ForgeError("Checker check IDs must be unique.")
     return ids
+
+
+def _validate_uses(uses):
+    if not isinstance(uses, dict) or set(uses) != {"bench", "profile"}:
+        raise ForgeError("uses accepts exactly bench and profile.")
+    bench_path = uses.get("bench")
+    if not isinstance(bench_path, str) or not bench_path or Path(bench_path).is_absolute():
+        raise ForgeError("uses.bench must be a path relative to the test card.")
+    identifier(uses.get("profile", ""))
 
 
 def validate_environment(environment):
@@ -202,6 +215,10 @@ def run_check(home, check, context, step_dir, *, cached, prerequisites, full, ru
                         from .standard_checks import execute
                         execute(check["check"], bindings["python"], invoke, step_dir)
                         evidence[str(step_dir / "checks.json")] = digest(step_dir / "checks.json")
+                    elif "uses" in check:
+                        from . import bench
+                        target = (Path(context["card_dir"]) / check["uses"]["bench"]).resolve()
+                        bench.acceptance_check(home, target, profile=check["uses"]["profile"])
                     else:
                         invoke(builds.interpolate(check["argv"], bindings))
                 finally:
@@ -220,7 +237,7 @@ def run_check(home, check, context, step_dir, *, cached, prerequisites, full, ru
                     output_hashes.append((artifact, digest(destination)))
                 for stream in ("stdout", "stderr"):
                     file = step_dir / (stream + ".log")
-                    if file.is_file() or executor is None:
+                    if file.is_file() or (executor is None and "uses" not in check):
                         evidence[str(file)] = digest(file)
             # A check that rewrites its declared inputs cannot cache its old result.
             unchanged = inputs == input_manifest(project, check.get("inputs", []))

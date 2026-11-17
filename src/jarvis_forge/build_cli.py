@@ -106,10 +106,11 @@ def validate(ctx: typer.Context, build: str = typer.Argument(..., metavar="<buil
 @app.command()
 def plan(ctx: typer.Context, build: str = typer.Argument(..., metavar="<build>"),
          env: Optional[str] = typer.Option(None, "--env", help="Display the selected registered environment name."),
-         setting: list[str] = typer.Option([], "--set", help="Override a declared parameter: NAME=VALUE.")):
+         setting: list[str] = typer.Option([], "--set", help="Override a declared parameter: NAME=VALUE."),
+         source: Optional[Path] = typer.Option(None, "--source", help="Use this checkout instead of the card's local source.")):
     """Inspect a dependency graph without installs or CMake execution."""
     from .cli import emit
-    emit(ctx, "build plan", **builds.plan(ctx.obj.home, build, parameters=parameters(setting), environment_name=env))
+    emit(ctx, "build plan", **builds.plan(ctx.obj.home, build, parameters=parameters(setting), environment_name=env, source=source))
 
 
 def _handoff_activation(result):
@@ -125,7 +126,7 @@ def _handoff_activation(result):
     return True
 
 
-def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directory=None, no_activate=False):
+def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directory=None, no_activate=False, source=None):
     from .cli import emit, line, _console
     from .presentation import build_result
     if not resume:
@@ -145,7 +146,7 @@ def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directo
     command_name = "build resume" if resume else "build run"
     try:
         result = builds.execute(ctx.obj.home, build, parameters=parameters(setting), environment_name=env,
-                                jobs=jobs, resume=resume, verbose=ctx.obj.verbose, as_json=ctx.obj.as_json,
+                                jobs=jobs, resume=resume, source=source, verbose=ctx.obj.verbose, as_json=ctx.obj.as_json,
                                 progress=lambda message: line(console, message))
     except ForgeError as exc:
         if not ctx.obj.as_json:
@@ -184,9 +185,10 @@ def run(ctx: typer.Context, build: str = typer.Argument(..., metavar="<build>"),
         env: Optional[str] = typer.Option(None, "--env", help="Use this registered compiler/Python environment."),
         jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Maximum concurrent build jobs."),
         directory: Optional[Path] = typer.Option(None, "--directory", help="Fetch and build in this workspace; reuse its editable recipe on later runs."),
+        source: Optional[Path] = typer.Option(None, "--source", help="Use this checkout instead of the card's local source."),
         no_activate: bool = typer.Option(False, "--no-activate", help="Skip activation in the calling interactive shell.")):
     """Build projects and run acceptance checks. Use --verbose for raw output."""
-    _execute(ctx, build, setting, env, jobs, directory=directory, no_activate=no_activate)
+    _execute(ctx, build, setting, env, jobs, directory=directory, no_activate=no_activate, source=source)
 
 
 @app.command()

@@ -256,6 +256,15 @@
                       "type": "string",
                       "minLength": 1
                     },
+                    "binary_dir": {
+                      "enum": ["preset"]
+                    },
+                    "lock": {
+                      "enum": ["source"]
+                    },
+                    "in_place": {
+                      "type": "boolean"
+                    },
                     "build_preset": {
                       "type": "string",
                       "minLength": 1

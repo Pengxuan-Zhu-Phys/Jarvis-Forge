@@ -129,7 +129,7 @@ def native_card(config):
         prerequisite_names.append(name)
     build = config.get("build")
     if build is not None:
-        _keys(build, {"name", "version", "source", "cmake", "environment", "cmake_dir", "features", "required_files"}, "build")
+        _keys(build, {"name", "version", "source", "cmake", "environment", "cmake_dir", "features", "required_files", "in_place"}, "build")
         module = {"name": build.get("name", "project"), "version": str(build.get("version", "0")),
                   "required_modules": prerequisite_names,
                   "installation": {k: v for k, v in build.items() if k not in {"name", "version"}}}
@@ -190,10 +190,18 @@ def normalize(config, path, home=None, library_files=None):
                 ends[name] = "requires." + name
                 continue
             installation = module.get("installation", {})
-            _keys(installation, {"cmake", "source", "packages", "environment", "cmake_dir", "features", "required_files"}, "installation")
+            _keys(installation, {"cmake", "source", "packages", "environment", "cmake_dir", "features", "required_files", "in_place"}, "installation")
             settings = installation.get("cmake", {})
             has_cmake = "cmake" in installation
-            _keys(settings, {"preset", "build_preset", "test_preset", "options", "targets", "phases", "includes", "libraries", "runtime"}, "installation.cmake")
+            _keys(settings, {"preset", "build_preset", "test_preset", "options", "targets", "phases", "includes", "libraries", "runtime", "binary_dir", "lock"}, "installation.cmake")
+            if settings.get("binary_dir") not in (None, "preset"):
+                raise ForgeError("installation.cmake.binary_dir must be preset.")
+            if settings.get("lock") not in (None, "source"):
+                raise ForgeError("installation.cmake.lock must be source.")
+            if settings.get("binary_dir") == "preset" and not settings.get("preset"):
+                raise ForgeError("cmake.binary_dir preset requires cmake.preset.")
+            if "in_place" in installation and installation["in_place"] is not True:
+                raise ForgeError("build.in_place must be true when set.")
             overrides = _cache(settings.get("options", {}))
             if module.get("recipe"):
                 recipe = module["recipe"]
@@ -289,9 +297,16 @@ def normalize(config, path, home=None, library_files=None):
                         source = str((project / source).resolve())
                         result["sources"][name] = {"path": source}
                     base_cache = {} if settings.get("preset") else deepcopy(defaults["cmake"]["cache"])
+                    default_phases = ["configure", "build"] if installation.get("in_place") else defaults["cmake"]["phases"]
                     options = {"source": "${sources." + name + "}", "cache": {**base_cache, **overrides},
-                               "phases": settings.get("phases", defaults["cmake"]["phases"]),
+                               "phases": settings.get("phases", default_phases),
                                "export": {**deepcopy(defaults["cmake"]["export"]), "package": name, "version": str(module.get("version", "0"))}}
+                    if installation.get("in_place"):
+                        options["in_place"] = True
+                    if settings.get("binary_dir"):
+                        options["binary_dir"] = settings["binary_dir"]
+                    if settings.get("lock"):
+                        options["lock"] = settings["lock"]
                     export = options["export"]
                     for key, target_key in (("environment", "activation"), ("cmake_dir", "cmake_dir"), ("features", "features")):
                         if key in installation:

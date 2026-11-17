@@ -1,0 +1,36 @@
+# In-place CBS build. jforge build run --source PATH selects the GAMBIT checkout.
+# Every preset shares ${sourceDir}/build, so this card does not pass -B.
+name: cbs-build
+platforms: [linux, darwin]
+dependencies:
+  - "cmake@3.24:"
+  - "boost@1.48:"
+  - "eigen@3.3.7:"
+  - "gsl@2.1:"
+  - "openblas+shared"
+  - "hdf5~mpi"
+  - zlib
+  - sqlite
+build:
+  name: CBS
+  version: "2.7.0"
+  source: ./gambit
+  in_place: true
+  required_files: [CBS]
+  cmake:
+    preset: cbs-gnu
+    binary_dir: preset
+    lock: source
+    targets: [CBS]
+    phases: [configure, build]
+checks:
+  before:
+    python:
+      version: ">=3.10"
+      development: true
+      modules: {yaml: ">=6", pybind11: ">=2.13.6"}
+    tools: {c++: ">=9.1", gfortran: ">=9.1", make: ">=3", git: ">=2"}
+  after:
+    scripts:
+      - path: scripts/cbs_acceptance.py
+        args: ["${path}"]

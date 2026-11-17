@@ -367,6 +367,14 @@ from .testing_cli import app as testing_app
 
 app.add_typer(testing_app, name="test")
 
+from .bench_cli import app as bench_app
+
+app.add_typer(bench_app, name="bench")
+
+from .executor_cli import app as executor_app
+
+app.add_typer(executor_app, name="executor")
+
 
 def _globals(argv: list[str]) -> list[str]:
     """Allow common options before/after commands, without parsing after '--'."""

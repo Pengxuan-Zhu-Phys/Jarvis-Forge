@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import fcntl
 import hashlib
 from importlib.resources import files
@@ -92,7 +92,11 @@ def load(path, *, home=None, library_files=None):
         producer = next(s for s in steps if s["id"] == output["step"])
         if producer["uses"] != "cmake.project" or "export" not in producer["with"]:
             raise ForgeError("An installation output requires a cmake.project export.")
-        if "install" not in producer["with"].get("phases", ["configure", "build", "install"]):
+        phases = producer["with"].get("phases", ["configure", "build", "install"])
+        if producer["with"].get("in_place"):
+            if "install" in phases:
+                raise ForgeError("An in-place build does not run the install phase.")
+        elif "install" not in phases:
             raise ForgeError("An installation output requires the install phase.")
     for requirement in config.get("requires", {}).values():
         try:
@@ -149,16 +153,18 @@ def host_requirements(config):
     return result
 
 
-def plan(home, reference, *, parameters=None, environment_name=None):
+def plan(home, reference, *, parameters=None, environment_name=None, source=None):
     value = graph(home, reference, parameters=parameters)
+    _apply_source_override(value, source)
     commands = []
     for key, node in value["nodes"].items():
         for step in node["ordered"]:
             if step["uses"] == "cmake.project":
                 options = step["with"]
+                build_dir = "<preset-binary-dir>" if options.get("binary_dir") == "preset" else "<instance>/build/" + step["id"]
+                prefix = "<source>" if options.get("in_place") else "<install-prefix>"
                 commands.append({"build": node["config"]["id"], "step": step["id"],
-                    "argv": cmake.commands(options, options["source"], "<instance>/build/" + step["id"],
-                                           "<install-prefix>")})
+                    "argv": cmake.commands(options, options["source"], build_dir, prefix)})
     return {"build_id": value["nodes"][value["root"]]["config"]["id"],
             "workspace": value["nodes"][value["root"]].get("workspace"),
             "cmake_commands": commands,
@@ -192,6 +198,39 @@ def file_lock(path, *, blocking=False, message=None):
             yield
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def source_cmake_lock(home, source):
+    """Lock one checkout's shared CMake tree without changing its source identity."""
+    source = Path(source).resolve()
+    git = source / ".git"
+    gitdir = None
+    if git.is_dir():
+        gitdir = git
+    elif git.is_file():
+        for line in git.read_text(errors="replace").splitlines():
+            if line.startswith("gitdir:"):
+                candidate = Path(line.split(":", 1)[1].strip())
+                gitdir = candidate if candidate.is_absolute() else (source / candidate).resolve()
+                break
+    if gitdir is not None:
+        return gitdir / "jforge-cmake.lock"
+    return home.root / "builds/source-locks" / hashlib.sha256(str(source).encode()).hexdigest() / "cmake.lock"
+
+
+def _apply_source_override(selected_graph, source):
+    """Point the root card's single local checkout at another directory."""
+    if source is None:
+        return
+    node = selected_graph["nodes"][selected_graph["root"]]
+    sources = node["config"].get("sources", {})
+    local = [name for name, item in sources.items() if isinstance(item, dict) and "path" in item]
+    if len(local) != 1:
+        raise ForgeError("--source overrides a card with exactly one local source directory.")
+    path = Path(source).expanduser().resolve()
+    if not path.is_dir():
+        raise ForgeError(f"Local source directory missing: {path}")
+    sources[local[0]] = {"path": str(path)}
 
 
 def _instance_directory(base, config, instance, *, installs=None):
@@ -265,6 +304,13 @@ def source_identity(source, parent):
     path = (parent / Path(source["path"]).expanduser()).resolve()
     if not path.is_dir():
         raise ForgeError(f"Local source directory missing: {path}")
+    # A git checkout's build writes ignored files into the tree. Hashing every
+    # file would change the identity after each build and force a rebuild.
+    from .testing_run import Source
+    git_id = Source(path).identity()
+    if git_id is not None:
+        recorded = {key: git_id[key] for key in ("commit", "tree", "dirty", "dirty_digest")}
+        return {"path": str(path), "git": recorded, "sha256": git_id["source_key"]}
     rows = []
     excluded = {".git", "build", "__pycache__", ".venv"}
 
@@ -300,6 +346,10 @@ def artifact(home, artifact_id):
     if value.get("status") != "ready":
         raise ForgeError(f"Artifact is not ready: {artifact_id}")
     cmake.verify_manifest(Path(value["prefix"]), value["files"])
+    if value.get("in_place"):
+        cache = Path(value.get("cmake_cache", ""))
+        if not cache.is_file() or digest(cache) != value.get("cmake_cache_sha256"):
+            raise ForgeError(f"In-place CMake cache changed: {cache}", code=1)
     for package in value.get("runtime_packages", []):
         if not Path(package["prefix"]).is_dir():
             raise ForgeError(f"Artifact runtime dependency is missing: {package['name']}", code=1)
@@ -500,7 +550,7 @@ def _matches_legacy_configure(saved, requested, argv, logs, source, environment)
     return False
 
 
-def execute(home, reference=None, *, parameters=None, environment_name=None, jobs=1, resume=None, progress=None, verbose=False, as_json=False):
+def execute(home, reference=None, *, parameters=None, environment_name=None, jobs=1, resume=None, source=None, progress=None, verbose=False, as_json=False):
     from . import toolchains
 
     if jobs < 1:
@@ -512,10 +562,13 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
         request = read_json(directory / "request.json")
         if request.get("kind") != "build":
             raise ForgeError("This run is not a project build.")
+        if source is not None:
+            raise ForgeError("Resume uses the saved source checkout.")
         selected_graph = read_json(directory / "graph.json")
         environment_name = request.get("environment_name")
     else:
         selected_graph = graph(home, reference, parameters=parameters)
+        _apply_source_override(selected_graph, source)
         apt_profile = _check_host(home, selected_graph)
         home.require_initialized()
         request = {"kind": "build", "run_id": run_id, "suite_id": selected_graph["nodes"][selected_graph["root"]]["config"]["id"],
@@ -676,8 +729,8 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     manifest = home.root / "builds/artifacts" / aid / "manifest.json"
                     if not manifest.exists():
                         continue
+                    saved = read_json(manifest)
                     if workspace:
-                        saved = read_json(manifest)
                         prefix = Path(saved["prefix"]) if isinstance(saved.get("prefix"), str) else Path(".")
                         # A deleted workspace leaves its manifest in Forge home.
                         # Keep it until a successful build replaces the output.
@@ -685,9 +738,17 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                                 and prefix.is_absolute() and prefix.resolve().is_relative_to(workspace / "instances")
                                 and not prefix.exists() and not prefix.is_symlink()):
                             continue
-                    existing_outputs[name] = artifact(home, aid)
-                    if apt and existing_outputs[name].get("apt") != apt:
+                    try:
+                        checked = artifact(home, aid)
+                    except ForgeError:
+                        # A manual rebuild in the same checkout changes the cache
+                        # or required files. Rebuild in place and register again.
+                        if not saved.get("in_place"):
+                            raise
+                        continue
+                    if apt and checked.get("apt") != apt:
                         raise ForgeError("The apt dependency selection changed during this build. Start a new run.")
+                    existing_outputs[name] = checked
                 if existing_outputs and len(existing_outputs) == len(config.get("outputs", {})):
                     row = {"status": "reused", "outputs": existing_outputs, "instance": instance}
                     state["nodes"][key] = {**old, **row, "apt_input": apt_input,
@@ -818,7 +879,11 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                                  "runtime_packages": producer.get("runtime_packages", []),
                                  "cmake_dir": metadata.get("cmake_dir"), "activation": producer["activation"],
                                  "dependencies": [v["artifact_id"] for v in dependencies.values()],
-                                 "evidence": evidence, "files": cmake.manifest(Path(producer["prefix"]))}
+                                 "evidence": evidence,
+                                 "files": producer["files"] if producer.get("in_place") else cmake.manifest(Path(producer["prefix"]))}
+                    if producer.get("in_place"):
+                        installed.update(in_place=True, cmake_cache=producer["cmake_cache"],
+                                         cmake_cache_sha256=producer["cmake_cache_sha256"])
                     if node_profile:
                         last_apt = next(records[step["id"]] for step in reversed(node["ordered"])
                                         if step["uses"] == "apt.install")
@@ -995,94 +1060,121 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
                 cmake.runtime_activation(Path(path)) for path in exported_dependencies
             ]))
         return {"status": "passed", "artifacts": artifacts, "activation": str(script), "runtime_activation": exported}
-    build = work / "build" / step["id"]
-    prefix = work / "install" / step["id"] if workspace else home.root / "builds/installs" / step["id"] / work.name
     source = Path(options["source"])
     if not source.is_dir():
         raise ForgeError(f"CMake source not found: {source}")
-    build.mkdir(parents=True, exist_ok=True)
-    configured = json.loads(json.dumps(options))
-    cache = configured.setdefault("cache", {})
-    if toolchain:
-        from .toolchains import cmake_runtime_paths
+    if options.get("binary_dir") == "preset":
+        preset_name = options.get("configure_preset")
+        if not isinstance(preset_name, str) or not preset_name:
+            raise ForgeError("binary_dir preset requires configure_preset.")
+        build = cmake.preset_binary_dir(source, preset_name)
+    else:
+        build = work / "build" / step["id"]
+    # An in-place artifact is the source tree. CBS writes CBS into that tree.
+    prefix = source if options.get("in_place") else (
+        work / "install" / step["id"] if workspace else home.root / "builds/installs" / step["id"] / work.name)
+    lock = file_lock(source_cmake_lock(home, source), blocking=True,
+                     message=f"CMake source is busy: {source}") if options.get("lock") == "source" else nullcontext()
+    with lock:
+        build.mkdir(parents=True, exist_ok=True)
+        configured = json.loads(json.dumps(options))
+        cache = configured.setdefault("cache", {})
+        if toolchain:
+            from .toolchains import cmake_runtime_paths
 
-        cmake_runtime_paths(toolchain, cache)
-    python_artifacts = {}
-    for dependency in used:
-        python = dependency.get("report", {}).get("python", {})
-        if (python.get("development") and python["path"] == observed.get("python", {}).get("path")
-                and cache.get("Python3_EXECUTABLE", {}).get("value") == python["path"]):
-            for variable, kind, path in (
-                ("Python3_INCLUDE_DIR", "PATH", str(Path(python["header"]).parent)),
-                ("Python3_LIBRARY", "FILEPATH", python["library"]),
-            ):
-                if variable not in cache:
-                    cache[variable] = {"type": kind, "value": path}
-                    python_artifacts[variable] = path
-    for key, value in observed.items():
-        variable = {"CC": "CMAKE_C_COMPILER", "CXX": "CMAKE_CXX_COMPILER", "FC": "CMAKE_Fortran_COMPILER", "python": "Python3_EXECUTABLE"}.get(key)
-        if variable is None:
-            continue
-        cache.setdefault(variable, {"type": "FILEPATH", "value": value["path"]})
-    for dependency in used:
-        if dependency.get("package") and dependency.get("cmake_dir"):
-            variable = dependency["package"] + "_DIR"
-            cache[variable] = {"type": "PATH", "value": str(Path(dependency["prefix"]) / dependency["cmake_dir"])}
-    selected_standard = str(cache.get("CMAKE_CXX_STANDARD", {}).get("value", "unspecified"))
-    if context["cxx_standard"] != "unspecified" and context["cxx_standard"] != selected_standard:
-        raise ForgeError("CMake C++ standard must match the declared cxx_standard parameter.")
-    invocation = cmake.commands(configured, source, build, prefix, jobs=jobs)
-    marker = build / ".jforge-configure.json"
-    for phase in options.get("phases", ["configure", "build", "install"]):
-        if phase == "configure":
-            argv = invocation["configure"]
-            requested = _configure_fingerprint(argv, script, source, environment)
-            if marker.exists():
-                saved = read_json(marker)
-                if saved["fingerprint"] == requested or (saved.get("schema_version") is None
-                        and _matches_legacy_configure(saved["fingerprint"], requested, argv, logs, source, environment)):
-                    if saved.get("schema_version") != 2:
-                        write_json(marker, {"schema_version": 2, "fingerprint": requested})
-                    progress("Reuse CMake configuration")
-                    continue
-                raise ForgeError("CMake configuration changed; use a new build instance.")
-            query = build / ".cmake/api/v1/query"
-            query.mkdir(parents=True, exist_ok=True)
-            for kind in ("codemodel-v2", "cache-v2", "toolchains-v1"):
-                (query / kind).touch()
-        title = f"CMake {phase}"
-        progress("  " + title, component="CMake", echo=not verbose)
-        invoke(invocation[phase], source, title)
-        if phase == "configure":
-            actual = cmake.cache_values(build)
-            for dep in used:
-                if dep.get("package") and dep.get("cmake_dir"):
-                    expected = Path(dep["prefix"]) / dep["cmake_dir"]
-                    if Path(actual.get(dep["package"] + "_DIR", "")).resolve() != expected.resolve():
-                        raise ForgeError("CMake selected a different dependency installation.", code=1)
-            if "CMAKE_CXX_STANDARD" in cache and str(cache["CMAKE_CXX_STANDARD"]["value"]) != actual.get("CMAKE_CXX_STANDARD"):
-                raise ForgeError("CMake selected a different C++ standard.", code=1)
-            for selected, variable in (("CC", "CMAKE_C_COMPILER"), ("CXX", "CMAKE_CXX_COMPILER"), ("FC", "CMAKE_Fortran_COMPILER")):
-                if selected in observed and actual.get(variable) and Path(actual[variable]).resolve() != Path(observed[selected]["path"]).resolve():
-                    raise ForgeError(f"CMake selected a different {selected}; select it in the environment instead.", code=1)
-            for variable, resolved in (("Python3_INCLUDE_DIR", "_Python3_INCLUDE_DIR"),
-                                       ("Python3_LIBRARY", "_Python3_LIBRARY_RELEASE")):
-                if variable in python_artifacts:
-                    path = actual.get(resolved) or actual.get(variable)
-                    if path and Path(path).resolve() != Path(python_artifacts[variable]).resolve():
-                        raise ForgeError(f"CMake selected {path} for {variable}, expected {python_artifacts[variable]}.", code=1)
-            write_json(logs / "cmake-cache.json", actual)
-            shutil.copyfile(build / "CMakeCache.txt", logs / "CMakeCache.txt")
-            write_json(marker, {"schema_version": 2, "fingerprint": requested})
-    reply = build / ".cmake/api/v1/reply"
-    if reply.is_dir():
-        shutil.copytree(reply, logs / "cmake-file-api", dirs_exist_ok=True)
-    for name in options.get("required_files", []):
-        if not (prefix / name).is_file():
-            raise ForgeError(f"Installed file missing: {prefix / name}", code=1)
+            cmake_runtime_paths(toolchain, cache)
+        python_artifacts = {}
+        for dependency in used:
+            python = dependency.get("report", {}).get("python", {})
+            if (python.get("development") and python["path"] == observed.get("python", {}).get("path")
+                    and cache.get("Python3_EXECUTABLE", {}).get("value") == python["path"]):
+                for variable, kind, path in (
+                    ("Python3_INCLUDE_DIR", "PATH", str(Path(python["header"]).parent)),
+                    ("Python3_LIBRARY", "FILEPATH", python["library"]),
+                ):
+                    if variable not in cache:
+                        cache[variable] = {"type": kind, "value": path}
+                        python_artifacts[variable] = path
+        for key, value in observed.items():
+            variable = {"CC": "CMAKE_C_COMPILER", "CXX": "CMAKE_CXX_COMPILER", "FC": "CMAKE_Fortran_COMPILER", "python": "Python3_EXECUTABLE"}.get(key)
+            if variable is None:
+                continue
+            cache.setdefault(variable, {"type": "FILEPATH", "value": value["path"]})
+        for dependency in used:
+            if dependency.get("package") and dependency.get("cmake_dir"):
+                variable = dependency["package"] + "_DIR"
+                cache[variable] = {"type": "PATH", "value": str(Path(dependency["prefix"]) / dependency["cmake_dir"])}
+        selected_standard = str(cache.get("CMAKE_CXX_STANDARD", {}).get("value", "unspecified"))
+        if context["cxx_standard"] != "unspecified" and context["cxx_standard"] != selected_standard:
+            raise ForgeError("CMake C++ standard must match the declared cxx_standard parameter.")
+        invocation = cmake.commands(configured, source, build, prefix, jobs=jobs)
+        marker = build / ".jforge-configure.json"
+        for phase in options.get("phases", ["configure", "build", "install"]):
+            if phase == "configure":
+                argv = invocation["configure"]
+                requested = _configure_fingerprint(argv, script, source, environment)
+                if marker.exists():
+                    saved = read_json(marker)
+                    if saved["fingerprint"] == requested or (saved.get("schema_version") is None
+                            and _matches_legacy_configure(saved["fingerprint"], requested, argv, logs, source, environment)):
+                        if saved.get("schema_version") != 2:
+                            write_json(marker, {"schema_version": 2, "fingerprint": requested})
+                        progress("Reuse CMake configuration")
+                        continue
+                    # A preset binary directory is shared by the checkout, so a source
+                    # change reconfigures it instead of demanding a private build tree.
+                    if options.get("binary_dir") != "preset":
+                        raise ForgeError("CMake configuration changed; use a new build instance.")
+                query = build / ".cmake/api/v1/query"
+                query.mkdir(parents=True, exist_ok=True)
+                for kind in ("codemodel-v2", "cache-v2", "toolchains-v1"):
+                    (query / kind).touch()
+            title = f"CMake {phase}"
+            progress("  " + title, component="CMake", echo=not verbose)
+            invoke(invocation[phase], source, title)
+            if phase == "configure":
+                actual = cmake.cache_values(build)
+                for dep in used:
+                    if dep.get("package") and dep.get("cmake_dir"):
+                        expected = Path(dep["prefix"]) / dep["cmake_dir"]
+                        if Path(actual.get(dep["package"] + "_DIR", "")).resolve() != expected.resolve():
+                            raise ForgeError("CMake selected a different dependency installation.", code=1)
+                if "CMAKE_CXX_STANDARD" in cache and str(cache["CMAKE_CXX_STANDARD"]["value"]) != actual.get("CMAKE_CXX_STANDARD"):
+                    raise ForgeError("CMake selected a different C++ standard.", code=1)
+                for selected, variable in (("CC", "CMAKE_C_COMPILER"), ("CXX", "CMAKE_CXX_COMPILER"), ("FC", "CMAKE_Fortran_COMPILER")):
+                    if selected in observed and actual.get(variable) and Path(actual[variable]).resolve() != Path(observed[selected]["path"]).resolve():
+                        raise ForgeError(f"CMake selected a different {selected}; select it in the environment instead.", code=1)
+                for variable, resolved in (("Python3_INCLUDE_DIR", "_Python3_INCLUDE_DIR"),
+                                           ("Python3_LIBRARY", "_Python3_LIBRARY_RELEASE")):
+                    if variable in python_artifacts:
+                        path = actual.get(resolved) or actual.get(variable)
+                        if path and Path(path).resolve() != Path(python_artifacts[variable]).resolve():
+                            raise ForgeError(f"CMake selected {path} for {variable}, expected {python_artifacts[variable]}.", code=1)
+                write_json(logs / "cmake-cache.json", actual)
+                shutil.copyfile(build / "CMakeCache.txt", logs / "CMakeCache.txt")
+                write_json(marker, {"schema_version": 2, "fingerprint": requested})
+        reply = build / ".cmake/api/v1/reply"
+        if reply.is_dir():
+            shutil.copytree(reply, logs / "cmake-file-api", dirs_exist_ok=True)
+        cache_record = {}
+        for name in options.get("required_files", []):
+            if Path(name).is_absolute() or ".." in Path(name).parts:
+                raise ForgeError(f"Required file must stay inside the build prefix: {name}")
+            file = prefix / name
+            if not file.is_file():
+                raise ForgeError(f"Installed file missing: {file}", code=1)
+            if options.get("in_place"):
+                cache_record.setdefault("files", {})[name] = (
+                    {"link": os.readlink(file)} if file.is_symlink() else {"sha256": digest(file)})
+        if options.get("in_place"):
+            cache_file = build / "CMakeCache.txt"
+            if not cache_file.is_file():
+                raise ForgeError(f"In-place build has no CMake cache: {cache_file}", code=1)
+            cache_record.update(in_place=True, files=cache_record.get("files", {}),
+                                cmake_cache=str(cache_file), cmake_cache_sha256=digest(cache_file))
     metadata = options.get("export")
     if not metadata:
-        return {"status": "passed", "prefix": str(prefix), "activation": str(script)}
+        return {"status": "passed", "prefix": str(prefix), "activation": str(script), **cache_record}
     if context["cxx_standard"] == "unspecified":
         actual_standard = cmake.cache_values(build).get("CMAKE_CXX_STANDARD")
         if actual_standard:
@@ -1103,7 +1195,10 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
     for name in [metadata.get("cmake_dir"), metadata.get("activation")]:
         if name and not (prefix / name).exists():
             raise ForgeError(f"Export path missing: {prefix / name}", code=1)
-    exported_paths.setdefault("CMAKE_PREFIX_PATH", []).insert(0, str(prefix))
+    if options.get("in_place"):
+        exported_paths.setdefault("PATH", []).insert(0, str(prefix))
+    else:
+        exported_paths.setdefault("CMAKE_PREFIX_PATH", []).insert(0, str(prefix))
     # Consumer environments must not inherit the producer's compiler/Python/PATH.
     # Dependency activation scripts and explicit paths carry the runtime closure.
     activation = work / (step["id"] + "-activate.sh")
@@ -1126,7 +1221,7 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
     return {"status": "passed", "prefix": str(prefix), "activation": str(activation), "runtime_packages": runtime_packages,
             "package": metadata["package"], "cmake_dir": metadata.get("cmake_dir"),
             "version": metadata["version"], "features": metadata.get("features", []),
-            "export": metadata, "evidence": evidence}
+            "export": metadata, "evidence": evidence, **cache_record}
 
 
 def step_path(home, run_id, step_name, *, pending=False):

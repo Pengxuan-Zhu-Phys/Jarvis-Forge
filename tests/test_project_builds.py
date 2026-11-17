@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -854,6 +855,7 @@ def test_higgstools_dataset_install_matches_the_pin(tmp_path):
 @pytest.mark.parametrize("name,requirements", [
     ("root-build", {"platforms": ["linux"], "apt_backend": "spack"}),
     ("CEPC-build", {"platforms": ["linux"], "apt_backend": "spack"}),
+    ("mg5-pythia8", {"platforms": ["linux"], "apt_backend": "spack"}),
 ])
 def test_linux_recipe_rejected_on_macos_before_run(home, name, requirements, monkeypatch, capsys):
     path = Path(__file__).parents[1] / "builds" / f"{name}.yaml"
@@ -1323,3 +1325,182 @@ def test_workspace_publishes_a_safe_entry_for_an_existing_legacy_artifact(tmp_pa
         'set +e; set +o pipefail; source "$1"; false | true; printf "%s %s\\n" "$ROOTSYS" "$?"; false; echo survived',
         "fixture", str(tmp_path / "activate.sh")], text=True, capture_output=True)
     assert result.returncode == 0 and result.stdout == "fixture 0\nsurvived\n"
+
+
+def test_cmake_preset_argv_omits_binary_dir_and_install_prefix():
+    commands = cmake.commands(
+        {"configure_preset": "cbs-gnu", "binary_dir": "preset", "in_place": True, "targets": ["CBS"]},
+        Path("/source"), Path("/build"), Path("/prefix"), jobs=2)
+    assert "-B" not in commands["configure"]
+    assert "--preset" in commands["configure"] and "cbs-gnu" in commands["configure"]
+    assert not any(item.startswith("-DCMAKE_INSTALL_PREFIX") for item in commands["configure"])
+    assert commands["build"][1:3] == ["--build", "/build"]
+
+
+def test_preset_binary_dir_follows_hidden_parent(tmp_path):
+    source = tmp_path / "checkout"
+    source.mkdir()
+    (source / "CMakePresets.json").write_text(json.dumps({
+        "version": 3,
+        "include": ["extra.json"],
+        "configurePresets": [
+            {"name": "cbs-base", "hidden": True, "binaryDir": "${sourceDir}/build"},
+        ],
+    }))
+    (source / "extra.json").write_text(json.dumps({
+        "version": 3,
+        "configurePresets": [{"name": "cbs-gnu", "inherits": "cbs-base"}],
+    }))
+    assert cmake.preset_binary_dir(source, "cbs-gnu") == (source / "build").resolve()
+    with pytest.raises(ForgeError, match="not found"):
+        cmake.preset_binary_dir(source, "missing")
+
+
+def _inplace_source(tmp_path):
+    source = tmp_path / "tool-src"
+    source.mkdir()
+    (source / "tool.cpp").write_text("int main(){return 0;}\n")
+    (source / "CMakeLists.txt").write_text(
+        "cmake_minimum_required(VERSION 3.20)\nproject(Tool LANGUAGES CXX)\nadd_executable(tool tool.cpp)\n")
+    (source / "CMakePresets.json").write_text(json.dumps({
+        "version": 3,
+        "configurePresets": [
+            {"name": "base", "hidden": True, "generator": "Unix Makefiles", "binaryDir": "${sourceDir}/build"},
+            {"name": "default", "inherits": "base"},
+        ],
+    }))
+    return source
+
+
+def _inplace_card(directory, source):
+    path = directory / "inplace.yaml"
+    path.write_text(yaml.safe_dump({
+        "name": "inplace-build",
+        "build": {
+            "name": "Tool", "version": "1.0", "source": str(source), "in_place": True,
+            "required_files": ["build/tool"],
+            "cmake": {
+                "preset": "default", "binary_dir": "preset", "lock": "source",
+                "targets": ["tool"], "phases": ["configure", "build"],
+                "options": {"CMAKE_CXX_STANDARD": 17},
+            },
+        },
+    }, sort_keys=False))
+    return path
+
+
+def test_in_place_preset_build_reuses_until_the_cache_changes(home, tmp_path):
+    if not shutil.which("cmake") or not shutil.which("make"):
+        pytest.skip("CMake and make are required")
+    source = _inplace_source(tmp_path)
+    path = _inplace_card(tmp_path, source)
+    loaded = builds.load(path)
+    step = next(item for item in loaded["config"]["steps"] if item["uses"] == "cmake.project")
+    assert step["with"]["in_place"] is True
+    assert step["with"]["binary_dir"] == "preset"
+    assert step["with"]["lock"] == "source"
+    assert "install" not in step["with"]["phases"]
+    planned = builds.plan(home, path)
+    configure = planned["cmake_commands"][0]["argv"]["configure"]
+    assert "-B" not in configure
+    assert planned["cmake_commands"][0]["argv"]["build"][2] == "<preset-binary-dir>"
+    first = builds.execute(home, path, jobs=2)
+    assert first["status"] == "passed", first
+    output = first["outputs"]["installation"]
+    assert Path(output["prefix"]) == source.resolve()
+    assert (source / "build" / "tool").is_file()
+    activation = Path(output["activation"]).read_text()
+    assert str(source.resolve()) in activation
+    assert "CMAKE_PREFIX_PATH" not in activation
+    second = builds.execute(home, path, jobs=2)
+    assert second["status"] == "passed", second
+    assert all(node["status"] == "reused" for node in second["nodes"].values())
+    cache = source / "build" / "CMakeCache.txt"
+    cache.write_text(cache.read_text() + "\n# jforge tamper\n")
+    with pytest.raises(ForgeError, match="CMake cache changed"):
+        builds.artifact(home, output["artifact_id"])
+    third = builds.execute(home, path, jobs=2)
+    assert third["status"] == "passed", third
+    assert all(node["status"] == "passed" for node in third["nodes"].values())
+    builds.artifact(home, output["artifact_id"])
+    (source / "build" / "tool").unlink()
+    with pytest.raises(ForgeError, match="missing or modified"):
+        builds.artifact(home, output["artifact_id"])
+    rebuilt = builds.execute(home, path, jobs=2)
+    assert rebuilt["status"] == "passed", rebuilt
+    assert (source / "build" / "tool").is_file()
+
+
+def test_in_place_card_rejects_the_install_phase(tmp_path):
+    source = _inplace_source(tmp_path)
+    path = _inplace_card(tmp_path, source)
+    config = yaml.safe_load(path.read_text())
+    config["build"]["cmake"]["phases"] = ["configure", "build", "install"]
+    path.write_text(yaml.safe_dump(config))
+    with pytest.raises(ForgeError, match="in-place"):
+        builds.load(path)
+
+
+def test_git_source_identity_ignores_gitignored_files(tmp_path):
+    if not shutil.which("git"):
+        pytest.skip("git is required")
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "tracked.txt").write_text("one\n")
+    (source / ".gitignore").write_text("build/\nignored.txt\n")
+    env = {**os.environ, "GIT_AUTHOR_NAME": "Forge", "GIT_AUTHOR_EMAIL": "forge@example.com",
+           "GIT_COMMITTER_NAME": "Forge", "GIT_COMMITTER_EMAIL": "forge@example.com"}
+    subprocess.run(["git", "init"], cwd=source, check=True, env=env)
+    subprocess.run(["git", "add", "."], cwd=source, check=True, env=env)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=source, check=True, env=env)
+    spec = {"path": str(source)}
+    first = builds.source_identity(spec, tmp_path)
+    assert first["git"]["commit"] and first["git"]["dirty"] is False
+    (source / "build").mkdir()
+    (source / "build" / "generated").write_text("out\n")
+    (source / "ignored.txt").write_text("skip\n")
+    assert builds.source_identity(spec, tmp_path) == first
+    (source / "tracked.txt").write_text("two\n")
+    edited = builds.source_identity(spec, tmp_path)
+    assert edited["sha256"] != first["sha256"] and edited["git"]["dirty"] is True
+    (source / "tracked.txt").write_text("one\n")
+    (source / "new.txt").write_text("extra\n")
+    added = builds.source_identity(spec, tmp_path)
+    assert added["sha256"] != first["sha256"]
+
+
+def test_source_override_selects_another_checkout(home, projects, tmp_path):
+    producer, _ = projects
+    config = yaml.safe_load(producer.read_text())
+    original = Path(config["sources"]["tiny"]["path"])
+    other = tmp_path / "other-src"
+    shutil.copytree(original, other)
+    (other / "tiny.cpp").write_text("int forge_value(){return 7;}\n")
+    overridden = builds.execute(home, producer, source=other)
+    assert overridden["status"] == "passed", overridden
+    saved = read_json(Path(overridden["path"]) / "graph.json")
+    node = saved["nodes"][saved["root"]]
+    assert node["config"]["sources"]["tiny"]["path"] == str(other.resolve())
+    plain = builds.execute(home, producer)
+    assert plain["status"] == "passed", plain
+    assert plain["outputs"]["installation"]["artifact_id"] != overridden["outputs"]["installation"]["artifact_id"]
+    with pytest.raises(ForgeError, match="saved source"):
+        builds.execute(home, resume=overridden["run_id"], source=original)
+
+
+def test_source_lock_lives_in_the_git_directory(home, tmp_path):
+    if not shutil.which("git"):
+        pytest.skip("git is required")
+    source = tmp_path / "checkout"
+    source.mkdir()
+    subprocess.run(["git", "init"], cwd=source, check=True)
+    lock = builds.source_cmake_lock(home, source)
+    assert lock == (source / ".git" / "jforge-cmake.lock").resolve()
+    with builds.file_lock(lock, blocking=True):
+        with pytest.raises(ForgeError, match="busy"):
+            with builds.file_lock(lock):
+                pass
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    other = builds.source_cmake_lock(home, loose)
+    assert other.is_relative_to(home.root / "builds/source-locks")

@@ -1,0 +1,16 @@
+# MadGraph5_aMC 3.6.3, Pythia8, HepMC3 and LHAPDF. Spack installs every package.
+name: mg5-pythia8
+platforms: [linux]
+dependencies:
+  - "hepmc3@3.3:"
+  - "lhapdf@6.5:"
+  - "pythia8@8.316 +hepmc3 +lhapdf"
+  - "jforge-mg5amc@3.6.3 +pythia8"
+checks:
+  before:
+    python: {version: ">=3.10"}
+    tools: {c++: ">=9", gfortran: ">=9", make: ">=3"}
+  after:
+    scripts:
+      - path: scripts/mg5_pythia8_acceptance.py
+        args: ["${packages.jforge-mg5amc.prefix}", "${work}"]

@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
+import sys
 
 from .storage import ForgeError, digest, write_text
 
@@ -17,14 +19,18 @@ CHILD_ENVIRONMENT_FILES = {"environment.sh", "runtime-environment.sh"}
 def commands(options, source, build, prefix, *, jobs=1):
     """Return literal argv, including native presets and typed cache entries."""
     cmake = options.get("executable", "cmake")
-    configure = [cmake, "-S", str(source), "-B", str(build)]
+    # A preset owns its binary directory. Passing -B would override ${sourceDir}/build.
+    configure = [cmake, "-S", str(source)]
+    if options.get("binary_dir") != "preset":
+        configure += ["-B", str(build)]
     if options.get("configure_preset"):
         configure += ["--preset", options["configure_preset"]]
     if options.get("generator"):
         configure += ["-G", options["generator"]]
     if options.get("toolchain_file"):
         configure += ["--toolchain", options["toolchain_file"]]
-    configure += [f"-DCMAKE_INSTALL_PREFIX:PATH={prefix}"]
+    if not options.get("in_place"):
+        configure += [f"-DCMAKE_INSTALL_PREFIX:PATH={prefix}"]
     for key, entry in options.get("cache", {}).items():
         value = entry["value"]
         if isinstance(value, bool):
@@ -201,3 +207,138 @@ def verify_manifest(prefix, records):
             path.is_file() and not path.is_symlink() and digest(path) == expected["sha256"])
         if not good:
             raise ForgeError(f"Installed artifact is missing or modified: {path}", code=1)
+
+
+_PRESET_MACRO = re.compile(
+    r"\$\{([A-Za-z0-9_]+)\}|\$env\{([A-Za-z_][A-Za-z0-9_]*)\}|\$penv\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def preset_binary_dir(source, name):
+    """Resolve one configure preset's binaryDir, including hidden parents."""
+    source = Path(source).resolve()
+    presets = _configure_presets(source)
+    if name not in presets:
+        known = ", ".join(sorted(presets)) or "none"
+        raise ForgeError(f"CMake configure preset not found: {name}. Known presets: {known}.")
+    resolved = _resolve_preset(presets, name, [])
+    binary = resolved.get("binaryDir")
+    if not isinstance(binary, str) or not binary:
+        raise ForgeError(f"CMake preset {name} has no binaryDir.")
+    expanded = _expand_preset_path(binary, source=source, preset=name,
+                                   file_dir=Path(resolved.get("_file_dir", source)),
+                                   generator=resolved.get("generator") or "")
+    path = Path(expanded)
+    if not path.is_absolute():
+        path = source / path
+    return path.resolve()
+
+
+def _configure_presets(source):
+    collected = {}
+    for filename in ("CMakePresets.json", "CMakeUserPresets.json"):
+        path = source / filename
+        if path.is_file():
+            _load_presets(path, collected, set())
+    if not collected:
+        raise ForgeError(f"No CMake configure presets in {source}.")
+    return collected
+
+
+def _load_presets(path, collected, seen):
+    path = path.resolve()
+    if path in seen:
+        return
+    seen.add(path)
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ForgeError(f"Cannot read CMake presets {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ForgeError(f"CMake presets must be a JSON object: {path}")
+    includes = data.get("include") or []
+    if isinstance(includes, str):
+        includes = [includes]
+    if not isinstance(includes, list):
+        raise ForgeError(f"CMake preset include must be a list: {path}")
+    for item in includes:
+        if not isinstance(item, str) or not item:
+            raise ForgeError(f"CMake preset include must be a path: {path}")
+        included = Path(item)
+        if not included.is_absolute():
+            included = path.parent / included
+        if not included.is_file():
+            raise ForgeError(f"CMake preset include not found: {included}")
+        _load_presets(included, collected, seen)
+    presets = data.get("configurePresets") or []
+    if not isinstance(presets, list):
+        raise ForgeError(f"configurePresets must be a list: {path}")
+    for preset in presets:
+        if not isinstance(preset, dict) or not isinstance(preset.get("name"), str) or not preset["name"]:
+            raise ForgeError(f"CMake configure preset in {path} has no name.")
+        preset_name = preset["name"]
+        if preset_name in collected:
+            raise ForgeError(f"Duplicate CMake configure preset: {preset_name}")
+        collected[preset_name] = {**preset, "_file_dir": str(path.parent)}
+
+
+def _resolve_preset(presets, name, stack):
+    if name in stack:
+        raise ForgeError("Cyclic CMake preset inheritance: " + " -> ".join([*stack, name]))
+    item = presets[name]
+    inherits = item.get("inherits") or []
+    if isinstance(inherits, str):
+        inherits = [inherits]
+    if not isinstance(inherits, list) or not all(isinstance(parent, str) for parent in inherits):
+        raise ForgeError(f"CMake preset {name} has an invalid inherits value.")
+    merged = {}
+    for parent in inherits:
+        if parent not in presets:
+            raise ForgeError(f"CMake preset {name} inherits unknown preset {parent}.")
+        parent_values = _resolve_preset(presets, parent, stack + [name])
+        for key, value in parent_values.items():
+            if key == "_file_dir":
+                continue
+            if key == "cacheVariables" and isinstance(merged.get(key), dict) and isinstance(value, dict):
+                merged[key] = {**merged[key], **value}
+            else:
+                merged[key] = value
+        if "binaryDir" in parent_values and "_file_dir" in parent_values:
+            merged["_file_dir"] = parent_values["_file_dir"]
+    for key, value in item.items():
+        if key == "_file_dir":
+            if "binaryDir" in item:
+                merged["_file_dir"] = value
+            continue
+        if key == "cacheVariables" and isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
+def _expand_preset_path(value, *, source, preset, file_dir, generator):
+    host = {"linux": "Linux", "darwin": "Darwin", "win32": "Windows"}.get(sys.platform, sys.platform)
+    mapping = {"sourceDir": str(source), "sourceParentDir": str(source.parent), "sourceDirName": source.name,
+               "presetName": preset, "generator": generator, "hostSystemName": host, "fileDir": str(file_dir)}
+
+    def replace(match):
+        if match.group(1):
+            key = match.group(1)
+            if key not in mapping:
+                raise ForgeError(f"Unsupported CMake preset macro ${{{key}}} in binaryDir.")
+            return mapping[key]
+        if match.group(2):
+            if match.group(2) not in os.environ:
+                raise ForgeError(f"CMake preset environment variable is unset: {match.group(2)}")
+            return os.environ[match.group(2)]
+        return os.environ.get(match.group(3), "")
+
+    current = value
+    for _ in range(8):
+        updated = _PRESET_MACRO.sub(replace, current)
+        if updated == current:
+            break
+        current = updated
+    if "${" in current or "$env{" in current or "$penv{" in current:
+        raise ForgeError(f"Unresolved CMake preset binaryDir: {value}")
+    return current

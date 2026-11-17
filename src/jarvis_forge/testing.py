@@ -130,6 +130,8 @@ def _standard(spec):
 
 
 def check_kind(check):
+    if "uses" in check:
+        return "bench"
     if "argv" in check:
         return "argv"
     if "build" in check:
