@@ -191,7 +191,7 @@ def current(home):
     if file.exists() and not value:
         raise ForgeError(
             "This is an archived source package environment.",
-            hint="jforge apt import spack\njforge list --archived",
+            hint="jforge apt import spack\njforge apt instances --archived",
         )
     return value or {
         "schema_version": 1,

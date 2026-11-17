@@ -9,7 +9,8 @@ from . import toolchains
 from .apt_progress import AptProgress
 from .cli import _console, emit
 
-app = typer.Typer(help="Install and verify user-local Linux compiler toolchains.")
+app = typer.Typer(help="Install and verify user-local Linux compiler toolchains.",
+                  context_settings={"help_option_names": ["-h", "--help"]})
 
 
 @app.command("list")

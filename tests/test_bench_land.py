@@ -324,7 +324,7 @@ def test_max_queued_submits_one_wave_and_cancel_scancels(home, tmp_path, slurm, 
     assert state["jobs"][jobs[0]["id"]]["state"] == "CANCELLED"
     status = bench.card_status(home, card)
     assert status["accepted"] is False
-    code = main(["--home", str(home.root), "executor", "show", "hpc"])
+    code = main(["--home", str(home.root), "bench", "executor", "show", "hpc"])
     assert code == 0
 
 

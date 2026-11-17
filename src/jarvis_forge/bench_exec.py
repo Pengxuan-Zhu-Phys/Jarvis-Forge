@@ -35,7 +35,7 @@ def load_executor(home, name):
     path = home.root / "executors" / f"{name}.yaml"
     if not path.is_file():
         if name != "local":
-            raise ForgeError(f"Executor not found: {name}", hint="jforge executor add NAME --file site.yaml")
+            raise ForgeError(f"Executor not found: {name}", hint="jforge bench executor add NAME --file site.yaml")
         return {"name": "local", "kind": "local", "machine_class": None, "data_root": None}
     try:
         raw = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueLoader)

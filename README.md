@@ -2,7 +2,9 @@
 
 Jarvis-Forge is an independent Python package for user-space software environments and command-based acceptance workflows on scientific workstations and HPC systems. Its CLI is `jforge`.
 
-Forge runs local command suites and preserves their evidence. Its `jforge apt` command uses a pinned, user-local Spack installation on Linux and an existing Homebrew installation on macOS by default. Old source installations remain queryable as archived records. Named environments keep private, versioned shell copies in one shared user directory. Managed services, Slurm submission, scientific comparison policies, and the `Jarvis forge` forwarding command are planned extensions.
+Forge runs local command suites, test cards, and benchmark cards, and preserves their evidence. Its `jforge apt` command uses a pinned, user-local Spack installation on Linux and an existing Homebrew installation on macOS by default. Old source installations remain queryable as archived records. Named environments keep private, versioned shell copies in one shared user directory. Benchmark cards can submit Slurm array jobs through `jforge bench`. Managed services, suite-level scientific comparison policies, and the `Jarvis forge` forwarding command are planned extensions.
+
+The root commands are `apt`, `env`, `build`, `test`, `bench`, `suite`, `history`, `show`, `logs`, `init`, and `doctor`.
 
 ## Install
 
@@ -34,25 +36,25 @@ These commands create a private Forge user directory under the current directory
 
 ```bash
 jforge --home .forge-home init
-jforge example --output smoke.yaml
-jforge validate smoke.yaml
-jforge plan smoke.yaml
-jforge --home .forge-home run smoke.yaml
-jforge --home .forge-home run smoke.yaml
+jforge suite example --output smoke.yaml
+jforge suite validate smoke.yaml
+jforge suite plan smoke.yaml
+jforge --home .forge-home suite run smoke.yaml
+jforge --home .forge-home suite run smoke.yaml
 jforge --home .forge-home history --suite forge-smoke
 ```
 
-Copy the run IDs printed by `run` or listed by `history`:
+Copy the run IDs printed by `suite run` or listed by `history`:
 
 ```bash
 jforge --home .forge-home show <run-id>
 jforge --home .forge-home logs <run-id> --step calculate
-jforge --home .forge-home compare <older-run-id> <newer-run-id>
+jforge --home .forge-home suite compare <older-run-id> <newer-run-id>
 ```
 
 Text results use standalone headings and record summaries suitable for SSH terminals. Paths and commands are emitted as complete lines; the terminal may visually wrap them without inserted line breaks. `apt update` refreshes the selected backend's recipe metadata. Full structured fields remain available with `--json`.
 
-`--json`, `--home` and `--debug` work before or after the command. `--json` emits one JSON object on stdout, while progress goes to stderr. `compare --check` fails on changed, missing, corrupted or unsuccessful evidence; ordinary comparison only describes differences. Comparison uses exact artifact bytes; scientific equivalence and performance regression policies remain outside the current comparison mode.
+`--json`, `--home` and `--debug` work before or after the command. `--json` emits one JSON object on stdout, while progress goes to stderr. `suite compare --check` fails on changed, missing, corrupted or unsuccessful evidence; ordinary comparison only describes differences. Comparison uses exact artifact bytes; scientific equivalence and performance regression policies remain outside the current comparison mode.
 
 ## Automatic shell activation (Bash and Zsh)
 
@@ -70,13 +72,13 @@ The shell entry for each environment is a short, stable script next to its metad
 
 `jforge env switch <name>` selects `apt` or a named environment for new shells. With the Forge hook loaded, the current shell loads it when the command returns. Without the hook, the current shell stays unchanged. `jforge env detach` clears that selection. The environment files remain. `jforge env current` shows the selection. `jforge env drop root-build` removes that build from the apt environment and leaves the installation on disk; the next successful `root-build` adds it again. `jforge env list` shows shell environments and package profiles separately: switch an environment with `env switch`, and select a package profile with `apt profile`. `jforge env metadata [name]` prints the metadata file for that environment. With no name, it prints the selected environment.
 
-Spack package names are cached during import/update. `apt list` shows installed packages in the selected profile, with version, requested/dependency kind and state. Requested packages appear first, followed by dependencies, sorted by name. Use `apt list --available` or `apt search` for the cached package catalog. Complete catalog listings are printed as compact lines. Use `apt show <package>` for installation paths and instance metadata, or `--json` for complete records. `jforge list` also includes saved installation instances.
+Spack package names are cached during import/update. `apt list` shows installed packages in the selected profile, with version, requested/dependency kind and state. Requested packages appear first, followed by dependencies, sorted by name. Use `apt list --available` or `apt search` for the cached package catalog. Complete catalog listings are printed as compact lines. Use `apt show <package>` for installation paths and instance metadata, or `--json` for complete records. `jforge apt instances` lists saved installation instances, and `jforge apt prefix` prints one prefix.
 
 ## User directories and package queries
 
 Forge uses `~/.jarvis-forge` until you choose a default with `init`. `jforge init --home /data/my-forge` initializes that directory and remembers it for later commands, including commands started in other terminals and Python environments. Home selection follows `--home`, `JFORGE_HOME`, the remembered default, then `~/.jarvis-forge`, in that order. Using `--home` with another command only overrides that invocation.
 
-The remembered location is stored in `~/.config/jarvis-forge/default-home.json`, or under an absolute `XDG_CONFIG_HOME` when configured. `jforge paths` shows both the selected data directory and this preference file. Initialization does not move existing software or histories. `paths`, `doctor`, `list`, `info`, `validate`, `plan`, `history`, `show` and `logs` do not initialize a user directory or install software.
+The remembered location is stored in `~/.config/jarvis-forge/default-home.json`, or under an absolute `XDG_CONFIG_HOME` when configured. `jforge doctor --paths` shows both the selected data directory and this preference file. Initialization does not move existing software or histories. `doctor`, `doctor --paths`, `apt instances`, `apt prefix`, `suite validate`, `suite plan`, `history`, `show` and `logs` do not initialize a user directory or install software.
 
 ```bash
 jforge init --home /data/my-forge
@@ -87,16 +89,16 @@ jforge apt list
 Both queries above use `/data/my-forge` without repeating `--home`, provided no `JFORGE_HOME` override is set. Repeating `init --home` with another directory changes the remembered default. A missing remembered directory remains selected; Forge does not silently switch to a different store. To repair a corrupt preference, explicitly initialize the desired directory again.
 
 ```bash
-jforge paths
+jforge doctor --paths
 jforge doctor
 jforge doctor --shell /path/to/cbs-env.sh
 jforge doctor --shell /path/to/cbs-env.sh --json
-jforge list
-jforge info eigen
-jforge info eigen --package-version 3.4.0 --instance <install-id> --path
+jforge apt instances
+jforge apt prefix eigen
+jforge apt prefix eigen --package-version 3.4.0 --instance <install-id> --path
 ```
 
-`info` queries JSON installation manifests under the selected package environment's `packages/<name>/<version>/<install-id>/manifest.json`. `jforge apt install` creates those records after installation checks pass. Multiple instances are listed explicitly; `--path` requires a unique match. `--package-version` selects installed software; `--version` remains Forge's version query.
+`apt prefix` queries JSON installation manifests under the selected package environment's `packages/<name>/<version>/<install-id>/manifest.json`. `jforge apt install` creates those records after installation checks pass. Multiple instances are listed explicitly; `--path` requires a unique match. `--package-version` selects installed software; `--version` remains Forge's version query.
 
 New Spack environments install each package into `<home>/apps/<profile>/<package>`, for example `apps/root-env/eigen`. These are real installation directories. Versions, compiler/variant/dependency identities and full hashes remain in Spack's own `.spack/spec.json` and database. There is no extra link layer or Forge-specific package metadata format.
 
@@ -110,10 +112,10 @@ Existing environments retain their original layout and multi-instance policy, in
 jforge apt profile
 jforge apt profile root-env --create
 jforge apt install libeigen3-dev libgsl-dev sqlite3
-jforge info eigen --path
+jforge apt prefix eigen --path
 ```
 
-`jforge paths` reports the selected native store. Old prefixes and installed ROOT references are preserved. Each `build` dependency profile follows the same one-build-per-name rule when newly created. Saved Spack environment revisions are installation history. `jforge env list` shows both named shell environments and configured Spack profiles.
+`jforge doctor --paths` reports the selected native store. Old prefixes and installed ROOT references are preserved. Each `build` dependency profile follows the same one-build-per-name rule when newly created. Saved Spack environment revisions are installation history. `jforge env list` shows both named shell environments and configured Spack profiles.
 
 You select and prepare Python environments with pyenv or your existing tools. `doctor --shell` sources your trusted Bash script and reports the resulting CC/CXX/FC selections, compiler and build-tool paths and versions, Python interpreter paths and versions, virtual environment prefixes, installed Python packages, and selected module/pyenv variables. It does not choose an environment or switch to a fallback. Without `--shell`, it inspects the inherited environment. Missing tools and failed version probes are reported individually; activation errors fail the command. `--timeout` limits the complete inspection, including activation. Shell output is kept separate from JSON results. Inspection creates no Forge user state.
 
@@ -127,7 +129,7 @@ jforge env list
 jforge env show cbs
 jforge env show cbs --path
 jforge doctor --env cbs
-jforge run acceptance.yaml --env cbs
+jforge suite run acceptance.yaml --env cbs
 ```
 
 `env add` copies the script into `environments/<name>/revisions/<revision>/source.sh` and generates `activate.sh`. It checks Bash syntax without sourcing the script. Select Python in your shell or in the registered script using pyenv or your existing tools. Choose a profile explicitly with `--env`, `environment.name` in YAML, or `source "$(jforge env show cbs --path)"` in your own shell.
@@ -156,7 +158,7 @@ jforge apt show libgsl-dev
 jforge apt check sqlite3 libgsl-dev libeigen3-dev
 jforge apt install sqlite3 libgsl-dev libeigen3-dev --jobs 4
 jforge apt list
-jforge info libgsl-dev --path
+jforge apt prefix libgsl-dev --path
 ```
 
 Maintainers publish all package recipes, project build YAMLs, library cards and companion scripts with `./jfrecipes <recipe-revision>`. Use `--dry` to prepare and check both catalogs without network access. The fixed `recipes/recipes.json` and `builds/builds.json` entries keep their independent release cycles. `jforge apt update` refreshes the selected package backend and the build recipes supported by this OS. Use `jforge build update` to refresh just the build catalog. See the [recipe publishing guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/RELEASING.md#%E7%8B%AC%E7%AB%8B%E5%8F%91%E5%B8%83%E6%89%A9%E5%B1%95%E9%85%8D%E6%96%B9).
@@ -196,8 +198,8 @@ The Ubuntu/Debian source resolver, source-package importer, custom build adapter
 Existing source prefixes, manifests, shell files and operation logs stay on disk without conversion or automatic deletion. An old source selection routes package commands to `spack-default`; a successful write saves the new selection. Query old records explicitly:
 
 ```bash
-jforge list --archived
-jforge info libgsl-dev --archived --path
+jforge apt instances --archived
+jforge apt prefix libgsl-dev --archived --path
 jforge apt list --archived
 jforge apt profile --archived
 ```
@@ -216,7 +218,7 @@ jforge apt profile
 jforge apt install eigen gsl --dry-run
 jforge apt install eigen gsl
 jforge apt list
-jforge info eigen --path
+jforge apt prefix eigen --path
 jforge apt env --path
 ```
 
@@ -228,7 +230,7 @@ Current build recipes with `apt.install` use Spack. See the [Homebrew profile de
 
 ## Linux compiler toolchains
 
-`jforge toolchain install gcc@14.3.0` builds or installs GCC, G++ and GFortran in a dedicated Spack profile. Use `toolchain use` to bind the installed suite to a separate project profile. Forge uses that compiler for Spack dependencies and project builds. Run `toolchain check` on a compute node to compile, link and run C, C++ and Fortran together and verify the loaded runtimes. See the [HPC toolchain workflow](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md#hpc-%E7%94%A8%E6%88%B7%E7%9B%AE%E5%BD%95%E4%B8%AD%E7%9A%84-gcc).
+`jforge apt toolchain install gcc@14.3.0` builds or installs GCC, G++ and GFortran in a dedicated Spack profile. Use `apt toolchain use` to bind the installed suite to a separate project profile. Forge uses that compiler for Spack dependencies and project builds. Run `apt toolchain check` on a compute node to compile, link and run C, C++ and Fortran together and verify the loaded runtimes. See the [HPC toolchain workflow](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md#hpc-%E7%94%A8%E6%88%B7%E7%9B%AE%E5%BD%95%E4%B8%AD%E7%9A%84-gcc).
 
 ## Project builds and regression checker
 
@@ -327,18 +329,19 @@ The asset builder prepares versioned YAML, referenced Python scripts and a check
 
 `higgstools-build` installs HiggsTools 1.1.3 for GMFit. It uses the vendored source archive, applies the assignment-trace bridge v2 and the HS measurement-breakdown bridge v1, and builds the Python module from the bundled third-party sources. The wheel is installed into the `python3` on `PATH` with `pip --no-index --no-deps`. It also installs pinned HBDataSet v1.7 and HSDataSet v1.1 under the prefix and sets `HIGGSTOOLS_HBDATASET`, `HIGGSTOOLS_HSDATASET`, and `JARVIS_OPERAS_HTS_DATASET_CACHE_ROOT` for that interpreter. The legacy `HIGGSTOOLS_HB_DATASET` and `HIGGSTOOLS_HS_DATASET` names receive the same paths. It runs on Linux and macOS. Preflight requires CMake, a C++17 compiler, `make`, `patch`, Python development headers, and `setuptools`, `wheel`, and `pip` in that interpreter. Confirm with `python3 -m pip show HiggsTools` and `python3 -c 'import Higgs; import Higgs.predictions'`.
 
-`jforge checker` runs commands, builds or the same structured standard checks as regression checks. Standard checks use `check: {python: {modules: [numpy]}}` and run every time by default. Default selection for command/build checks compares declared input globs (including additions/deletions), check configuration, prerequisite signatures and the observed environment with the last successful evidence. It does not infer all software dependencies from Git changes. Checks with external/untracked inputs should use `cache: false` or be run with `--full`.
+`jforge test` also runs schema 1 checker cards: commands, builds, or the same structured standard checks. Standard checks use `check: {python: {modules: [numpy]}}` and run every time by default. Default selection for command/build checks compares declared input globs (including additions/deletions), check configuration, prerequisite signatures and the observed environment with the last successful evidence. It does not infer all software dependencies from Git changes. Checks with external/untracked inputs should use `cache: false` or be run with `--full`. Schema 2 cards use `test plan` instead of `test list`.
 
 ```bash
-jforge checker list tests/checker.yaml
-jforge checker run tests/checker.yaml --full
-jforge checker run tests/checker.yaml
-jforge checker run tests/checker.yaml --check build-engine
-jforge history --suite forge-development
-jforge logs <checker-run-id> --step build-engine
+jforge test validate tests/checker.yaml
+jforge test plan tests/checker.yaml --profile acceptance
+jforge test run tests/checker.yaml --full
+jforge test run tests/checker.yaml
+jforge test run tests/checker.yaml --group build-engine
+jforge test history --suite forge-development
+jforge test report <checker-run-id>
 ```
 
-The development checker covers all existing local test modules plus ROOT YAML validation. Build checks can run real ROOT/CBS/MadGraph acceptance separately; `--full` reruns checks but does not erase CMake incremental builds or force successful build artifacts to rebuild. `history`, `show` and `logs` work for both types. Byte/scientific comparison policies for these new run types are not yet part of `compare`.
+The development checker covers local test modules plus ROOT YAML validation. Real Spack integration and ROOT/CBS/MadGraph builds run separately. `--full` reruns checks but does not erase CMake incremental builds or force successful build artifacts to rebuild. Byte/scientific comparison policies for these run types are not yet part of `suite compare`.
 
 `jforge test` runs schema 2 test cards and test catalogs. A card selects pytest files into groups by globs and markers, names profiles such as `daily` and `acceptance`, and can require that every test file belongs to an acceptance group. `validate` and `plan` read only the YAML and the file tree. `run` executes the selected groups, records counts, skip reasons, per-case results, the Git source identity and the installed packages, and reuses unchanged groups. A project passes acceptance when `jforge test status` exits 0: an accepted `acceptance` report exists for the current committed source tree.
 

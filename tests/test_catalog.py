@@ -290,15 +290,15 @@ def test_schema_boundaries_between_checker_and_test(tmp_path, capsys):
     old.write_text(yaml.safe_dump({"schema_version": 1, "kind": "checker", "id": "old", "project": "..",
                                    "profiles": {"daily": ["x"]},
                                    "checks": [{"id": "x", "argv": ["true"], "cache": False}]}))
-    assert "require schema_version: 2" in failure(["checker", "validate", str(old)], capsys)
+    assert "require schema_version: 2" in failure(["test", "validate", str(old)], capsys)
     new = card(root, [group("unit")])
     with pytest.raises(ForgeError, match="read by jforge test"):
         checker.load(new)
-    assert main(["checker", "validate", str(new), "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["command"] == "test validate"
-    assert main(["checker", "list", str(new), "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["command"] == "test plan"
     assert main(["test", "validate", str(new), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["command"] == "test validate"
+    assert main(["test", "plan", str(new), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["command"] == "test plan"
+    assert main(["test", "list", str(new), "--json"]) == 2
 
 
 @pytest.mark.parametrize("command", [["test"], ["test", "validate"], ["test", "plan"]])

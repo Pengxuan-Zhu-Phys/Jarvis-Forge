@@ -111,7 +111,9 @@ def _transact(
 
 @app.callback()
 def apt(ctx: typer.Context):
-    if ctx.invoked_subcommand == "shell-init":
+    # toolchain keeps the Forge home. The apt callback would otherwise point
+    # later commands at the selected package profile.
+    if ctx.invoked_subcommand in {"shell-init", "toolchain"}:
         return
 
     from .apt_progress import AptProgress
@@ -221,6 +223,59 @@ def show(
             if r["name"] == backend.name_of(package)
         ],
     )
+
+
+@app.command("instances")
+def instances(
+    ctx: typer.Context,
+    archived: bool = typer.Option(False, "--archived", help="Read old source installation records."),
+):
+    """List recorded installation instances in the selected profile or archive."""
+    if archived:
+        records = archived_packages(ctx.obj.user_home)
+    elif backend_name(ctx.obj.home) == "homebrew":
+        records = homebrew_backend.inventory(ctx.obj.home)
+    else:
+        records = ctx.obj.home.packages()
+    _emit(ctx, "instances", packages=records)
+
+
+@app.command("prefix")
+def prefix(
+    ctx: typer.Context,
+    package: str = typer.Argument(..., help="Package name.", metavar="<package>"),
+    version: Optional[str] = typer.Option(None, "--package-version", help="Select a recorded version.", metavar="<str>"),
+    instance: Optional[str] = typer.Option(None, "--instance", help="Select an exact install ID.", metavar="<str>"),
+    path: bool = typer.Option(False, "--path", help="Print only a unique installation prefix."),
+    archived: bool = typer.Option(False, "--archived", help="Read old source installation records."),
+):
+    """Locate a recorded installation prefix."""
+    if path and ctx.obj.as_json:
+        raise ForgeError("--path and --json are mutually exclusive.")
+    if archived:
+        names = {package, backend.name_of(package)}
+        candidates = archived_packages(ctx.obj.user_home)
+    elif backend_name(ctx.obj.home) == "homebrew":
+        names = {package, homebrew_backend.name_of(package)}
+        candidates = homebrew_backend.inventory(ctx.obj.home)
+    else:
+        names = {package, backend.name_of(package)}
+        candidates = ctx.obj.home.packages()
+    records = [item for item in candidates
+               if (item["name"] in names or names.intersection(item.get("provenance", {}).get("binary_versions", {})))
+               and (version is None or item["version"] == version)
+               and (instance is None or item["install_id"] == instance)]
+    if not records:
+        hint = "jforge apt instances --archived" if archived else "jforge apt instances; jforge apt instances --archived"
+        raise ForgeError(f"No recorded installation matches {package!r}.", hint=hint)
+    if path:
+        if len(records) != 1:
+            archived_flag = " --archived" if archived else ""
+            raise ForgeError(f"{package!r} has {len(records)} matching instances.",
+                             hint=f"jforge apt prefix {package} --instance <install-id> --path{archived_flag}")
+        print(records[0]["prefix"])
+        return
+    _emit(ctx, "prefix", packages=records)
 
 
 @app.command("install")
@@ -719,3 +774,7 @@ fi
 unset _jforge_env_initial
 export _JFORGE_HOOK_LOADED=1
 """.replace("__JFORGE_HOME_ARGS__", home_args))
+
+from .toolchain_cli import app as toolchain_app
+
+app.add_typer(toolchain_app, name="toolchain")

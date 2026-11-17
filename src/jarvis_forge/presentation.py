@@ -8,7 +8,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 
-COMPACT_COMMANDS = {"apt list", "apt search", "list", "history", "env list", "apt sources", "doctor"}
+COMPACT_COMMANDS = {"apt list", "apt search", "apt instances", "apt prefix", "history", "env list", "apt sources", "doctor"}
 DETAILS = ("install_id", "prefix", "path", "activation", "revision", "python", "python_version", "suite_id",
            "automatic", "description", "reason", "error", "report", "url", "suite", "component",
            "selected_suite", "selected_component")
@@ -739,6 +739,10 @@ def _count(step, key):
 
 
 def test_run(console, values):
+    if "runs" not in values:
+        for key, value in values.items():
+            field(console, key, value)
+        return
     for number, run in enumerate(values["runs"]):
         if number:
             line(console)

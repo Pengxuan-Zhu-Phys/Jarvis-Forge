@@ -208,7 +208,7 @@ def test_checks_only_card_runs_argv_checks(tmp_path, home, capsys):
     assert main(["--home", str(home.root), "--json", "test", "run", str(path)]) == 0
     assert json.loads(capsys.readouterr().out)["runs"][0]["steps"][0]["status"] == "passed"
     _, path = project(tmp_path / "second", groups=[], checks=[ok, bad])
-    assert main(["--home", str(home.root), "--json", "checker", "run", str(path)]) == 1
+    assert main(["--home", str(home.root), "--json", "test", "run", str(path)]) == 1
     result = json.loads(capsys.readouterr().out)
     assert result["command"] == "test run" and steps(result)["bad"]["status"] == "failed"
 

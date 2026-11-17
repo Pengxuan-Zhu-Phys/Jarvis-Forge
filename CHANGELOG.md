@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.10 — 2026-11-17
 
 ### Added
 
@@ -11,9 +11,22 @@
 - `jforge test run --rerun-failed RUN_ID` runs again only the tests that failed in that run, with its selection and shard. Steps that passed are kept as reused. The run is marked partial and never counts toward an acceptance.
 - Tests receive `JFORGE_RUN_DIR` and `JFORGE_STEP_DIR` for their own artifacts.
 
+- `jforge bench` runs benchmark cards on the local executor or through Slurm. The commands are `validate`, `plan`, `prefetch`, `run`, `verify`, `status`, `watch`, `cancel`, `resume`, `report`, `compare`, `trend`, `history`, and `data list` / `data prune`.
+- Finished steps with `reuse: true` stay in `.jforge/done.json`. `--redo` and `--keep` cannot be combined. `--baseline` pins a comparison, and `bench compare` and `bench trend` read archived numbers.
+- `jforge bench executor add`, `list`, and `show` store local and Slurm settings outside the card. A Slurm run submits array jobs, reconciles from `state.json`, and can detach, watch, resume, and cancel.
+- A test card can declare `uses: bench`. `jforge test status` reads that recorded acceptance.
+- Build cards can select a CMake preset, build in place, and lock a source tree. `build run --source` selects a checkout. The Spack package `jforge-mg5amc` provides MadGraph5_aMC 3.6.3.
+
 ### Changed
 
-- `jforge checker list`, `validate` and `run` hand schema 2 cards to `jforge test plan`, `validate` and `run`. A schema 1 card that uses schema 2 fields is rejected with their names.
+- The root command list is `apt`, `env`, `build`, `test`, `bench`, `suite`, `history`, `show`, `logs`, `init`, and `doctor`.
+- Schema 1 checker cards are listed and run with `jforge test list` and `jforge test run --group`. Schema 2 cards stay on `jforge test plan`, `validate`, and `run`. A schema 1 card that uses schema 2 fields is rejected with their names.
+- `jforge history` lists suite runs. Bench runs stay on `bench history`, and test runs stay on `test history`.
+
+### Removed
+
+- Remove the root commands `paths`, `list`, `info`, `example`, `validate`, `plan`, `run`, `compare`, `checker`, `toolchain`, and `executor`.
+- Use `doctor --paths`, `apt instances`, `apt prefix`, `suite`, `apt toolchain`, `bench executor`, and `test` in their place.
 
 ## 1.1.9 — 2026-11-16
 

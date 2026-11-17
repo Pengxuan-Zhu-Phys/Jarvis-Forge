@@ -12,8 +12,21 @@ profiles:
   - release-recipes
   - cli
   - toolchains
+  - bench
   - root-recipe
   acceptance: *forge-all
+  release:
+  - build-engine
+  - checker-engine
+  - apt-backend
+  - environments
+  - acceptance-history
+  - release-recipes
+  - cli
+  - toolchains
+  - bench
+  - root-recipe
+  - wheel-smoke
 default_profile: daily
 coverage:
   paths:
@@ -26,6 +39,7 @@ groups:
   match:
   - tests/test_project_builds.py
   - tests/test_standard_checks.py
+  - tests/test_build_cards.py
   inputs:
   - src/jarvis_forge/cmake.py
   - src/jarvis_forge/build*.py
@@ -42,6 +56,7 @@ groups:
   - builds/scripts/*.py
   - tools/build_project_assets.py
   - tests/test_standard_checks.py
+  - tests/test_build_cards.py
   skip_allow: []
 - id: checker-engine
   match:
@@ -182,6 +197,19 @@ groups:
   - src/jarvis_forge/card/*.yaml
   - tests/test_presentation.py
   skip_allow: []
+- id: bench
+  match:
+  - tests/test_bench.py
+  - tests/test_bench_baseline.py
+  - tests/test_bench_land.py
+  inputs:
+  - src/jarvis_forge/bench*.py
+  - src/jarvis_forge/executor*.py
+  - src/jarvis_forge/schemas/*.json
+  - tests/test_bench*.py
+  - tests/checker.yaml
+  - pyproject.toml
+  skip_allow: []
 - id: toolchains
   match:
   - tests/test_toolchains.py
@@ -199,6 +227,13 @@ groups:
   - src/jarvis_forge/card/*.yaml
   skip_allow: []
 checks:
+- id: wheel-smoke
+  check:
+    package:
+      distribution: Jarvis-Forge
+      modules: [jarvis_forge]
+      commands:
+      - [jforge, --version]
 - id: root-recipe
   inputs:
   - builds/root-build.yaml

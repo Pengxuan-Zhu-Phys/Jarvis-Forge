@@ -97,7 +97,7 @@ def test_changed_command_and_tampered_evidence_rerun(tmp_path,home):
 def test_checker_cli_is_read_only_for_listing(tmp_path,capsys):
     path=config(tmp_path,[command('a',['*.py'])])
     missing=tmp_path/'absent'
-    assert main(['--home',str(missing),'checker','list',str(path),'--json'])==0
+    assert main(['--home',str(missing),'test','list',str(path),'--json'])==0
     assert not missing.exists()
 
 

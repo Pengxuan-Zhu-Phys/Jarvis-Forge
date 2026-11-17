@@ -237,3 +237,8 @@ def history(ctx: typer.Context,
         return
     for item in rows:
         typer.echo(f"{item['at']}  {item['run_id']}  {item['name']}  {item['profile']}  {item['status']}")
+
+
+from .executor_cli import app as executor_app
+
+app.add_typer(executor_app, name="executor")

@@ -211,7 +211,7 @@ def test_interrupt_preserves_result_and_stops_child(home, tmp_path):
                           repr(str(marker)) + ").write_text('ready'); time.sleep(30)")])
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     process = subprocess.Popen([sys.executable, "-m", "jarvis_forge", "--home", str(home.root),
-                                "run", str(source), "--json"], env=env,
+                                "suite", "run", str(source), "--json"], env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         deadline = time.monotonic() + 10

@@ -40,7 +40,7 @@ def _verify(record):
     prefix = Path(record["prefix"])
     spec = prefix / ".spack/spec.json"
     if not spec.is_file() or digest(spec) != record["spec_sha256"]:
-        raise ForgeError(f"Toolchain installation changed: {record['id']}", hint="jforge toolchain list")
+        raise ForgeError(f"Toolchain installation changed: {record['id']}", hint="jforge apt toolchain list")
     for path in record["drivers"].values():
         file = Path(path)
         if not file.is_file() or not os.access(file, os.X_OK) or not file.resolve().is_relative_to(prefix):
@@ -59,7 +59,7 @@ def list_installed(home):
 def installed(home, name):
     file = _manifest(home, name)
     if not file.is_file():
-        raise ForgeError(f"No managed toolchain named {name}.", hint="jforge toolchain list")
+        raise ForgeError(f"No managed toolchain named {name}.", hint="jforge apt toolchain list")
     return _verify(read_json(file))
 
 

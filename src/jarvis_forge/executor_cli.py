@@ -1,4 +1,4 @@
-"""jforge executor: store site execution settings outside bench cards."""
+"""jforge bench executor: store site execution settings outside bench cards."""
 
 from pathlib import Path
 

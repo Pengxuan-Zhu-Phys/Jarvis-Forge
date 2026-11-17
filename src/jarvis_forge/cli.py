@@ -36,10 +36,15 @@ from .suite import load_suite, make_plan
 
 app = typer.Typer(add_completion=False, pretty_exceptions_enable=False,
                   context_settings={"help_option_names": ["-h", "--help"]},
-                  help="Prepare user environments and build scientific software.\n\n"
-                       "Daily commands: jforge apt, jforge env, jforge build, jforge apt profile.\n"
-                       "env switch chooses the shell environment. apt profile chooses the package profile.\n\n"
+                  help="Prepare user environments and run scientific software.\n\n"
+                       "Environment: jforge apt, jforge env, jforge build.\n"
+                       "Acceptance: jforge test, jforge bench, jforge suite.\n"
+                       "Runs: jforge history, jforge show, jforge logs.\n"
+                       "Setup: jforge init, jforge doctor.\n\n"
                        "Command help: jforge COMMAND -h")
+
+suite_app = typer.Typer(help="Write, check, plan, run and compare acceptance suites.",
+                        context_settings={"help_option_names": ["-h", "--help"]})
 
 
 @dataclass
@@ -92,7 +97,6 @@ def root(ctx: typer.Context,
             typer.echo(ctx.get_help())
 
 
-@app.command(rich_help_panel="Setup")
 def init(ctx: typer.Context):
     """Initialize user directories and remember this default location."""
     from .apt_profiles import initialize_profile
@@ -104,34 +108,38 @@ def init(ctx: typer.Context):
          default_saved=True, default_home_file=str(preference), apt_profile=profile)
 
 
-@app.command(rich_help_panel="Setup")
-def paths(ctx: typer.Context):
+def _emit_paths(ctx: typer.Context):
     """Show resolved paths without creating directories."""
     from .apt_profiles import active_home
     selected = active_home(ctx.obj.home)
-    paths = ctx.obj.home.paths()
-    paths["apt_home"] = str(selected.root)
+    reported = ctx.obj.home.paths()
+    reported["apt_home"] = str(selected.root)
     if selected != ctx.obj.home:
-        paths.update(apt_home=str(selected.root), packages=str(selected.root / "packages"), apt=str(selected.root / "apt"),
-                     apt_environment=str(selected.root / "environments/apt"))
+        reported.update(apt_home=str(selected.root), packages=str(selected.root / "packages"), apt=str(selected.root / "apt"),
+                        apt_environment=str(selected.root / "environments/apt"))
     from .spack_backend import configured as spack_configured, root as spack_root, store_root
     from . import homebrew_backend
     if spack_configured(selected):
-        paths.update(spack=str(spack_root(selected)), spack_store=str(store_root(selected)),
-                     spack_environments=str(spack_root(selected)/"environments"))
+        reported.update(spack=str(spack_root(selected)), spack_store=str(store_root(selected)),
+                        spack_environments=str(spack_root(selected) / "environments"))
     elif homebrew_backend.configured(selected):
         brew = homebrew_backend.settings(selected)
-        paths.update(homebrew=brew["prefix"], homebrew_cellar=brew["cellar"],
-                     packages=brew["cellar"], apt_environment=str(selected.root / "environments/apt"))
-    emit(ctx, "paths", **paths, default_home_file=str(default_home_file()))
+        reported.update(homebrew=brew["prefix"], homebrew_cellar=brew["cellar"],
+                        packages=brew["cellar"], apt_environment=str(selected.root / "environments/apt"))
+    emit(ctx, "doctor", **reported, default_home_file=str(default_home_file()))
 
 
-@app.command(rich_help_panel="Inspect")
 def doctor(ctx: typer.Context,
            env: Optional[str] = typer.Option(None, "--env", help="Inspect this registered environment.", metavar="<name>"),
            shell: Optional[Path] = typer.Option(None, "--shell", help="Source this user-selected environment script.", metavar="<path>"),
-           timeout: float = typer.Option(60, "--timeout", min=0.1, help="Limit activation and inspection time.", metavar="<seconds>")):
-    """Report the user's active compilers and Python without selecting an environment."""
+           timeout: float = typer.Option(60, "--timeout", min=0.1, help="Limit activation and inspection time.", metavar="<seconds>"),
+           paths: bool = typer.Option(False, "--paths", help="Show resolved paths without creating directories.")):
+    """Report resolved paths, or the user's active compilers and Python."""
+    if paths and (shell is not None or env is not None):
+        raise ForgeError("--paths cannot be combined with --shell or --env.")
+    if paths:
+        _emit_paths(ctx)
+        return
     if shell is not None and env is not None:
         raise ForgeError("--shell and --env are mutually exclusive.")
     profile = registered_environment(ctx.obj.home, env, strict=True) if env else None
@@ -167,54 +175,7 @@ def doctor(ctx: typer.Context,
             line(_console(stderr=True), f"Activation {stream}:\n{content}")
 
 
-@app.command("list", rich_help_panel="Inspect")
-def list_packages(ctx: typer.Context,
-                  archived: bool = typer.Option(False,"--archived",help="Read old source installation records.")):
-    """List package instances in the selected profile or archive."""
-    from .apt_profiles import active_home, archived_packages, backend_name
-    from . import homebrew_backend
-    if archived:
-        records = archived_packages(ctx.obj.home)
-    else:
-        selected = active_home(ctx.obj.home)
-        records = homebrew_backend.inventory(selected) if backend_name(selected) == "homebrew" else selected.packages()
-    emit(ctx, "list", packages=records)
-
-
-@app.command(rich_help_panel="Inspect")
-def info(ctx: typer.Context,
-         package: str = typer.Argument(..., help="Package name.", metavar="<package>"),
-         version: Optional[str] = typer.Option(None,"--package-version",help="Select a recorded version.",metavar="<str>"),
-         instance: Optional[str] = typer.Option(None,"--instance",help="Select an exact install ID.",metavar="<str>"),
-         path: bool = typer.Option(False,"--path",help="Print only a unique installation prefix."),
-         archived: bool = typer.Option(False,"--archived",help="Read old source installation records.")):
-    """Locate package installation prefixes."""
-    if path and ctx.obj.as_json:
-        raise ForgeError("--path and --json are mutually exclusive.")
-    from .apt_profiles import active_home, archived_packages, backend_name
-    from .spack_backend import name_of
-    from . import homebrew_backend
-    selected = None if archived else active_home(ctx.obj.home)
-    if selected is not None and backend_name(selected) == "homebrew":
-        names = {package, homebrew_backend.name_of(package)}
-        candidates = homebrew_backend.inventory(selected)
-    else:
-        names = {package, name_of(package)}
-        candidates = archived_packages(ctx.obj.home) if archived else selected.packages()
-    records = [item for item in candidates if (item["name"] in names or names.intersection(item.get("provenance",{}).get("binary_versions",{})))
-               and (version is None or item["version"]==version) and (instance is None or item["install_id"]==instance)]
-    if not records:
-        raise ForgeError(f"No recorded installation matches {package!r}.",hint="jforge list --archived" if archived else "jforge list; jforge list --archived")
-    if path:
-        if len(records)!=1:
-            raise ForgeError(f"{package!r} has {len(records)} matching instances.",
-                             hint=f"jforge info {package} --instance <install-id> --path"+(" --archived" if archived else ""))
-        print(records[0]["prefix"])
-    else:
-        emit(ctx,"info",packages=records)
-
-
-@app.command(rich_help_panel="Acceptance runs")
+@suite_app.command()
 def example(ctx: typer.Context,
             output: Path = typer.Option(..., "--output", "-o", help="Write the bundled smoke suite.", metavar="<path>")):
     """Write a small runnable acceptance suite without overwriting files."""
@@ -223,28 +184,28 @@ def example(ctx: typer.Context,
     if output.exists():
         raise ForgeError(f"Output already exists: {output}")
     output.write_text(content, encoding="utf-8")
-    emit(ctx, "example", path=str(output))
+    emit(ctx, "suite example", path=str(output))
 
 
-@app.command(rich_help_panel="Acceptance runs")
+@suite_app.command()
 def validate(ctx: typer.Context,
              suite: Path = typer.Argument(..., help="Acceptance YAML file.", metavar="<suite_yaml>"),
              env: Optional[str] = typer.Option(None, "--env", help="Explicitly select a registered environment.", metavar="<name>")):
     """Validate schema, dependencies, input paths and placeholders."""
     loaded = load_suite(suite)
     plan = make_plan(loaded, ctx.obj.home.root / "runs" / "planned-run", ctx.obj.home, env)
-    emit(ctx, "validate", suite_id=plan["suite_id"], steps=len(plan["steps"]), path=loaded["path"])
+    emit(ctx, "suite validate", suite_id=plan["suite_id"], steps=len(plan["steps"]), path=loaded["path"])
 
 
-@app.command(rich_help_panel="Acceptance runs")
+@suite_app.command()
 def plan(ctx: typer.Context,
          suite: Path = typer.Argument(..., help="Acceptance YAML file.", metavar="<suite_yaml>"),
         env: Optional[str] = typer.Option(None, "--env", help="Explicitly select a registered environment.", metavar="<name>")):
     """Show a plan without executing commands or creating user state."""
-    emit(ctx, "plan", **make_plan(load_suite(suite), ctx.obj.home.root / "runs" / "planned-run", ctx.obj.home, env))
+    emit(ctx, "suite plan", **make_plan(load_suite(suite), ctx.obj.home.root / "runs" / "planned-run", ctx.obj.home, env))
 
 
-@app.command(rich_help_panel="Acceptance runs")
+@suite_app.command()
 def run(ctx: typer.Context,
         suite: Path = typer.Argument(..., help="Acceptance YAML file.", metavar="<suite_yaml>"),
         env: Optional[str] = typer.Option(None, "--env", help="Explicitly select a registered environment.", metavar="<name>")):
@@ -257,18 +218,16 @@ def run(ctx: typer.Context,
         line(_console(stderr=True), format_record(f"[{event['run_id']}] {event['event']}{suffix}", module="Jarvis-Forge.Calculator").rstrip("\n"))
 
     result = execute(ctx.obj.home, suite, progress=progress, environment_name=env)
-    emit(ctx, "run", ok=result["status"] == "passed", **result)
+    emit(ctx, "suite run", ok=result["status"] == "passed", **result)
     raise typer.Exit(0 if result["status"] == "passed" else 130 if result["status"] == "interrupted" else 1)
 
 
-@app.command(rich_help_panel="Acceptance runs")
 def history(ctx: typer.Context,
             suite: Optional[str] = typer.Option(None, "--suite", help="Filter by stable suite ID.", metavar="<str>")):
     """List all runs, including failed or unfinished runs."""
     emit(ctx, "history", runs=ctx.obj.home.history(suite))
 
 
-@app.command(rich_help_panel="Acceptance runs")
 def show(ctx: typer.Context,
          run_id: str = typer.Argument(..., help="Exact run ID.", metavar="<run_id>"),
          step: Optional[str] = typer.Option(None, "--step", help="Show one step record.", metavar="<str>")):
@@ -291,7 +250,6 @@ def show(ctx: typer.Context,
         emit(ctx, "show", **result)
 
 
-@app.command(rich_help_panel="Acceptance runs")
 def logs(ctx: typer.Context,
          run_id: str = typer.Argument(..., help="Exact run ID.", metavar="<run_id>"),
          step: str = typer.Option(..., "--step", help="Step ID.", metavar="<str>"),
@@ -330,7 +288,7 @@ def logs(ctx: typer.Context,
             time.sleep(0.2)
 
 
-@app.command("compare", rich_help_panel="Acceptance runs")
+@suite_app.command("compare")
 def compare_runs(ctx: typer.Context,
                  older: str = typer.Argument(..., help="Older run ID.", metavar="<old_run>"),
                  newer: str = typer.Argument(..., help="Newer run ID.", metavar="<new_run>"),
@@ -338,42 +296,35 @@ def compare_runs(ctx: typer.Context,
     """Compare archived evidence without executing tests."""
     result = compare(ctx.obj.home, older, newer)
     ok = result["check_passed"] if check else True
-    emit(ctx, "compare", ok=ok, **result)
+    emit(ctx, "suite compare", ok=ok, **result)
     if not ok:
         raise typer.Exit(1)
 
 
 from .apt_cli import app as apt_app
-
-app.add_typer(apt_app, name="apt")
-
 from .env_cli import app as env_app
-
-app.add_typer(env_app, name="env")
-
 from .build_cli import app as build_app
-
-app.add_typer(build_app, name="build")
-
-from .toolchain_cli import app as toolchain_app
-
-app.add_typer(toolchain_app, name="toolchain")
-
-from .checker_cli import app as checker_app
-
-app.add_typer(checker_app, name="checker")
-
 from .testing_cli import app as testing_app
-
-app.add_typer(testing_app, name="test")
-
 from .bench_cli import app as bench_app
 
-app.add_typer(bench_app, name="bench")
+# Leaf commands are merged from unnamed groups so the help panels follow
+# this registration order. Named groups are emitted before root commands.
+runs_app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]})
+runs_app.command("history", rich_help_panel="Runs")(history)
+runs_app.command("show", rich_help_panel="Runs")(show)
+runs_app.command("logs", rich_help_panel="Runs")(logs)
+setup_app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]})
+setup_app.command("init", rich_help_panel="Setup")(init)
+setup_app.command("doctor", rich_help_panel="Setup")(doctor)
 
-from .executor_cli import app as executor_app
-
-app.add_typer(executor_app, name="executor")
+app.add_typer(apt_app, name="apt", rich_help_panel="Environment")
+app.add_typer(env_app, name="env", rich_help_panel="Environment")
+app.add_typer(build_app, name="build", rich_help_panel="Environment")
+app.add_typer(testing_app, name="test", rich_help_panel="Acceptance")
+app.add_typer(bench_app, name="bench", rich_help_panel="Acceptance")
+app.add_typer(suite_app, name="suite", rich_help_panel="Acceptance")
+app.add_typer(runs_app)
+app.add_typer(setup_app)
 
 
 def _globals(argv: list[str]) -> list[str]:

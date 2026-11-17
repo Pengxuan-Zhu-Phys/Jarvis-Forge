@@ -150,17 +150,17 @@ def test_archive_queries_never_execute_source_scripts(base, capsys):
     dangerous.write_text("exit 77\n")
     before = dangerous.read_bytes()
     for args in [
-        ["list", "--archived"],
+        ["apt", "instances", "--archived"],
         ["apt", "list", "--archived"],
-        ["info", "libgsl-dev", "--archived"],
+        ["apt", "prefix", "libgsl-dev", "--archived"],
         ["apt", "switch", "--archived"],
     ]:
         assert main(["--home", str(base.root), *args, "--json"]) == 0
         assert json.loads(capsys.readouterr().out)["ok"]
-    assert main(["--home", str(base.root), "list", "--json"]) == 0
+    assert main(["--home", str(base.root), "apt", "instances", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["packages"] == []
     assert (
-        main(["--home", str(base.root), "info", "libgsl-dev", "--archived", "--path"])
+        main(["--home", str(base.root), "apt", "prefix", "libgsl-dev", "--archived", "--path"])
         == 0
     )
     assert capsys.readouterr().out.strip() == str(old.root / "old-prefix")

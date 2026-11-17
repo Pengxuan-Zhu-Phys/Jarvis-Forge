@@ -26,7 +26,7 @@ def test_fresh_profile_uses_real_flat_store_under_shared_home(tmp_path, capsys, 
     assert not (base.root / 'apps').exists()  # Spack creates the real store when installing.
     write_json(profile.root / 'apt/spack.json', {'schema_version':1, 'backend':'spack', 'install_tree':tree})
     write_json(base.root / 'apt/selection.json', {'schema_version':1, 'id':'spack-default'})
-    assert main(['--home',str(base.root),'paths','--json']) == 0
+    assert main(['--home',str(base.root),'doctor','--paths','--json']) == 0
     assert json.loads(capsys.readouterr().out)['spack_store'] == tree['root']
 
 

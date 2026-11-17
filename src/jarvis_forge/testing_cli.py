@@ -9,9 +9,28 @@ from typing import Optional
 import typer
 
 from . import testing
+from .storage import ForgeError
 
 app = typer.Typer(help="Validate, plan, run and accept YAML test cards and catalogs over pytest.",
                   context_settings={"help_option_names": ["-h", "--help"]})
+
+
+def _schema1(path):
+    """Schema 1 checker cards stay on the checker engine. Schema 2 uses jforge test."""
+    _, _, data = testing._read(path)
+    return isinstance(data, dict) and data.get("kind") == "checker" and data.get("schema_version") == 1
+
+
+@app.command("list")
+def list_checks(ctx: typer.Context,
+                config: Path = typer.Argument(..., help="Schema 1 checker card.", metavar="<card>")):
+    """List schema 1 checks, inputs and prerequisites without executing them."""
+    from .cli import emit
+    from . import checker
+    if not _schema1(config):
+        raise ForgeError("Schema 2 cards are listed with jforge test plan.", hint=f"jforge test plan {config}")
+    loaded = checker.load(config)
+    emit(ctx, "test list", checker_id=loaded["config"]["id"], project=loaded["project"], checks=loaded["ordered"])
 
 
 @app.command()
@@ -51,6 +70,18 @@ def run(ctx: typer.Context,
         jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Concurrent build jobs inside build checks.", metavar="<n>")):
     """Run the selected groups and checks, reuse unchanged results, and record the evidence."""
     from .cli import emit, _console, line
+    if _schema1(config):
+        rejected = [name for name, value in (("--profile", profile), ("--batch", batch),
+                                              ("--acceptance-id", acceptance_id), ("--rerun-failed", rerun_failed),
+                                              ("--project", project), ("--root", root)) if value is not None]
+        if rejected:
+            raise ForgeError("Schema 1 cards do not take " + ", ".join(rejected) + ".",
+                             hint="Use --group to select check IDs.")
+        from . import checker
+        result = checker.run(ctx.obj.home, config, full=full, selected=group, environment_name=env, jobs=jobs,
+                             progress=lambda text: line(_console(stderr=True), text))
+        emit(ctx, "test run", ok=result["status"] == "passed", **result)
+        raise typer.Exit(0 if result["status"] == "passed" else 130 if result["status"] == "interrupted" else 1)
     from . import testing_run
     result = testing_run.run(ctx.obj.home, config, profile=profile, groups=group, batch=batch,
                              acceptance_id=acceptance_id, full=full, environment_name=env, root=root,
@@ -108,7 +139,6 @@ def report(ctx: typer.Context,
     """Print the report of one run or one acceptance; run no tests."""
     from .cli import emit
     from . import testing_run
-    from .storage import ForgeError
     if output_format not in {"text", "json", "markdown"}:
         raise ForgeError("--format takes text, json or markdown.")
     value = testing_run.report(ctx.obj.home, run_or_acceptance)

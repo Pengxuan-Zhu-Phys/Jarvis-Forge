@@ -143,11 +143,11 @@ def test_command_line_env_selection_overrides_suite_shell(home, script, tmp_path
     suite.write_text(yaml.safe_dump({"schema_version": 1, "id": "override",
                                     "environment": {"shell": "not-used.sh"},
                                     "steps": [{"id": "test", "argv": ["python", "--version"]}]}))
-    assert main(["plan", str(suite), "--env", "cbs", "--home", str(home.root), "--json"]) == 0
+    assert main(["suite", "plan", str(suite), "--env", "cbs", "--home", str(home.root), "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["environment_profile"]["revision"] == selected["revision"]
     assert result["environment_selection_source"] == "cli"
-    assert main(["run", str(suite), "--env", "cbs", "--home", str(home.root), "--json"]) == 0
+    assert main(["suite", "run", str(suite), "--env", "cbs", "--home", str(home.root), "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["status"] == "passed"
 
 

@@ -136,7 +136,8 @@ def test_installed_root_is_added_to_the_apt_entry(home):
     assert kept["builds"] == metadata["builds"]
 
 
-def test_drop_keeps_root_out_until_the_next_successful_build(home, linux_apt, capsys):
+def test_drop_keeps_root_out_until_the_next_successful_build(home, linux_apt, capsys, monkeypatch):
+    monkeypatch.delenv("_JFORGE_HOOK_LOADED", raising=False)
     profile = active_home(home)
     profile.initialize()
     backend = write_backend(profile)

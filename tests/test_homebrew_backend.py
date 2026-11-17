@@ -113,7 +113,7 @@ def test_profile_inventory_selection_and_reversible_shell(setup_brew):
     assert cli("env", "list")["profiles"][0]["id"] == "homebrew-mac"
     assert cli("apt", "search", "eigen")["packages"][0]["selected"] is False
     assert cli("apt", "show", "eigen")["installed_instances"][0]["prefix"] == str(prefix / "Cellar/eigen/1.0")
-    assert cli("info", "eigen", "--path", as_json=False).strip() == str(prefix / "Cellar/eigen/1.0")
+    assert cli("apt", "prefix", "eigen", "--path", as_json=False).strip() == str(prefix / "Cellar/eigen/1.0")
     assert cli("apt", "install", "libeigen3-dev")["packages"][0]["name"] == "eigen"
     assert cli("apt", "list", "eigen")["packages"][0]["selected"] is True
     active = cli("apt", "env", "--path", as_json=False).strip()
