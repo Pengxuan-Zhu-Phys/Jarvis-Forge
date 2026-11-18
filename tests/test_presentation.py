@@ -84,7 +84,7 @@ def test_env_metadata_lists_attached_and_omitted_builds():
     })
     assert "apt [apt]" in output
     assert "spack-default" in output
-    assert "root-build · installation" in output
+    assert "root · installation" in output
     assert "artifact root-1" in output
     assert "/forge/env/apt/env.json" in output
     assert "Omitted (0):" in output and "none" in output
@@ -93,7 +93,7 @@ def test_env_metadata_lists_attached_and_omitted_builds():
         "metadata": {"name": "apt", "kind": "apt", "description": "Active user-local packages",
                      "builds": [], "omitted_builds": ["root-build"], "activation": "/forge/env/apt/activate.sh"},
     })
-    assert "Builds (0):" in omitted and "root-build" in omitted
+    assert "Builds (0):" in omitted and "root" in omitted
 
 
 def test_switch_says_when_this_shell_stays_unchanged():
@@ -104,7 +104,7 @@ def test_switch_says_when_this_shell_stays_unchanged():
     assert "shell-init" in output
     pending = displayed("env drop", {"build_id": "root-build", "path": "/forge/env/apt/activate.sh",
                                      "description": "Active user-local packages", "shell": "pending"})
-    assert "Removed from the apt environment: root-build" in pending
+    assert "Removed from the apt environment: root" in pending
     assert "when the command returns" in pending
 
 

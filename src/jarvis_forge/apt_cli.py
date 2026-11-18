@@ -13,6 +13,7 @@ import typer
 from . import homebrew_backend, spack_backend as backend
 from .apt_profiles import (
     active_home,
+    validate_active,
     archived_packages,
     backend_name,
     create_homebrew,
@@ -126,6 +127,8 @@ def apt(ctx: typer.Context):
     ctx.obj.user_home = ctx.obj.home
     if ctx.invoked_subcommand not in {"switch", "import", "profile"}:
         ctx.obj.home = active_home(ctx.obj.home)
+        if ctx.invoked_subcommand is not None:
+            validate_active(ctx.obj.home)
     if ctx.invoked_subcommand is None:
         if ctx.obj.as_json:
             _emit(ctx, "help", commands=sorted(name for name, command in ctx.command.commands.items()
@@ -514,14 +517,64 @@ def switch_source(
 @app.command("profile")
 def manage_profile(
     ctx: typer.Context,
-    name: Optional[str] = typer.Argument(None, metavar="<name>", help="Package profile name or ID. Omit to list."),
+    name: Optional[str] = typer.Argument(None, metavar="<check|build|global|apps|name>",
+                                         help="Check or build presets, select a default, or manage its apps."),
+    preset: Optional[str] = typer.Argument(None, metavar="<preset_or_app>", help="Preset, instance, build or output ID."),
     create: bool = typer.Option(False, "--create", help="Create and select the named profile."),
     archived: bool = typer.Option(False, "--archived", help="Include archived source profiles in the list."),
     profile_backend: Optional[str] = typer.Option(None, "--backend", metavar="<spack|homebrew>",
                                                    help="Backend for a new profile. Defaults to spack."),
+    target: Optional[str] = typer.Option(None, "--target", help="CPU target for a Linux profile build."),
+    stage: Optional[Path] = typer.Option(None, "--stage", help="Existing scratch directory for a Linux profile build."),
+    jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Parallel jobs for a profile build."),
+    timeout: float = typer.Option(14400, "--timeout", min=1, help="Timeout per backend command in seconds."),
+    cache: Optional[str] = typer.Option(None, "--cache", help="Linux binary cache policy: auto, only or never."),
+    on: bool = typer.Option(False, "--on", help="Enable an app in this profile."),
+    off: bool = typer.Option(False, "--off", help="Disable an app in this profile."),
 ):
-    """List profiles, or select the named package profile."""
+    """List profiles, check host support, build a preset, or manage apps and defaults."""
+    from . import unified_profiles
+
     home = ctx.obj.user_home
+    build_options = target is not None or stage is not None or cache is not None or jobs != 1 or timeout != 14400
+    if name == "apps":
+        if create or archived or profile_backend is not None or build_options or (on and off) or bool(preset) != (on or off):
+            raise ForgeError("List apps, or select one with exactly one of --on and --off.",
+                             hint="jforge apt profile apps [<app|output-id> --on|--off]")
+        from .env_entries import profile_outputs
+
+        selected = active_home(home)
+        validate_active(selected)
+        _emit(ctx, "profile apps", **profile_outputs(home, selected, preset, enabled=on if preset else None))
+        return
+    if on or off:
+        raise ForgeError("--on and --off apply to apt profile apps.")
+    if name in {"check", "build", "global"} and not create:
+        if archived or profile_backend is not None or (build_options and name != "build"):
+            raise ForgeError("These options do not apply to this profile action.")
+        if name == "check":
+            result = unified_profiles.check(home, preset)
+            if preset and not any(row["status"] in {"ready", "buildable"} for row in result["profiles"]):
+                from .cli import _console, emit
+                from .presentation import profile_check
+
+                if ctx.obj.as_json:
+                    emit(ctx, "apt profile check", ok=False, error="The selected profile is not ready to build.", **result)
+                else:
+                    profile_check(_console(stderr=True), result)
+                raise typer.Exit(2)
+            _emit(ctx, "profile check", **result)
+            return
+        if preset is None:
+            raise ForgeError(f"apt profile {name} requires a profile name.")
+        if name == "build":
+            _emit(ctx, "profile build", **unified_profiles.build(
+                home, preset, target=target, stage=stage, jobs=jobs, timeout=timeout, cache=cache, progress=_progress(ctx)))
+        else:
+            _emit(ctx, "profile global", **unified_profiles.set_default(home, preset))
+        return
+    if preset is not None or build_options:
+        raise ForgeError("Use jforge apt profile build <preset> to prepare a built-in profile.")
     if profile_backend is not None and not create:
         raise ForgeError("--backend requires --create.")
     if profile_backend not in {None, "spack", "homebrew"}:
@@ -529,7 +582,7 @@ def manage_profile(
     if name is None:
         if create:
             raise ForgeError("--create requires a profile name.")
-        _emit(ctx, "profile", environments=profiles(home, archived=archived))
+        _emit(ctx, "profile", environments=profiles(home, archived=archived), **unified_profiles.catalog(home))
         return
     if archived:
         raise ForgeError("--archived applies when listing profiles without a name.")
@@ -671,7 +724,7 @@ def shell_init(ctx: typer.Context):
     print(r"""# Add eval "$(command jforge apt shell-init)" to your shell startup file.
 jforge() {
     local _jf_arg _jf_next=0 _jf_home='' _jf_change=0 _jf_path _jf_command='' _jf_action='' _jf_skip=0 _jf_target=0
-    local _jf_no_activate=0 _jf_handoff _jf_status _jf_hook _jf_env_switch=0 _jf_env_detach=0 _jf_env_reload=0
+    local _jf_no_activate=0 _jf_handoff _jf_status _jf_hook _jf_env_switch=0 _jf_env_detach=0 _jf_env_reload=0 _jf_profile_action='' _jf_app_switch=0
     for _jf_arg in "$@"; do
         if [ "$_jf_next" = 1 ]; then _jf_home=$_jf_arg; _jf_next=0; continue; fi
         case "$_jf_arg" in
@@ -680,6 +733,7 @@ jforge() {
             --home=*) _jf_home=${_jf_arg#--home=} ;;
             --help|-h|--dry-run|-s|--version|-v|-V|--json) _jf_skip=1 ;;
             --no-activate) _jf_no_activate=1 ;;
+            --on|--off) _jf_app_switch=1 ;;
             --shell|--shell=*) _jf_target=1 ;;
             --debug|-d) ;;
             --*) ;;
@@ -687,7 +741,10 @@ jforge() {
             *)
                 if [ -z "$_jf_command" ]; then _jf_command=$_jf_arg
                 elif [ -z "$_jf_action" ]; then _jf_action=$_jf_arg
-                else _jf_target=1; fi ;;
+                else
+                    if [ "$_jf_target" = 0 ]; then _jf_profile_action=$_jf_arg; fi
+                    _jf_target=1
+                fi ;;
 
         esac
     done
@@ -696,6 +753,8 @@ jforge() {
     fi
     if [ "$_jf_skip" = 1 ]; then _jf_change=0; fi
     case "$_jf_action:$_jf_target" in switch:0|profile:0) _jf_change=0 ;; esac
+    case "$_jf_action:$_jf_profile_action" in profile:check|profile:build) _jf_change=0 ;; esac
+    if [ "$_jf_action:$_jf_profile_action" = profile:apps ]; then _jf_change=0; else _jf_app_switch=0; fi
     if [ "$_jf_skip" = 0 ] && [ "$_jf_command" = env ]; then
         case "$_jf_action" in
             switch) _jf_env_switch=1 ;;
@@ -745,6 +804,15 @@ jforge() {
             elif typeset -f _jforge_apt_restore >/dev/null 2>&1; then
                 _jforge_apt_restore || printf '%s\n' 'jforge: Could not unload the selected environment.' >&2
             fi
+        elif [ "$_jf_skip:$_jf_app_switch" = 0:1 ] && [ -n "${_JFORGE_ACTIVE_APT_ENTRY-}" ]; then
+            if [ -n "$_jf_home" ]; then
+                _jf_path=$(command jforge --home "$_jf_home" env current --path) || _jf_path=''
+            else
+                _jf_path=$(command jforge env current --path) || _jf_path=''
+            fi
+            if [ "$_jf_path" = "$_JFORGE_ACTIVE_APT_ENTRY" ] && ! source "$_jf_path" >&2; then
+                printf '%s\n' 'jforge: Command succeeded. Could not refresh the shell environment.' >&2
+            fi
         elif [ "$_jf_env_switch" = 1 ] || [ "$_jf_env_reload" = 1 ] || [ "$_jf_change" = 1 ]; then
             if [ -n "$_jf_home" ]; then
                 if [ "$_jf_env_switch" = 1 ] || [ "$_jf_env_reload" = 1 ]; then
@@ -777,4 +845,4 @@ export _JFORGE_HOOK_LOADED=1
 
 from .toolchain_cli import app as toolchain_app
 
-app.add_typer(toolchain_app, name="toolchain")
+app.add_typer(toolchain_app, name="toolchain", hidden=True)

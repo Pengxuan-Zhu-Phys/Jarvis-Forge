@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "ubuntu-22.04": {
+      "revision": 1,
+      "platform": "linux",
+      "backend": "spack",
+      "reference": "Ubuntu 22.04 LTS (Jammy)",
+      "versions": {"gcc": "11.4.0", "cmake": "3.22.6", "gmake": "4.3", "autoconf": "2.71", "automake": "1.16.5"}
+    },
+    "ubuntu-24.04": {
+      "revision": 1,
+      "platform": "linux",
+      "backend": "spack",
+      "reference": "Ubuntu 24.04 LTS (Noble)",
+      "versions": {"gcc": "13.3.0", "cmake": "3.28.6", "gmake": "4.3", "autoconf": "2.71", "automake": "1.16.5"}
+    },
+    "ubuntu-26.04": {
+      "revision": 1,
+      "platform": "linux",
+      "backend": "spack",
+      "reference": "Ubuntu 26.04 LTS (Resolute)",
+      "versions": {"gcc": "15.2.0", "cmake": "4.2.3", "gmake": "4.4.1", "autoconf": "2.72", "automake": "1.18.1"}
+    },
+    "macos": {
+      "revision": 1,
+      "platform": "darwin",
+      "backend": "homebrew",
+      "reference": "Apple Clang and Homebrew",
+      "formulae": ["cmake", "make", "autoconf", "automake"]
+    }
+  }
+}

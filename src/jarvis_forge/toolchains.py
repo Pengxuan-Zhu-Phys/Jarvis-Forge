@@ -13,6 +13,8 @@ from .storage import ForgeError, ForgeHome, digest, identifier, read_json, write
 
 DRIVERS = {"CC": "gcc", "CXX": "g++", "FC": "gfortran"}
 RUNTIMES = {"libgcc_s.so.1": "CC", "libstdc++.so.6": "CXX", "libgfortran.so.5": "FC"}
+TOOL_COMMANDS = {"cmake": ("cmake", "ctest"), "gmake": ("make", "gmake"),
+                 "autoconf": ("autoconf", "autoreconf"), "automake": ("automake", "aclocal")}
 
 
 def _linux():
@@ -39,7 +41,10 @@ def _run(argv, *, env=None, timeout=60):
 def _verify(record):
     prefix = Path(record["prefix"])
     spec = prefix / ".spack/spec.json"
-    if not spec.is_file() or digest(spec) != record["spec_sha256"]:
+    if record.get("external"):
+        if any(not Path(path).is_file() or digest(Path(path)) != value for path, value in record["fingerprints"].items()):
+            raise ForgeError(f"External toolchain changed: {record['id']}")
+    elif not spec.is_file() or digest(spec) != record["spec_sha256"]:
         raise ForgeError(f"Toolchain installation changed: {record['id']}", hint="jforge apt toolchain list")
     for path in record["drivers"].values():
         file = Path(path)
@@ -49,6 +54,17 @@ def _verify(record):
         file = Path(path)
         if not file.is_file() or not file.resolve().is_relative_to(prefix):
             raise ForgeError(f"Toolchain runtime is unavailable: {file}")
+    for tool in record.get("tools", {}).values():
+        prefix = Path(tool["prefix"])
+        spec = prefix / ".spack/spec.json"
+        if tool.get("spec_sha256") and (not spec.is_file() or digest(spec) != tool["spec_sha256"]):
+            raise ForgeError(f"Toolchain package changed: {prefix}")
+        for name, path in tool["commands"].items():
+            file = Path(path)
+            if not file.is_file() or not file.resolve().is_relative_to(prefix) or not os.access(file, os.X_OK):
+                raise ForgeError(f"Toolchain executable is unavailable: {name} at {file}")
+            if tool.get("fingerprints") and digest(file) != tool["fingerprints"][name]:
+                raise ForgeError(f"External toolchain executable changed: {file}")
     return record
 
 
@@ -69,12 +85,43 @@ def binding(profile):
 
 
 def environment(record, base):
-    prefix = str(Path(record["prefix"]) / "bin")
     path = base.get("PATH", os.defpath)
-    return {**base, **record["drivers"], "PATH": os.pathsep.join(dict.fromkeys([prefix, *path.split(os.pathsep)]))}
+    return {**base, **record["drivers"], "PATH": os.pathsep.join(dict.fromkeys([*bin_dirs(record), *path.split(os.pathsep)]))}
 
 
-def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache="never", progress=None):
+def bin_dirs(record):
+    paths = [Path(path).parent for tool in record.get("tools", {}).values() for path in tool["commands"].values()]
+    paths.extend(Path(path).parent for path in record["drivers"].values())
+    return list(dict.fromkeys(map(str, paths)))
+
+
+def _suite_tools(result, specs):
+    tools = {}
+    for name, version in specs.items():
+        package = _root_package(result, name, version)
+        prefix = Path(package["prefix"]).resolve()
+        commands = {command: str(prefix / "bin" / command) for command in TOOL_COMMANDS[name]}
+        tool = {"prefix": str(prefix), "version": version, "commands": commands}
+        if not all(Path(path).is_file() for path in commands.values()):
+            raise ForgeError(f"Required toolchain executables are missing under {prefix}.", code=1)
+        if package["external"]:
+            tool["fingerprints"] = {command: digest(Path(path)) for command, path in commands.items()}
+        else:
+            tool["spec_sha256"] = digest(prefix / ".spack/spec.json")
+        tools[name] = tool
+    return tools
+
+
+def _root_package(result, name, version):
+    package = next((row for row in result["packages"] if row["name"] == name and row["root"]
+                    and row["version"] == version), None)
+    if package is None:
+        raise ForgeError(f"Spack did not prepare {name}@{version}.", code=1, hint=f"Operation logs: {result['path']}")
+    return package
+
+
+def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache="never", progress=None,
+            instance=None, tools=None):
     from . import apt_profiles, spack_backend
     from .builds import file_lock
 
@@ -91,13 +138,16 @@ def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache
         stage = stage.expanduser().resolve()
         if not stage.is_dir() or not os.access(stage, os.W_OK | os.X_OK):
             raise ForgeError(f"Toolchain build stage is not writable: {stage}")
-    name = identifier("gcc-" + version + ("-" + target if target else ""))
+    name = identifier(instance or ("gcc-" + version + ("-" + target if target else "")))
     manifest = _manifest(home, name)
     home.initialize()
     manifest.parent.mkdir(parents=True, exist_ok=True)
     with file_lock(manifest.parent / "install.lock"):
         if manifest.is_file():
             record = installed(home, name)
+            if instance and (record["version"] != version or record["target"] != target
+                    or {key: tool["version"] for key, tool in record.get("tools", {}).items()} != (tools or {})):
+                raise ForgeError(f"Toolchain definition changed for {instance}; use a new preset revision.")
             return {**record, "status": "reused"}
         if cache != "only":
             missing = [program for program in ("make", "patch", "tar", "xz") if not shutil.which(program)]
@@ -109,18 +159,30 @@ def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache
                                        toolchain_store=True, progress=progress)
         profile = Path(prepared["apt_home"])
         request = f"gcc@={version} languages=c,c++,fortran" + (f" target={target}" if target else "")
-        result = spack_backend.transact(ForgeHome(profile), "install", [request], jobs=jobs, timeout=timeout,
-                                        cache=cache, progress=progress, build_stage=stage)
-        gcc = next((row for row in result["packages"] if row["name"] == "gcc" and row["root"]
-                    and not row["external"] and row["version"] == version), None)
-        if gcc is None:
+        tool_specs = [f"{name}@={value}" + (f" target={target}" if target else "")
+                      for name, value in (tools or {}).items()]
+        result = spack_backend.transact(ForgeHome(profile), "install", [request, *tool_specs], jobs=jobs, timeout=timeout,
+                                        cache=cache, progress=progress, build_stage=stage, target=target)
+        gcc = _root_package(result, "gcc", version)
+        if gcc["external"] and not instance:
             raise ForgeError("Spack did not install the requested user-local GCC.", code=1,
                              hint=f"Operation logs: {result['path']}")
         prefix = Path(gcc["prefix"]).resolve()
         drivers = {variable: str(prefix / "bin" / binary) for variable, binary in DRIVERS.items()}
         record = {"schema_version": 1, "id": name, "version": version, "target": target, "prefix": str(prefix),
-                  "profile": str(profile), "drivers": drivers, "spec_sha256": digest(prefix / ".spack/spec.json"),
-                  "path": result["path"]}
+                  "profile": str(profile), "drivers": drivers, "path": result["path"]}
+        if gcc["external"]:
+            selected = gcc.get("node", {}).get("external", {}).get("extra_attributes", {}).get("compilers", {})
+            drivers.update({variable: str(Path(selected[key]).absolute())
+                            for variable, key in (("CC", "c"), ("CXX", "cxx"), ("FC", "fortran"))
+                            if selected.get(key)})
+            if not all(Path(path).is_file() for path in drivers.values()):
+                raise ForgeError(f"External GCC suite is incomplete under {prefix}.", code=1)
+            record.update(external=True, fingerprints={path: digest(Path(path)) for path in drivers.values()})
+        else:
+            record["spec_sha256"] = digest(prefix / ".spack/spec.json")
+        if tools:
+            record["tools"] = _suite_tools(result, tools)
         _verify(record)
         _, libraries = _inspect(record)
         record["runtimes"] = {name: str(path) for name, path in libraries.items()}
@@ -131,6 +193,7 @@ def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache
 def use(home, name, *, progress=None):
     from .apt_profiles import active_home, backend_name, ensure_active
     from .spack_backend import current
+    from .unified_profiles import record as profile_record
 
     _linux()
     record = installed(home, name)
@@ -138,6 +201,9 @@ def use(home, name, *, progress=None):
         _, libraries = _inspect(record)
         record["runtimes"] = {soname: str(path) for soname, path in libraries.items()}
     target = active_home(home)
+    if profile_record(target):
+        raise ForgeError("The selected profile already defines its compiler suite.",
+                         hint="Use jforge apt profile build and jforge apt profile global to select another suite.")
     if backend_name(target) != "spack" or target.root.name.startswith("spack-toolchain-"):
         raise ForgeError("Select a separate project Spack profile before binding this toolchain.")
     target = ensure_active(home, progress=progress, selected=target)
@@ -164,6 +230,28 @@ def spack_requirements(record, packages):
         packages.setdefault(language, {})["require"] = [compiler]
     if record.get("target"):
         packages.setdefault("all", {})["target"] = [record["target"]]
+    for name, tool in record.get("tools", {}).items():
+        spec = f"{name}@={tool['version']}"
+        packages.setdefault(name, {}).update(
+            externals=[{"spec": spec, "prefix": tool["prefix"]}], buildable=False, require=[spec])
+
+
+def validate_plan(record, packages):
+    selected = {"gcc": record, **record.get("tools", {})}
+    for package in packages:
+        tool = selected.get(package["name"])
+        if tool and (not package["external"] or package["version"] != tool["version"]
+                     or Path(package["prefix"]).resolve() != Path(tool["prefix"])):
+            raise ForgeError(f"Spack selected {package['name']} at {package['prefix']}, expected {tool['prefix']}.")
+
+
+def check_tools(record):
+    env, _ = _inspect(record)
+    for tool in record.get("tools", {}).values():
+        for path in tool["commands"].values():
+            version = _run([path, "--version"], env=env).splitlines()[0]
+            if not re.search(r"(?<![\d.])" + re.escape(tool["version"]) + r"(?![\d.])", version):
+                raise ForgeError(f"Expected {tool['version']} from {path}; got {version}.", code=1)
 
 
 def cmake_runtime_paths(record, cache):

@@ -37,7 +37,7 @@ version = {attr = "jarvis_forge.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-jarvis_forge = ["schemas/*.json", "examples/*.yaml", "card/*.yaml"]
+jarvis_forge = ["schemas/*.json", "examples/*.yaml", "card/*.yaml", "card/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,7 +1,12 @@
 # In-place CBS build. jforge build run --source PATH selects the GAMBIT checkout.
 # Every preset shares ${sourceDir}/build, so this card does not pass -B.
-name: cbs-build
-platforms: [linux, darwin]
+name: cbs
+platforms: [linux]
+environment:
+  outputs_off: [rivet]
+requires:
+  root:
+    build: root
 dependencies:
   - "cmake@3.24:"
   - "boost@1.48:"
@@ -19,6 +24,7 @@ build:
   required_files: [CBS]
   cmake:
     preset: cbs-gnu
+    options: {CMAKE_CXX_STANDARD: 17}
     binary_dir: preset
     lock: source
     targets: [CBS]

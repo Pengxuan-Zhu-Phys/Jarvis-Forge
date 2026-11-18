@@ -28,7 +28,7 @@ def _load(name, relative):
 
 
 def test_cbs_build_card_is_in_place_and_uses_the_preset_directory():
-    loaded = builds.load(ROOT / "builds/cbs-build.yaml")
+    loaded = builds.load(ROOT / "builds/cbs.yaml")
     step = next(item for item in loaded["config"]["steps"] if item["uses"] == "cmake.project")
     assert step["with"]["in_place"] is True
     assert step["with"]["binary_dir"] == "preset"
@@ -37,15 +37,18 @@ def test_cbs_build_card_is_in_place_and_uses_the_preset_directory():
     assert step["with"]["phases"] == ["configure", "build"]
     assert step["with"]["required_files"] == ["CBS"]
     assert builds.host_requirements(loaded["config"]) == {
-        "platforms": ["linux", "darwin"], "apt_backend": "spack"}
+        "platforms": ["linux"], "apt_backend": "spack"}
+    assert loaded["config"]["requires"]["root"]["build"] == "root"
+    assert loaded["config"]["environment"]["outputs_off"] == ["rivet"]
 
 
 def test_cbs_plan_does_not_pass_a_private_binary_dir(home):
-    planned = builds.plan(home, str(ROOT / "builds/cbs-build.yaml"))
-    configure = planned["cmake_commands"][0]["argv"]["configure"]
+    planned = builds.plan(home, str(ROOT / "builds/cbs.yaml"))
+    commands = next(row["argv"] for row in planned["cmake_commands"] if row["build"] == "cbs")
+    configure = commands["configure"]
     assert "-B" not in configure
     assert "cbs-gnu" in configure
-    assert planned["cmake_commands"][0]["argv"]["build"][2] == "<preset-binary-dir>"
+    assert commands["build"][2] == "<preset-binary-dir>"
 
 
 def test_mg5_card_requires_the_pythia8_variant():

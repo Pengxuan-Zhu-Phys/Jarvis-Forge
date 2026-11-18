@@ -23,6 +23,7 @@ from . import cmake
 from .downloads import unpack
 from .environment_registry import show as registered_environment
 from .package_operations import run_command, verified_archive
+from .build_names import app_name
 from .storage import ForgeError, ForgeHome, digest, identifier, new_id, now, read_json, write_json
 from .suite import UniqueLoader, expand
 
@@ -164,6 +165,7 @@ def plan(home, reference, *, parameters=None, environment_name=None, source=None
                 build_dir = "<preset-binary-dir>" if options.get("binary_dir") == "preset" else "<instance>/build/" + step["id"]
                 prefix = "<source>" if options.get("in_place") else "<install-prefix>"
                 commands.append({"build": node["config"]["id"], "step": step["id"],
+                    "phases": options.get("phases", ["configure", "build", "install"]),
                     "argv": cmake.commands(options, options["source"], build_dir, prefix)})
     return {"build_id": value["nodes"][value["root"]]["config"]["id"],
             "workspace": value["nodes"][value["root"]].get("workspace"),
@@ -171,6 +173,7 @@ def plan(home, reference, *, parameters=None, environment_name=None, source=None
             "environment_name": environment_name,
             "root": value["root"], "nodes": [{"recipe": k, "build": v["config"]["id"],
             "parameters": v["parameters"], "requires": v["requirements"], "steps": v["ordered"],
+            **({"outputs_off": names} if (names := v["config"].get("environment", {}).get("outputs_off")) else {}),
             "sources": v["config"].get("sources", {}), "host_requirements": host_requirements(v["config"])}
             for k, v in value["nodes"].items()],
             "note": "Read-only graph; packages and compiler compatibility are resolved during execution."}
@@ -289,12 +292,16 @@ def process_environment(values):
         os.environ.update(previous)
 
 
+BUILD_ENV_KEYS = {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "CC", "CXX", "FC",
+                  "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "LIBRARY_PATH", "LD_LIBRARY_PATH",
+                  "CMAKE_PREFIX_PATH", "CMAKE_INCLUDE_PATH", "CMAKE_LIBRARY_PATH", "PKG_CONFIG_PATH",
+                  "PYTHONHOME", "PYTHONPATH", "PYENV_ROOT", "PYENV_VERSION", "VIRTUAL_ENV", "LOADEDMODULES",
+                  "MODULEPATH", "JFORGE_ACTIVE_OUTPUTS"}
+
+
 def safe_environment(values, extra=()):
     # Store explicit build context, not SSH agent sockets, tokens or passwords.
-    keys = {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "CC", "CXX", "FC",
-            "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "LIBRARY_PATH", "LD_LIBRARY_PATH",
-            "CMAKE_PREFIX_PATH", "CMAKE_INCLUDE_PATH", "CMAKE_LIBRARY_PATH", "PKG_CONFIG_PATH", "PYTHONHOME", "PYTHONPATH", "PYENV_ROOT", "PYENV_VERSION",
-            "VIRTUAL_ENV", "LOADEDMODULES", "MODULEPATH", *extra}
+    keys = BUILD_ENV_KEYS.union(extra)
     return {k: v for k, v in values.items() if k in keys}
 
 
@@ -362,7 +369,7 @@ def artifact(home, artifact_id):
 
 
 def compatible(value, request, context):
-    return (value["output"] == request["output"] and value["build_id"] == request["build_id"]
+    return (value["output"] == request["output"] and app_name(value["build_id"]) == app_name(request["build_id"])
             and (not request.get("artifact") or value["artifact_id"] == request["artifact"])
             and value.get("contract") == request.get("contract", "cmake-prefix/v1")
             and Version(value["version"]) in SpecifierSet(request.get("version", ""))
@@ -551,7 +558,9 @@ def _matches_legacy_configure(saved, requested, argv, logs, source, environment)
 
 
 def execute(home, reference=None, *, parameters=None, environment_name=None, jobs=1, resume=None, source=None, progress=None, verbose=False, as_json=False):
-    from . import toolchains
+    from . import toolchains, unified_profiles
+    from .apt_profiles import active_home
+    from .env_entries import prepare_build_environment, require_outputs_off
 
     if jobs < 1:
         raise ForgeError("Jobs must be positive.")
@@ -576,13 +585,37 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                    "workspace": selected_graph["nodes"][selected_graph["root"]].get("workspace")}
         if apt_profile:
             request["apt_profile"] = apt_profile
-        from .apt_profiles import active_home
-
         target = ForgeHome(Path(apt_profile["path"])) if apt_profile else active_home(home)
-        if toolchain := toolchains.binding(target):
+        if managed := unified_profiles.record(target):
+            unified_profiles.verify(target, managed)
+            request.update(profile_instance=managed["id"], profile_path=str(target.root))
+            request["toolchain"] = managed["toolchain"]
+        elif toolchain := toolchains.binding(target):
             request["toolchain"] = toolchain
     apt_profile = request.get("apt_profile")
     toolchain = request.get("toolchain")
+    managed = None
+    if request.get("profile_instance"):
+        from .package_operations import _inside
+
+        managed_home = ForgeHome(_inside(home, Path(request["profile_path"])))
+        managed = unified_profiles.record(managed_home)
+        if not managed or managed["id"] != request["profile_instance"] or toolchain != managed["toolchain"]:
+            raise ForgeError("The saved build profile is unavailable or has changed.")
+        if resume:
+            unified_profiles.verify(managed_home, managed)
+    excluded_outputs = {app_name(name) for node in selected_graph["nodes"].values()
+                        for name in node["config"].get("environment", {}).get("outputs_off", ())}
+    if excluded_outputs:
+        runtime_profile = managed_home if managed else active_home(home)
+        for node in selected_graph["nodes"].values():
+            for name, child in node["requirements"].items():
+                required = selected_graph["nodes"][child]["config"]
+                output = required.get("outputs", {}).get(node["config"]["requires"][name]["output"], {})
+                producer = next((step for step in required["steps"] if step["id"] == output.get("step")), {})
+                package = producer.get("with", {}).get("export", {}).get("package", "")
+                if excluded_outputs.intersection({app_name(required["id"]), app_name(package)}):
+                    raise ForgeError(f"Build graph requires excluded output {required['id']}.")
     directory.mkdir(parents=True, exist_ok=True)
     with file_lock(directory / "run.lock"):
         state_path = directory / "graph.lock.json"
@@ -600,6 +633,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
         process_log = ProcessLog(attempts / "build.log", "Jarvis-Forge.Build", progress if verbose else None)
         active_step = None
         built_nodes = {}
+        prepared_environment = None
         bindings_by_parent = state.setdefault("dependency_bindings", {})
 
         def event(message, component="Build", *, echo=True, display=None):
@@ -613,9 +647,10 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                 process_log.write(message, module="Jarvis-Forge." + component)
 
         def run_node(key, policy="reuse-or-build", requirement=None, locked_artifact=None):
-            nonlocal active_step
+            nonlocal active_step, prepared_environment
             node = selected_graph["nodes"][key]
             config = node["config"]
+            config_env = config.get("environment", {})
             old = state["nodes"].get(key, {})
             node_dir = attempts / key[:16]
             node_dir.mkdir(exist_ok=True)
@@ -627,7 +662,6 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                 if observed != old["tools"]:
                     raise ForgeError("Selected compiler/Python changed since the saved run.", code=1)
             else:
-                config_env = config.get("environment", {})
                 name = environment_name or config_env.get("name")
                 if name:
                     profile = registered_environment(home, name, revision=config_env.get("revision"), strict=True)
@@ -638,14 +672,32 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                                 if config_env.get("shell") else None)
                     environment_origin = {"shell": str(original), "sha256": digest(original)} if original else {"inherited": True}
                 variables = config_env.get("variables", {})
-                captured = cmake.capture(original)
+                if excluded_outputs and managed and prepared_environment is None:
+                    prepared_environment, suppressed = prepare_build_environment(
+                        home, runtime_profile, managed, excluded_outputs, os.environ, attempts / "profile-build.sh")
+                    if suppressed:
+                        event("Temporarily disabled for this build: " + ", ".join(suppressed))
+                captured = cmake.capture(original, environment=prepared_environment)
+                instance = managed["id"] if managed else None
+                if (loaded := captured.get("JFORGE_PROFILE_INSTANCE")) and loaded != instance:
+                    raise ForgeError(f"Shell profile {loaded} differs from the build profile {instance or 'legacy'}.",
+                                     hint="Load the selected profile in a fresh shell before running this build.")
+                if excluded_outputs:
+                    require_outputs_off(home, runtime_profile, excluded_outputs, captured)
                 environment = safe_environment({**captured, **variables}, variables)
-                if toolchain:
+                if managed:
+                    environment = unified_profiles.build_environment(managed_home, managed, environment)
+                    environment_origin["profile_instance"] = managed["id"]
+                elif toolchain:
                     environment = toolchains.environment(toolchain, environment)
                     environment_origin["toolchain"] = toolchain["id"]
                 observed = cmake.tools(environment)
+            if excluded_outputs:
+                require_outputs_off(home, runtime_profile, excluded_outputs, environment)
             context = {"tools": observed, "platform": sys.platform, "machine": os.uname().machine,
                        "cxx_standard": str(node["parameters"].get("cxx_standard", "unspecified"))}
+            if managed:
+                context["profile_instance"] = managed["id"]
             node_profile = apt_profile if any(s["uses"] == "apt.install" for s in node["ordered"]) else None
             apt = None
             if node_profile and not old.get("instance"):
@@ -802,7 +854,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     title = _step_title(step)
                     active_step = {"build": config["id"], "id": step_id, "title": title,
                                    "index": index, "total": total}
-                    project = config["id"] + " · " if config["id"] != request["suite_id"] else ""
+                    project = app_name(config["id"]) + " · " if config["id"] != request["suite_id"] else ""
                     event(f"[{index}/{total}] {config['id']} / {step_id}",
                           display=f"[{index}/{total}] {project}{title}")
                     # Download sources only when the first consuming step is ready;
@@ -840,7 +892,8 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                         record = _step(home, step, options, work, step_dir, environment, observed,
                                        context, records, dependencies, jobs, event, row["steps"].get(step_id),
                                        workspace=workspace, verbose=verbose, as_json=as_json, apt_profile=node_profile,
-                                       toolchain=toolchain)
+                                       toolchain=toolchain, build_id=config["id"],
+                                       output_exclusions=(runtime_profile, excluded_outputs) if excluded_outputs else None)
                         records[step_id] = record
                         row["steps"][step_id] = record
                         if record.get("prefix"):
@@ -881,6 +934,8 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                                  "dependencies": [v["artifact_id"] for v in dependencies.values()],
                                  "evidence": evidence,
                                  "files": producer["files"] if producer.get("in_place") else cmake.manifest(Path(producer["prefix"]))}
+                    if managed:
+                        installed["profile_instance"] = managed["id"]
                     if producer.get("in_place"):
                         installed.update(in_place=True, cmake_cache=producer["cmake_cache"],
                                          cmake_cache_sha256=producer["cmake_cache_sha256"])
@@ -899,7 +954,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                 return finished
 
         try:
-            event(("Resume " if resume else "Build ") + request["suite_id"], echo=not verbose)
+            event(("Resume " if resume else "Build ") + app_name(request["suite_id"]), echo=not verbose)
             final = run_node(selected_graph["root"])
             from .shell_repair import artifact_activation
 
@@ -935,7 +990,8 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
 
 
 def _step(home, step, options, work, logs, environment, observed, context, records, dependencies, jobs, progress,
-          previous, *, workspace=None, verbose=False, as_json=False, apt_profile=None, toolchain=None):
+          previous, *, workspace=None, verbose=False, as_json=False, apt_profile=None, toolchain=None, build_id=None,
+          output_exclusions=None):
     used = []
     for name in options.get("dependencies", []):
         used.append(dependencies[name[9:]] if name.startswith("requires.") else records[name])
@@ -966,6 +1022,13 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
     script = archived_script
     if runtime_scripts != scripts:
         script = cmake.write_environment(logs / "runtime-environment.sh", base=environment, scripts=runtime_scripts, paths=paths)
+    if output_exclusions and (scripts or paths):
+        from .env_entries import require_outputs_off
+
+        profile, names = output_exclusions
+        if packages := sorted(names & {app_name(name) for name in selected_packages}):
+            raise ForgeError(f"Package dependencies would activate excluded output {packages[0]}.")
+        require_outputs_off(home, profile, names, cmake.capture(script, environment=environment))
     number = 0
 
     def invoke(argv, cwd, title="Command"):
@@ -1076,6 +1139,16 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
     lock = file_lock(source_cmake_lock(home, source), blocking=True,
                      message=f"CMake source is busy: {source}") if options.get("lock") == "source" else nullcontext()
     with lock:
+        if options.get("in_place"):
+            profile_instance = context.get("profile_instance")
+            owner = build / ".jforge-profile.json"
+            if owner.is_file():
+                if read_json(owner).get("id") != profile_instance:
+                    raise ForgeError("This checkout was configured under a different profile. Use a separate checkout.")
+            elif profile_instance:
+                if (build / "CMakeCache.txt").is_file():
+                    raise ForgeError("This checkout already has a CMake build. Use a clean checkout for this profile.")
+                write_json(owner, {"id": profile_instance})
         build.mkdir(parents=True, exist_ok=True)
         configured = json.loads(json.dumps(options))
         cache = configured.setdefault("cache", {})
@@ -1083,6 +1156,12 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
             from .toolchains import cmake_runtime_paths
 
             cmake_runtime_paths(toolchain, cache)
+            if "cmake" in toolchain.get("tools", {}):
+                selected_cmake = toolchain["tools"]["cmake"]["commands"]["cmake"]
+                requested = options.get("executable", "cmake")
+                if requested != "cmake" and Path(requested).resolve() != Path(selected_cmake).resolve():
+                    raise ForgeError(f"The build asks for {requested}, but the profile uses {selected_cmake}.")
+                configured["executable"] = selected_cmake
         python_artifacts = {}
         for dependency in used:
             python = dependency.get("report", {}).get("python", {})
@@ -1202,7 +1281,8 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
     # Consumer environments must not inherit the producer's compiler/Python/PATH.
     # Dependency activation scripts and explicit paths carry the runtime closure.
     activation = work / (step["id"] + "-activate.sh")
-    cmake.write_environment(activation, scripts=activation_scripts, paths=exported_paths)
+    cmake.write_environment(activation, scripts=activation_scripts, paths=exported_paths,
+                            profile_instance=context.get("profile_instance"), build_id=build_id)
     evidence = {str(activation): digest(activation)}
     for exported in activation_scripts:
         if exported.is_file():

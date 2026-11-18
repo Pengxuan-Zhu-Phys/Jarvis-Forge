@@ -156,7 +156,8 @@ def normalize(config, path, home=None, library_files=None):
     result = {"schema_version": 1, "kind": "build", "id": identifier(workflow.get("name", path.stem)),
               "steps": [], "sources": {}, "outputs": {}, "requires": {}, "parameters": {}}
     if workflow.get("environment"):
-        result["environment"] = {"name": workflow["environment"]}
+        environment = workflow["environment"]
+        result["environment"] = {"name": environment} if isinstance(environment, str) else environment
     if workflow.get("platforms"):
         result["platforms"] = workflow["platforms"]
     ends, module_deps, groups, calculator_outputs = {}, {}, [], []

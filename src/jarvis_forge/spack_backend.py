@@ -122,7 +122,8 @@ def _new_install_tree(home):
         name = identifier(home.root.name.removeprefix("spack-"))
     else:
         name = "_direct"
-    store = _inside(base, base.root / "apps" / name)
+    store = (_inside(home, home.root / "apps/packages") if config.get("profile_store")
+             else _inside(base, base.root / "apps" / name))
     if config.get("toolchain_store"):
         return {"root": str(store), "padded_length": False, "projections": {
             "gcc": "{name}-{version}-{architecture.target}",
@@ -237,7 +238,10 @@ def _executable(home):
     from .package_operations import _inside
 
     value = settings(home)
-    executable = _inside(home, Path(value["engine"]) / "bin/spack")
+    engine = value.get("engine")
+    if not isinstance(engine, str) or not Path(engine).is_absolute():
+        raise ForgeError(f"Invalid Spack engine path for profile {home.root.name}.")
+    executable = _inside(home, Path(engine) / "bin/spack")
     if not executable.is_file():
         raise ForgeError("Managed Spack is missing.", hint="jforge apt import spack")
     return executable
@@ -608,15 +612,49 @@ def _spec_node(path):
     return spec
 
 
-def _spec_target(path):
-    node = _spec_node(path)
+def _node_target(node):
     arch = node.get("arch") if isinstance(node, dict) else None
     target = arch.get("target") if isinstance(arch, dict) else None
     if isinstance(target, dict):
         target = target.get("name")
-    if not isinstance(target, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", target):
+    return target if isinstance(target, str) and re.fullmatch(r"[A-Za-z0-9_.-]+", target) else None
+
+
+def _spec_target(path):
+    target = _node_target(_spec_node(path))
+    if not target:
         raise ForgeError(f"Installed package spec has no CPU target: {path}")
     return target
+
+
+def _require_target(packages, target):
+    requirement = f"target={target}"
+    packages.setdefault("all", {})["target"] = [target]
+    # Spack treats all.require as a default: a package-specific require replaces it.
+    # Keep it on real-package overrides as well; c/cxx/fortran constrain providers.
+    for name, policy in packages.items():
+        if name in {"c", "cxx", "fortran"} or not isinstance(policy, dict):
+            continue
+        rules = policy.get("require", [])
+        if name == "all" or rules:
+            rules = [rules] if isinstance(rules, str) else rules
+            policy["require"] = list(rules) + ([requirement] if requirement not in rules else [])
+
+
+def _validate_target(packages, target):
+    if not target:
+        return
+    incompatible = []
+    for pkg in packages:
+        if pkg["external"]:
+            continue  # OS and user-owned external binaries cannot be rebuilt by Forge.
+        actual = _node_target(pkg.get("node"))
+        if actual != target:
+            incompatible.append(f"{pkg['name']} ({actual or 'unknown'})")
+    if incompatible:
+        raise ForgeError(f"Spack profile requires target={target} throughout the build graph; "
+                         + "incompatible specs: " + ", ".join(sorted(set(incompatible))) + ".",
+                         code=1, hint="Remove conflicting target requests or build a fresh profile.")
 
 
 def _generic_host_target(home):
@@ -675,7 +713,7 @@ def _gcc_runtime_target(home):
     return _generic_host_target(home)
 
 
-def _candidate(home, op, roots, previous, *, reuse_buildcache=True):
+def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None):
     from .recipe_releases import ensure
     from .toolchains import binding, spack_requirements
 
@@ -693,9 +731,10 @@ def _candidate(home, op, roots, previous, *, reuse_buildcache=True):
             "concretizer": {"unify": True, "reuse": _python_reuse(buildcache=reuse_buildcache and not toolchain)},
         }
     }
-    target = (toolchain and toolchain.get("target")) or _gcc_runtime_target(home)
-    if target:
-        document["spack"]["packages"] = {"gcc-runtime": {"require": [f"target={target}"]}}
+    target = target or (toolchain and toolchain.get("target"))
+    runtime = target or _gcc_runtime_target(home)
+    if runtime:
+        document["spack"]["packages"] = {"gcc-runtime": {"require": [f"target={runtime}"]}}
     (directory / "spack.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
     shutil.copytree(root(home) / "config", directory / ".jforge-config")
     package_config = directory / ".jforge-config/packages.yaml"
@@ -704,6 +743,8 @@ def _candidate(home, op, roots, previous, *, reuse_buildcache=True):
     packages.update(_python_externals(profile["python"]))
     if toolchain:
         spack_requirements(toolchain, packages)
+    if target:
+        _require_target(packages, target)
     package_config.write_text(yaml.safe_dump(config, sort_keys=False))
     if previous and (Path(previous) / "spack.lock").is_file():
         shutil.copy2(Path(previous) / "spack.lock", directory / "spack.lock")
@@ -745,7 +786,7 @@ def _name_only_layout(envdir):
     return layout
 
 
-def _pin_installed_gcc_runtime(plan, envdir):
+def _pin_installed_gcc_runtime(plan, envdir, *, expected_target=None):
     layout = _name_only_layout(envdir)
     if layout is None:
         return None
@@ -771,6 +812,9 @@ def _pin_installed_gcc_runtime(plan, envdir):
                for value in (version, platform, os_name)):
         return None
     target = _spec_target(spec_file)
+    if expected_target and target != expected_target:
+        raise ForgeError(f"Installed gcc-runtime targets {target}, but this profile requires {expected_target}.",
+                         hint="Build and select a fresh profile before installing more packages.")
     manifest = envdir / "spack.yaml"
     document = yaml.safe_load(manifest.read_text())
     packages = document["spack"].setdefault("packages", {})
@@ -1162,9 +1206,15 @@ def transact(
     progress=None,
     project_python=None,
     build_stage=None,
+    target=None,
 ):
     from .package_operations import locked, operation
-    from .toolchains import binding
+    from .toolchains import binding, validate_plan as validate_toolchain_plan
+    from .unified_profiles import record as profile_record
+    from .apt_profiles import validate_active
+
+    if not dry_run and profile_record(home):
+        validate_active(home)
 
     if cache not in {"auto", "only", "never"}:
         raise ForgeError("Build cache mode must be auto, only or never.")
@@ -1195,13 +1245,14 @@ def transact(
     ):
         before = current(home)
         toolchain = binding(home)
+        bound_target = toolchain.get("target") if toolchain else None
+        if target and bound_target and target != bound_target:
+            raise ForgeError(f"Requested CPU target {target} conflicts with profile target {bound_target}.")
+        target = target or bound_target
         roots = _requested_roots(before, action, translated)
         result["roots"] = roots
         previous = before.get("environment") if action not in {"upgrade", "full-upgrade"} else None
-        if cache == "never":
-            envdir = _candidate(home, op, roots, previous, reuse_buildcache=False)
-        else:
-            envdir = _candidate(home, op, roots, previous)
+        envdir = _candidate(home, op, roots, previous, reuse_buildcache=cache != "never", target=target)
         if build_stage is not None:
             config_file = envdir / ".jforge-config/config.yaml"
             config = yaml.safe_load(config_file.read_text())
@@ -1221,6 +1272,7 @@ def transact(
                 timeout=timeout, progress=progress)
             dag = _snapshot(home, envdir, op, "dag" + suffix)
             write_json(op / "dag.json", dag)
+            _validate_target(dag["packages"], target)
             run(home, ["python", str(Path(__file__).with_name("spack_bridge.py")), "tree"],
                 op, "dependency-tree" + suffix, envdir=envdir, timeout=timeout,
                 progress=progress if getattr(progress, "verbose", False) else None)
@@ -1231,17 +1283,14 @@ def transact(
             nonlocal runtime_retried
             write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
             _validate_external_python(home, plan["packages"])
-            if toolchain:
-                for compiler in read_json(op / "dag.json")["packages"]:
-                    if compiler["name"] == "gcc" and (
-                            not compiler["external"] or Path(compiler["prefix"]).resolve() != Path(toolchain["prefix"])):
-                        raise ForgeError(f"Spack selected GCC at {compiler['prefix']}, expected {toolchain['prefix']}.")
+            if toolchain and roots:
+                validate_toolchain_plan(toolchain, read_json(op / "dag.json")["packages"])
             try:
                 _validate_name_only_plan(plan, envdir)
             except ForgeError:
                 if runtime_retried or action not in {"install", "check", "reinstall"}:
                     raise
-                installed = _pin_installed_gcc_runtime(plan, envdir)
+                installed = _pin_installed_gcc_runtime(plan, envdir, expected_target=target)
                 if installed is None:
                     raise
                 runtime_retried = True
@@ -1253,6 +1302,8 @@ def transact(
                                     omit_cached_build_deps=omit_cached_build_deps)
                 write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
                 _validate_external_python(home, plan["packages"])
+                if toolchain:
+                    validate_toolchain_plan(toolchain, read_json(op / "dag.json")["packages"])
                 _validate_name_only_plan(plan, envdir)
                 if any(p["name"] == "gcc-runtime" and not p["external"] and p["hash"] != installed
                        for p in plan["packages"]):
@@ -1382,6 +1433,7 @@ def transact(
                                 run(home, _install_args(jobs, "auto", source_hashes), op,
                                     "install", envdir=envdir, timeout=timeout, progress=progress)
             final = _snapshot(home, envdir, op, "installed") if roots else plan
+            _validate_target(final["packages"], target)
             missing = [
                 p["name"]
                 for p in final["packages"]

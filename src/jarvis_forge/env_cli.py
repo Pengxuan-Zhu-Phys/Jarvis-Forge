@@ -17,7 +17,7 @@ app = typer.Typer(add_completion=False, pretty_exceptions_enable=False,
                        "jforge env switch <name> selects apt or a named environment.\n"
                        "jforge apt profile <name> selects the package profile used by apt.\n"
                        "jforge env metadata [name] shows that environment's metadata file.\n"
-                       "jforge env drop root-build removes that build from the apt environment.\n\n"
+                       "jforge env drop root removes that build from the apt environment.\n\n"
                        "Command help: jforge env COMMAND -h")
 
 
@@ -190,7 +190,7 @@ def detach_environment(ctx: typer.Context):
 
 @app.command("drop")
 def drop_environment_build(ctx: typer.Context,
-                           build_id: str = typer.Argument(..., help="Attached build to remove. The installation stays on disk.", metavar="<build-id>")):
+                           build_id: str = typer.Argument(..., help="Attached build to remove. The installation stays on disk.", metavar="<app>")):
     """Remove one attached build from the apt environment."""
     from .apt_profiles import active_home
     from .env_entries import drop_build, read_selection

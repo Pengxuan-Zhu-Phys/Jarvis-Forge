@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 import sys
 
 from .storage import ForgeError, ForgeHome, identifier, read_json, write_json
@@ -19,6 +21,10 @@ def backend_name(home):
 
 
 def _selection(base):
+    from .unified_profiles import selection
+
+    if record := selection(base):
+        return record
     path = _inside(base, base.root / "apt/selection.json")
     if not path.exists():
         return None
@@ -57,6 +63,14 @@ def _recorded_profile(base, record):
 
 
 def active_home(base):
+    from .unified_profiles import record, selection
+
+    if managed := selection(base):
+        target = _profile(base, managed["id"])
+        if not record(target):
+            raise ForgeError(f"The default profile instance is missing: {managed['id']}.",
+                             hint="Run jforge apt profile check and select a ready profile with apt profile global.")
+        return target
     record = _selection(base) or {}
     target = _recorded_profile(base, record)
     native = _native_profile(base)
@@ -108,6 +122,8 @@ def profiles(base, *, archived=False):
     homes = [base] if configured(base) else []
     for path in sorted((base.root / "apt/profiles").glob("*/config.json")):
         target = _profile(base, path.parent.name)
+        if read_json(path).get("toolchain_store") and target != selected:
+            continue
         if configured(target) or _is_configured_homebrew(target):
             homes.append(target)
     if selected not in homes:
@@ -146,11 +162,45 @@ def profiles(base, *, archived=False):
     return rows
 
 
+def require_healthy_profile(profile, data):
+    """Fail closed for a published profile; only pending profiles may bootstrap."""
+    backend = data["backend"]
+    marker = profile.root / "apt" / ("spack.json" if backend == "spack" else "homebrew.json")
+    state_path = profile.root / "apt/state.json"
+    if not (marker.is_file() and state_path.is_file()):
+        raise ForgeError(f"Package backend is incomplete for profile {data['id']}: {profile.root / 'apt'}.",
+                         hint="Restore this profile's backend records or explicitly select another profile.")
+    state = read_json(_inside(profile, state_path))
+    activation = state.get("activation")
+    if not state.get(backend) or not isinstance(activation, str) or not _inside(profile, Path(activation)).is_file():
+        raise ForgeError(f"Published package environment is incomplete for profile {data['id']}: {state_path}.",
+                         hint="Restore this profile's backend records or explicitly select another profile.")
+    if backend == "spack":
+        from . import spack_backend
+
+        spack_backend._executable(profile)
+
+
+def validate_active(profile, *, environment=None):
+    """Verify a unified profile before apt can read or write its backend."""
+    from . import unified_profiles
+
+    if data := unified_profiles.record(profile):
+        unified_profiles.verify(profile, data)
+        unified_profiles.validate_python(data, os.environ if environment is None else environment)
+
+
 def ensure_active(base, *, progress=None, selected=None):
+    from .unified_profiles import record
+
+    target = selected or active_home(base)
+    if data := record(target):
+        require_healthy_profile(target, data)
+        return target
     if selected and configured(selected) and (selected.root / "apt/state.json").is_file():
         return selected
-    active = active_home(base)
-    selected = selected or active
+    active = active_home(base) if selected else target
+    selected = target
     pending = selected == active and (_selection(base) or {}).get("pending")
     if (configured(selected) and not pending) or _is_configured_homebrew(selected):
         return selected
@@ -177,6 +227,13 @@ def initialize_profile(base):
     if sys.platform not in {"linux", "darwin"}:
         return None
     with locked(base):
+        from .unified_profiles import record as managed_record, selection
+
+        if selection(base):
+            selected = active_home(base)
+            managed = managed_record(selected)
+            require_healthy_profile(selected, managed)
+            return {"id": managed["id"], "backend": managed["backend"], "status": "selected"}
         record = _selection(base) or {}
         selected = active_home(base)
         native = "homebrew" if sys.platform == "darwin" else "spack"
@@ -204,12 +261,15 @@ def initialize_profile(base):
 
 
 def _write_selection(base, target, profile_id, *, pending=False):
+    from .unified_profiles import clear_default
+
     selection = {"schema_version": 1, "id": profile_id, "platform": sys.platform}
     if target == base:
         selection["location"] = "root"
     if pending:
         selection["pending"] = True
     write_json(_inside(base, base.root / "apt/selection.json"), selection)
+    clear_default(base)
 
 
 def _save_selection(base, target, profile_id, result):
@@ -242,6 +302,12 @@ def use(base, name):
     if len(found) != 1:
         raise ForgeError(f"Ambiguous profile name: {name}. Select {' or '.join(key for key, _ in found)}.")
     profile_id, target = found[0]
+    from .unified_profiles import record, set_default
+
+    if record(target):
+        result = set_default(base, profile_id)
+        return {**result, "profile": profile_id, "apt_home": str(target.root),
+                "user_home": str(base.root), "state_committed": True}
     with locked(base), operation(base, "use", {"profile": profile_id, "backend": backend_name(target)}) as (_, result):
         return _save_selection(base, target, profile_id, result)
 
@@ -302,6 +368,8 @@ def switch(
         target.initialize()
         config = read_json(target.root / "config.json")
         config["apt_base_home"] = str(base.root)
+        if (inputs := target.root / "apt/profile-input.json").is_file():
+            config["profile_store"] = read_json(inputs).get("layout") == 2
         if toolchain_store:
             config["toolchain_store"] = True
         write_json(target.root / "config.json", config)

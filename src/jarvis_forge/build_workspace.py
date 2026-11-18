@@ -6,7 +6,7 @@ from pathlib import Path
 import shlex
 
 from .shell_repair import WORKSPACE_HEADER, activation_lock
-from .storage import ForgeError, digest, read_json, write_json, write_text
+from .storage import ForgeError, digest, identifier, read_json, write_json, write_text
 
 MARKER = ".jforge/workspace.json"
 
@@ -78,6 +78,16 @@ def activation_output(outputs):
     return outputs.get("installation") or (next(iter(outputs.values())) if len(outputs) == 1 else None)
 
 
+def profile_activations(directory):
+    profiles = directory / ".jforge/profiles"
+    if profiles.is_symlink():
+        raise ForgeError(f"Managed profile directory must not be a symbolic link: {profiles}")
+    for entry in sorted(profiles.glob("*/activate.sh")):
+        if entry.is_symlink() or entry.parent.is_symlink():
+            raise ForgeError(f"Managed profile activation must not use symbolic links: {entry}")
+        yield entry
+
+
 def publish(directory, result):
     from .cmake import runtime_activation
 
@@ -88,6 +98,39 @@ def publish(directory, result):
     target = directory / "activate.sh"
     with activation_lock(target):
         activation = runtime_activation(Path(selected["activation"]))
-        write_text(target, WORKSPACE_HEADER + "source " + shlex.quote(str(activation)) + " || return $?\n")
+        instance = result.get("profile_instance")
+        profiles = directory / ".jforge/profiles"
+        if profiles.is_symlink():
+            raise ForgeError(f"Managed profile directory must not be a symbolic link: {profiles}")
+        if instance or profiles.is_dir():
+            legacy = profiles / "legacy/activate.sh"
+            if instance and target.is_file() and not profiles.is_dir():
+                existing = target.read_text()
+                if existing.startswith(WORKSPACE_HEADER):
+                    write_text(legacy, existing)
+            name = identifier(instance) if instance else "legacy"
+            entry = profiles / name / "activate.sh"
+            if entry.is_symlink() or entry.parent.is_symlink():
+                raise ForgeError(f"Managed profile activation must not use symbolic links: {entry}")
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            with activation_lock(entry):
+                write_text(entry, WORKSPACE_HEADER + "source " + shlex.quote(str(activation)) + " || return $?\n")
+                write_json(entry.with_name("current.json"), {"run_id": result["run_id"],
+                           "artifact_id": selected["artifact_id"], "prefix": selected["prefix"], "activation": str(entry)})
+            root = shlex.quote(str(profiles))
+            write_text(target, WORKSPACE_HEADER + r'''case "${JFORGE_PROFILE_INSTANCE-}" in
+  *[!A-Za-z0-9_.-]*|[!A-Za-z0-9]*)
+    printf '%s\n' 'Invalid active profile ID.' >&2
+    return 1 ;;
+esac
+''' + f'''if [ ! -f {root}/"${{JFORGE_PROFILE_INSTANCE:-legacy}}"/activate.sh ]; then
+  printf '%s\\n' 'No successful build for the active profile in this workspace.' >&2
+  return 1
+fi
+source {root}/"${{JFORGE_PROFILE_INSTANCE:-legacy}}"/activate.sh || return $?
+''')
+        else:
+            write_text(target, WORKSPACE_HEADER + "source " + shlex.quote(str(activation)) + " || return $?\n")
         write_json(directory / ".jforge/current.json", {"run_id": result["run_id"],
-                   "artifact_id": selected["artifact_id"], "prefix": selected["prefix"], "activation": str(target)})
+                   "artifact_id": selected["artifact_id"], "prefix": selected["prefix"], "activation": str(target),
+                   **({"profile_instance": instance} if instance else {})})

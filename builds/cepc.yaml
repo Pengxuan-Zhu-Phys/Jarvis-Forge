@@ -1,5 +1,5 @@
 # Parton-level CEPC baseline. The physics inputs live in the project's server_setup bundle.
-name: CEPC-build
+name: cepc
 platforms: [linux]
 # Dependencies are Spack specs installed through the selected apt profile.
 dependencies:

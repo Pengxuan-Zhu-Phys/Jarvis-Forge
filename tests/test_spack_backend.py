@@ -166,6 +166,42 @@ def managed(tmp_path, monkeypatch):
     return home, calls
 
 
+@pytest.mark.parametrize("policy", ["only", "never"])
+@pytest.mark.parametrize("dependency_target", ["x86_64", "x86_64_v3"])
+def test_profile_target_applies_to_the_complete_spack_dag(managed, monkeypatch, policy, dependency_target):
+    home, calls = managed
+    cfg = b.root(home) / "config/packages.yaml"
+    cfg.write_text("packages: {fixture-lib: {require: '+shared'}}\n")
+    run = b.run
+
+    def concrete(home, args, op, label, **kwargs):
+        output = run(home, args, op, label, **kwargs)
+        if label == "concretize":
+            candidate = yaml.safe_load((kwargs["envdir"] / ".jforge-config/packages.yaml").read_text())["packages"]
+            assert candidate["all"]["require"] == ["target=x86_64"]
+            assert candidate["fixture-lib"]["require"] == ["+shared", "target=x86_64"]
+        if label in {"dag", "plan", "installed"}:
+            value = json.loads(output)
+            # The incompatible node may exist only in the DAG as a historical build dep.
+            if label == "plan" and policy == "only":
+                value["packages"] = [p for p in value["packages"] if p["root"]]
+            for pkg in value["packages"]:
+                target = "x86_64" if pkg["root"] else dependency_target
+                pkg["node"] = {"arch": {"target": {"name": target}}}
+            return json.dumps(value)
+        return output
+
+    monkeypatch.setattr(b, "run", concrete)
+    if dependency_target == "x86_64":
+        assert b.transact(home, "install", ["fixture-app"], cache=policy, target="x86_64")["state_committed"]
+    else:
+        with pytest.raises(ForgeError, match=r"fixture-lib \(x86_64_v3\)"):
+            b.transact(home, "install", ["fixture-app"], cache=policy, target="x86_64")
+        assert not any(args[0] == "install" for args, _ in calls)
+        assert not (home.root / "apt/state.json").exists()
+
+
+
 def test_transaction_dependency_snapshot_and_cache_policy(managed):
     home, calls = managed
     result = b.transact(home, "install", ["fixture-app"], cache="only")
@@ -659,7 +695,7 @@ def test_binary_remainder_failure_does_not_start_source_build(managed, monkeypat
     assert not (home.root / "apt/state.json").exists()
 
 
-@pytest.mark.parametrize("invalid_retry", [None, "occupied", "python"])
+@pytest.mark.parametrize("invalid_retry", [None, "occupied", "python", "target"])
 def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatch, invalid_retry):
     home, calls = managed
     named_layout(home)
@@ -685,6 +721,12 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
             ]
             lock.write_text("source lock")
         output = run(home, args, op, label, **kwargs)
+        if invalid_retry == "target" and label in {"dag", "dag-cache-retry"}:
+            dag = json.loads(output)
+            for package in dag["packages"]:
+                target = "x86_64_v3" if label == "dag-cache-retry" and package["name"] == "fixture-lib" else "x86_64"
+                package["node"] = {"arch": {"target": target}}
+            return json.dumps(dag)
         if label in {"install-cache", "install-binaries"}:
             if label == "install-binaries":
                 assert args[-2:] == ["/hash-fixture-app", "/hash-fixture-lib"]
@@ -715,8 +757,9 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
 
     monkeypatch.setattr(b, "run", stale_index)
     if invalid_retry:
-        with pytest.raises(ForgeError, match="already occupies|requires the external Python"):
-            b.transact(home, "install", ["fixture-app", "fixture-source"])
+        with pytest.raises(ForgeError, match="already occupies|requires the external Python|requires target=x86_64"):
+            b.transact(home, "install", ["fixture-app", "fixture-source"],
+                       target="x86_64" if invalid_retry == "target" else None)
         assert (home.root / "apt/state.json").read_bytes() == before
     else:
         result = b.transact(home, "install", ["fixture-app", "fixture-source"])

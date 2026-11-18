@@ -100,9 +100,13 @@ def test_cmake_producer_consumer_and_reuse(home, projects):
     assert Path(output['prefix'], 'bin/consumer').is_file()
     assert output['dependencies']
     assert home.show(first['run_id'])['status'] == 'passed'
+    renamed = yaml.safe_load(producer.read_text())
+    renamed["id"] = "tiny"
+    producer.write_text(yaml.safe_dump(renamed))
     second = builds.execute(home, consumer, jobs=2)
     assert second['status'] == 'passed', second
     assert any(n['status'] == 'reused' for n in second['nodes'].values())
+    assert second["outputs"]["installation"]["dependencies"] == output["dependencies"]
     builds.artifact(home, output['artifact_id'])
     (Path(output['prefix']) / 'bin/consumer').write_text('tampered')
     with pytest.raises(ForgeError, match='modified'):
@@ -406,7 +410,7 @@ def test_duplicate_yaml_rejected(tmp_path):
 
 
 def test_root_recipe_validates_and_contains_manual_build_fixes(tmp_path):
-    path = Path(__file__).parents[1] / 'builds/root-build.yaml'
+    path = Path(__file__).parents[1] / 'builds/root.yaml'
     if not path.exists():
         pytest.skip('Independent Release recipe sources not included in distribution')
     value = builds.load(path)['config']
@@ -506,7 +510,7 @@ def test_compact_library_and_calculator_cards_share_installation(home, projects,
 
 
 def test_compact_root_overrides_and_default_provenance():
-    path=Path(__file__).parents[1]/'builds/root-build.yaml'
+    path=Path(__file__).parents[1]/'builds/root.yaml'
     if not path.exists(): pytest.skip('Independent recipe checkout needed')
     loaded=builds.load(path)
     raw=loaded['raw_config']
@@ -729,16 +733,16 @@ def test_show_compact_card_does_not_require_library_download(tmp_path,capsys):
 
 
 def test_build_show_summarizes_root_recipe(tmp_path, capsys):
-    root = Path(__file__).parents[1] / "builds/root-build.yaml"
+    root = Path(__file__).parents[1] / "builds/root.yaml"
     home = tmp_path / "absent"
     assert main(["--home", str(home), "build", "show", str(root)]) == 0
     shown = capsys.readouterr().out
-    assert "root-build" in shown and "ROOT 6.40.04" in shown
+    assert shown.splitlines()[0] == "root" and "ROOT 6.40.04" in shown
     assert "Platform: linux" in shown and "APT profile: Spack" in shown
     assert "-Dall=ON" in shown and "Off: fcgi, dcache, r, qt6web, cuda, tmva-gpu, tmva-cudnn" in shown
     assert "Required features: pyroot, roofit, opengl, mathmore, arrow, davix, vecgeom, pythia8" in shown
     assert "Apt packages (" in shown and "pythia8" in shown
-    assert "name: root-build" not in shown and "fail-on-missing" not in shown
+    assert "name: root" not in shown and "fail-on-missing" not in shown
     assert not home.exists()
     assert main(["--home", str(home), "build", "show", str(root), "--expanded"]) == 0
     expanded = capsys.readouterr().out
@@ -756,7 +760,7 @@ def test_higgstools_recipe_patches_before_cmake_and_pins_the_bridges():
     import importlib.util
 
     root = Path(__file__).parents[1]
-    path = root / "builds/higgstools-build.yaml"
+    path = root / "builds/higgstools.yaml"
     loaded = builds.load(path)
     config = loaded["config"]
     steps = config["steps"]
@@ -853,8 +857,8 @@ def test_higgstools_dataset_install_matches_the_pin(tmp_path):
 
 
 @pytest.mark.parametrize("name,requirements", [
-    ("root-build", {"platforms": ["linux"], "apt_backend": "spack"}),
-    ("CEPC-build", {"platforms": ["linux"], "apt_backend": "spack"}),
+    ("root", {"platforms": ["linux"], "apt_backend": "spack"}),
+    ("cepc", {"platforms": ["linux"], "apt_backend": "spack"}),
     ("mg5-pythia8", {"platforms": ["linux"], "apt_backend": "spack"}),
 ])
 def test_linux_recipe_rejected_on_macos_before_run(home, name, requirements, monkeypatch, capsys):
@@ -890,6 +894,17 @@ def test_dependency_host_requirements_are_checked_before_parent(home, tmp_path, 
     write_json(home.root / "apt/selection.json", {"schema_version": 1, "id": profile.name})
     with pytest.raises(ForgeError, match="Build child requires a Spack apt profile.*homebrew-mac"):
         builds.execute(home, parent)
+    assert not list((home.root / "runs").iterdir())
+
+
+@pytest.mark.parametrize("excluded", ["tiny-build", "forgetiny"])
+def test_required_output_exclusion_fails_before_build(home, projects, excluded):
+    _, consumer = projects
+    config = yaml.safe_load(consumer.read_text())
+    config["environment"] = {"outputs_off": [excluded]}
+    consumer.write_text(yaml.safe_dump(config))
+    with pytest.raises(ForgeError, match="Build graph requires excluded output tiny-build"):
+        builds.execute(home, consumer)
     assert not list((home.root / "runs").iterdir())
 
 
@@ -984,7 +999,7 @@ def test_build_failure_shows_stage_diagnostic_and_resume_once(home, tmp_path, mo
     assert "[1/2] Preflight checks" in captured.err
     assert "Checks passed · Python" in captured.err
     assert "  [1/4] Resolve dependencies" in captured.err
-    assert "sample-build · Failed at step 2/2 · Install dependencies" in captured.err
+    assert "sample · Failed at step 2/2 · Install dependencies" in captured.err
     assert captured.err.count(message) == 1
     assert f"Operation logs: {operation}" in captured.err
     assert str(log) in captured.err
@@ -1013,7 +1028,7 @@ def test_build_success_keeps_command_output_for_verbose_and_logs(home, tmp_path,
     argv = ["--home", str(home.root), "build", "run", str(path)]
     assert main([*argv, "--verbose"] if verbose else argv) == 0
     captured = capfd.readouterr()
-    assert "sample-build · Passed" in captured.out
+    assert "sample · Passed" in captured.out
     assert "Outputs: none" not in captured.out and "Nodes:" not in captured.out
     assert ("Command:" in captured.err) is verbose
     assert ("raw subprocess output" in captured.err) is verbose
@@ -1135,7 +1150,7 @@ def test_native_card_consumes_another_workflow_output(home,projects,tmp_path):
     assert result['outputs']['installation']['dependencies']
 
 
-def workspace_release(tmp_path, projects):
+def workspace_release(tmp_path, projects, name="workspace-tiny"):
     import tarfile
     from tools.build_project_assets import build
     producer, _ = projects
@@ -1145,7 +1160,7 @@ def workspace_release(tmp_path, projects):
         stream.add(project, arcname='tiny')
     source = tmp_path / 'release-source'; (source / 'scripts').mkdir(parents=True)
     (source / 'scripts/accept.py').write_text('from pathlib import Path\nimport sys\nassert Path(sys.argv[1], "include/value.h").is_file()\n')
-    (source / 'tiny.yaml').write_text(yaml.safe_dump({'name':'workspace-tiny', 'build':{
+    (source / 'tiny.yaml').write_text(yaml.safe_dump({'name':name, 'build':{
         'name':'Tiny', 'version':'1.0', 'source':{'url':archive.as_uri(), 'sha256':digest(archive), 'subdir':'tiny'},
         'cmake':{'options':{'CMAKE_CXX_STANDARD':17}}, 'required_files':['include/value.h']},
         'checks':{'after':{'scripts':[{'path':'scripts/accept.py', 'args':['${path}']}]}}}))
@@ -1155,21 +1170,31 @@ def workspace_release(tmp_path, projects):
 
 
 def test_release_workspace_keeps_download_source_build_install_and_activation(home, projects, tmp_path, monkeypatch, capsys):
-    index = workspace_release(tmp_path, projects)
+    index = workspace_release(tmp_path, projects, name="workspace-tiny-build")
+    monkeypatch.chdir(tmp_path)
     update = build_catalog.update
     calls = []
     def acquire_release(target):
         calls.append('download')
         return update(target, index.as_uri())
     monkeypatch.setattr(build_catalog, 'update', acquire_release)
-    directory = tmp_path / 'my ROOT workspace'
-    assert main(['--home',str(home.root),'build','fetch','workspace-tiny','--directory',str(directory),'--json']) == 0
+    directory = tmp_path / 'workspace-tiny'
+    assert main(['--home',str(home.root),'build','fetch','workspace-tiny','--json']) == 0
     fetched = json.loads(capsys.readouterr().out)
     assert fetched['workspace'] == str(directory)
     assert calls == ['download']
     assert (directory / 'scripts/accept.py').is_file()
-    assert builds.plan(home, str(directory))['workspace'] == str(directory)
-    assert main(['--home',str(home.root),'build','run',str(directory),'--jobs','2','--json']) == 0
+    assert builds.plan(home, "workspace-tiny-build")["workspace"] == str(directory)
+    assert main(["--home", str(home.root), "build", "plan", "workspace-tiny"]) == 0
+    planned = capsys.readouterr().out
+    assert "Build plan · workspace-tiny" in planned and "Build Tiny" in planned
+    assert "workspace-tiny-build" not in planned and str(directory) in planned
+    script = directory / "scripts/accept.py"
+    script.write_text(script.read_text() + "print('edited workspace script')\n")
+    assert main(["--home", str(home.root), "build", "fetch", "workspace-tiny", "--json"]) == 2
+    assert "already contains" in json.loads(capsys.readouterr().out)["error"]["message"]
+    assert "edited workspace script" in script.read_text()
+    assert main(['--home',str(home.root),'build','run','workspace-tiny','--jobs','2','--json']) == 0
     result = json.loads(capsys.readouterr().out)
     prefix = Path(result['outputs'][0]['prefix'])
     instance = prefix.parent.parent
@@ -1180,13 +1205,15 @@ def test_release_workspace_keeps_download_source_build_install_and_activation(ho
     assert list((instance / 'downloads').iterdir())
     assert (directory / 'runs' / result['run_id']).resolve() == home.run_path(result['run_id']).resolve()
     assert cmake.capture(directory / 'activate.sh')['CMAKE_PREFIX_PATH'].split(':')[0] == str(prefix)
+    assert main(["--home", str(home.root), "build", "env", "workspace-tiny", "--path"]) == 0
+    assert cmake.capture(Path(capsys.readouterr().out.strip()))["CMAKE_PREFIX_PATH"].split(":")[0] == str(prefix)
     original = (directory / 'activate.sh').read_bytes()
     current = read_json(directory / '.jforge/current.json')
     identity = builds.artifact(home, current['artifact_id'])['instance']
     assert read_json(instance / '.jforge-instance.json')['instance'] == identity
     from jarvis_forge.build_workspace import create
     other = tmp_path / 'other-workspace'
-    create(home, build_catalog.resolve(home, 'workspace-tiny'), other)
+    create(home, build_catalog.resolve(home, "workspace-tiny", local_workspaces=False), other)
     separate = builds.execute(home, str(other))
     assert separate['status'] == 'passed', separate
     assert separate['outputs']['installation']['prefix'] != str(prefix)
@@ -1307,8 +1334,9 @@ def test_workspace_fetch_rejects_collisions_and_read_only_plan_stays_offline(hom
     monkeypatch.setattr(build_catalog, 'update', lambda target: pytest.fail('Read-only plan must stay offline'))
     with pytest.raises(ForgeError, match='not found'):
         builds.plan(home, 'not-cached')
-    assert main(['--home',str(home.root),'build','fetch','not-cached','--json']) == 2
-    assert 'exactly one' in json.loads(capsys.readouterr().out)['error']['message']
+    assert main(["--home", str(home.root), "build", "fetch", "not-cached",
+                 "--directory", str(destination), "--output", str(source), "--json"]) == 2
+    assert "either --output or --directory" in json.loads(capsys.readouterr().out)["error"]["message"]
 
 
 def test_workspace_publishes_a_safe_entry_for_an_existing_legacy_artifact(tmp_path):

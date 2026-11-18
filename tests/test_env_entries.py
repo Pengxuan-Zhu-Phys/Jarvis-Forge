@@ -148,7 +148,7 @@ def test_drop_keeps_root_out_until_the_next_successful_build(home, linux_apt, ca
     assert str(script) in Path(first["activation"]).read_text()
     assert main(["--home", str(home.root), "env", "drop", "root-build"]) == 0
     dropped = capsys.readouterr().out
-    assert "Removed from the apt environment: root-build" in dropped
+    assert "Removed from the apt environment: root" in dropped
     assert "This shell is unchanged" in dropped
     text = (home.root / "env/apt/activate.sh").read_text()
     assert str(script) not in text and str(backend) in text
@@ -271,7 +271,7 @@ def test_metadata_command_reads_the_file_without_rewriting_it(home, linux_apt, c
     shown = capsys.readouterr().out
     assert "apt [apt]" in shown
     assert "kept by metadata" in shown
-    assert "root-build · ROOT" in shown
+    assert "root · ROOT" in shown
     assert str(backend) in shown and str(script) in shown
     assert "Omitted (0):" in shown
     assert path.read_bytes() == before
@@ -287,7 +287,7 @@ def test_metadata_command_reads_the_file_without_rewriting_it(home, linux_apt, c
     capsys.readouterr()
     assert main(["--home", str(home.root), "env", "metadata", "apt"]) == 0
     omitted = capsys.readouterr().out
-    assert "Builds (0):" in omitted and "Omitted (1):" in omitted and "root-build" in omitted
+    assert "Builds (0):" in omitted and "Omitted (1):" in omitted and "root" in omitted
     shell = tmp_path / "hep.sh"
     shell.write_text("export HEP=1\n")
     add(home, "hep", shell, description="HEP stack")

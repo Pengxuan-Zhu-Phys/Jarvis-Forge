@@ -13,6 +13,7 @@ from packaging.specifiers import SpecifierSet, InvalidSpecifier
 from packaging.version import Version
 
 from . import __version__
+from .build_names import app_name
 from .downloads import fetch
 from .package_operations import operation
 from .storage import ForgeError, digest, identifier, read_json, write_json
@@ -148,9 +149,9 @@ def _refresh(home, url, platform, temporary, logs):
         library_files[name] = destination
     for row in index["builds"]:
         name = identifier(row.get("id", ""))
-        if name in seen or not re.fullmatch("[a-f0-9]{64}", str(row.get("sha256", ""))):
-            raise ForgeError("Duplicate build ID or invalid SHA-256 in Release index.")
-        seen.add(name)
+        if app_name(name) in seen or not re.fullmatch("[a-f0-9]{64}", str(row.get("sha256", ""))):
+            raise ForgeError("Duplicate app name or invalid SHA-256 in Release index.")
+        seen.add(app_name(name))
         if not isinstance(row.get("revision"), str) or not row["revision"]:
             raise ForgeError("Build Release entry requires a revision.")
         companions = resources(row)
@@ -204,21 +205,62 @@ def _refresh(home, url, platform, temporary, logs):
     return {"builds": selected, "source": url, "platform": platform, "excluded_builds": excluded}
 
 
-def resolve(home, reference, parent=None):
+def is_app_reference(reference):
+    return (not str(reference).startswith("~") and not any(part in str(reference) for part in ("/", "\\"))
+            and str(reference) not in {".", ".."} and Path(reference).suffix not in {".yaml", ".yml"})
+
+
+def workspace_recipe(directory, reference):
+    """Return the workspace card if it belongs to this app name."""
+    from .build_workspace import locate
+
+    if not directory.is_dir() or not locate(directory):
+        return None
+    card = directory / "build.yaml"
+    try:
+        raw = yaml.load(card.read_text(encoding="utf-8"), Loader=UniqueLoader)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise ForgeError(f"Cannot read workspace recipe {card}: {exc}") from exc
+    if isinstance(raw, dict):
+        header = raw.get("Workflow", raw)
+        if isinstance(header, dict):
+            name = header.get("name", raw.get("id"))
+            if isinstance(name, str) and app_name(name) == app_name(str(reference)):
+                return card.resolve()
+    return None
+
+
+def _match_id(names, reference):
+    return reference if reference in names else next(
+        (name for name in names if app_name(name) == app_name(reference)), None)
+
+
+def resolve(home, reference, parent=None, *, missing_ok=False, local_workspaces=True):
+    reference = str(reference)
+    named = is_app_reference(reference)
     candidate = Path(reference).expanduser()
     if not candidate.is_absolute() and parent:
         candidate = parent / candidate
-    if candidate.is_dir():
+    if candidate.is_dir() and (not named or local_workspaces):
         from .build_workspace import locate
         if locate(candidate):
             candidate = candidate / "build.yaml"
-        else:
+        elif not named:
             raise ForgeError(f"Not a build workspace: {candidate}")
     if candidate.is_file():
         return candidate.resolve()
+    if parent and named:
+        siblings = {path.stem: path for path in sorted(parent.glob("*.yaml"))}
+        if match := _match_id(siblings, reference):
+            return siblings[match].resolve()
+    if not parent and named and local_workspaces:
+        for directory in dict.fromkeys((Path.cwd(), Path.cwd() / app_name(reference), candidate)):
+            if card := workspace_recipe(directory, reference):
+                return card
     index = _index(home)
+    match = _match_id([row["id"] for row in index.get("builds", [])], reference) if named else None
     for row in index.get("builds", []):
-        if row["id"] == reference:
+        if row["id"] == match:
             path = home.root / "builds/recipes" / snapshot_id(row) / "build.yaml"
             if not path.is_file() or digest(path) != row["sha256"]:
                 raise ForgeError(f"Missing or modified build snapshot: {reference}")
@@ -227,24 +269,24 @@ def resolve(home, reference, parent=None):
                 if not script.is_file() or digest(script) != item["sha256"]:
                     raise ForgeError(f"Missing or modified companion script: {item['path']}")
             return path
-    platforms = index.get("excluded_builds", {}).get(str(reference))
+    excluded = index.get("excluded_builds", {})
+    platforms = excluded.get(_match_id(excluded, reference)) if named else None
     if platforms and index.get("platform") == sys.platform:
         supported = ", ".join(platforms)
         raise ForgeError(f"Build {reference} requires platform {supported}. Current platform is {sys.platform}.",
                          hint=f"Run this build on a supported host ({supported}).")
-    raise ForgeError(f"Build file or cached ID not found: {reference}",
-                     hint="jforge build update; or supply a local YAML file")
+    if missing_ok:
+        return None
+    raise ForgeError(f"Build workspace, recipe file or app not found: {reference}",
+                     hint="Run jforge build list --available to see cached apps, or supply a local path.")
 
 
-def acquire(home, reference):
+def acquire(home, reference, *, local_workspaces=True):
     """Fetch an uncached Release ID for explicit fetch/run actions; local paths stay local."""
-    candidate = Path(reference).expanduser()
-    index = _index(home)
-    if (candidate.exists() or any(row["id"] == reference for row in index.get("builds", []))
-            or index.get("platform") == sys.platform and reference in index.get("excluded_builds", {})):
+    if not is_app_reference(reference):
         return resolve(home, reference)
-    if "/" in reference or "\\" in reference or candidate.suffix in {".yaml", ".yml"}:
-        return resolve(home, reference)
-    identifier(reference)
+    identifier(str(reference))
+    if path := resolve(home, reference, missing_ok=True, local_workspaces=local_workspaces):
+        return path
     update(home)
-    return resolve(home, reference)
+    return resolve(home, reference, local_workspaces=local_workspaces)

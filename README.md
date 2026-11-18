@@ -68,9 +68,9 @@ To register the hook for future shells, run `jforge env repair --hook` or use th
 
 The hook loads the selected environment at startup and refreshes it after successful package changes. It uses the selected Forge home, including an explicit `--home`. Source switching removes previous managed package paths and restores exported values while preserving user PATH additions. The hook is intended for interactive use.
 
-The shell entry for each environment is a short, stable script next to its metadata file. The package environment is `<home>/env/apt/activate.sh`, described by `<home>/env/apt/env.json`. `jforge apt env --path` prints that script. Its text sources the current package revision, so the command above keeps working after later installs. A successful `root-build` adds that build's activation script to this same file. A ready root-build already on disk is added the next time the entry is published. A failed build leaves the entry unchanged. `source "$(jforge apt env --path)"` in a shell startup file loads that entry in each new shell. It does not install the `jforge` command wrapper, so later package commands in that shell do not refresh it and a finished build does not activate itself. Use the hook above when you want both.
+The shell entry for each environment is a short, stable script next to its metadata file. The package environment is `<home>/env/apt/activate.sh`, described by `<home>/env/apt/env.json`. `jforge apt env --path` prints that script. Its text sources the current package revision, so the command above keeps working after later installs. A successful `root` adds that build's activation script to this same file. A ready root already on disk is added the next time the entry is published. A failed build leaves the entry unchanged. `source "$(jforge apt env --path)"` in a shell startup file loads that entry in each new shell. It does not install the `jforge` command wrapper, so later package commands in that shell do not refresh it and a finished build does not activate itself. Use the hook above when you want both.
 
-`jforge env switch <name>` selects `apt` or a named environment for new shells. With the Forge hook loaded, the current shell loads it when the command returns. Without the hook, the current shell stays unchanged. `jforge env detach` clears that selection. The environment files remain. `jforge env current` shows the selection. `jforge env drop root-build` removes that build from the apt environment and leaves the installation on disk; the next successful `root-build` adds it again. `jforge env list` shows shell environments and package profiles separately: switch an environment with `env switch`, and select a package profile with `apt profile`. `jforge env metadata [name]` prints the metadata file for that environment. With no name, it prints the selected environment.
+`jforge env switch <name>` selects `apt` or a named environment for new shells. With the Forge hook loaded, the current shell loads it when the command returns. Without the hook, the current shell stays unchanged. `jforge env detach` clears that selection. The environment files remain. `jforge env current` shows the selection. `jforge env drop root` removes that build from the apt environment and leaves the installation on disk; the next successful `root` adds it again. `jforge env list` shows shell environments and package profiles separately: switch an environment with `env switch`, and select a package profile with `apt profile`. `jforge env metadata [name]` prints the metadata file for that environment. With no name, it prints the selected environment.
 
 Spack package names are cached during import/update. `apt list` shows installed packages in the selected profile, with version, requested/dependency kind and state. Requested packages appear first, followed by dependencies, sorted by name. Use `apt list --available` or `apt search` for the cached package catalog. Complete catalog listings are printed as compact lines. Use `apt show <package>` for installation paths and instance metadata, or `--json` for complete records. `jforge apt instances` lists saved installation instances, and `jforge apt prefix` prints one prefix.
 
@@ -228,34 +228,60 @@ Use pyenv for Python. Forge rejects formulas that require Homebrew Python, inclu
 
 Current build recipes with `apt.install` use Spack. See the [Homebrew profile design](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/HOMEBREW_PROFILE_DESIGN.md).
 
-## Linux compiler toolchains
+## Build profiles
 
-`jforge apt toolchain install gcc@14.3.0` builds or installs GCC, G++ and GFortran in a dedicated Spack profile. Use `apt toolchain use` to bind the installed suite to a separate project profile. Forge uses that compiler for Spack dependencies and project builds. Run `apt toolchain check` on a compute node to compile, link and run C, C++ and Fortran together and verify the loaded runtimes. See the [HPC toolchain workflow](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md#hpc-%E7%94%A8%E6%88%B7%E7%9B%AE%E5%BD%95%E4%B8%AD%E7%9A%84-gcc).
+```bash
+jforge apt profile
+jforge apt profile check
+jforge apt profile build ubuntu-24.04 --jobs 8
+jforge apt profile global ubuntu-24.04
+jforge apt profile apps
+jforge apt profile apps rivet --off
+jforge apt profile apps rivet --on
+```
+
+Built-in Linux profiles prepare GCC, G++, GFortran, CMake, GNU Make, Autoconf and Automake with Spack. The `macos` profile uses Apple Clang and Homebrew tools. Select your Python with pyenv before building or activating a profile. The Forge shell hook loads the selected default and its build outputs. On Linux, each new Spack profile keeps its store, toolchain, metadata, and activation scripts inside its own instance directory. Apt checks the selected Python and CPU before operating, fails if a selected backend is damaged, and enforces the CPU target on the full package build graph. See the [unified profile design](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/PROFILE_DESIGN.md).
+
+`apt profile apps` lists installed build outputs in the selected profile, including libraries. Use an app name or an exact output ID with `--on` or `--off`. Turning an app off preserves its installation and selected version. Turn it back on by name, or select a different version by exact output ID. If another enabled app needs that output, turn the dependent app off first. The shell hook refreshes the currently loaded profile if it is the one you changed; a named or detached shell stays as it is. `cbs` prepares its required ROOT build and temporarily leaves Rivet out of the build environment.
+
+Existing standalone GCC installations and bindings remain accessible with `apt toolchain`. See the [HPC toolchain workflow](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/APT.md#hpc-%E7%94%A8%E6%88%B7%E7%9B%AE%E5%BD%95%E4%B8%AD%E7%9A%84-gcc).
 
 ## Project builds and regression checker
 
 `jforge build` prepares, configures, compiles, installs and verifies software projects using CMake and reusable installation outputs. The `workflow` command namespace is reserved for future orchestration design. It is parallel to `apt`. Recipe dependencies install into the selected Spack profile, normally `spack-default` until another profile is selected. Build YAML sources are distributed independently from PyPI through GitHub Release assets. From a development checkout:
 
 ```bash
-jforge build validate builds/root-build.yaml
-jforge build plan builds/root-build.yaml --env hep
-jforge build run builds/root-build.yaml --env hep --jobs 8
+jforge build validate builds/root.yaml
+jforge build plan builds/root.yaml --env hep
+jforge build run builds/root.yaml --env hep --jobs 8
 jforge build resume <run-id> --jobs 8
 jforge build list
 source "$(jforge build env <artifact-id> --path)"
 ```
 
-A downloaded recipe can own its complete project workspace (after the maintainer publishes the build Release):
+For a published app, start in the directory where you want to keep the workspace:
 
 ```bash
-jforge build run root-build --directory "$HOME/workshops/root-forge" --jobs 8
+jforge build list --available
+jforge build fetch root        # Creates ./root/build.yaml and its companion scripts
+jforge build plan root         # Shows dependencies and steps without running them
+jforge build run root --jobs 8 # Uses ./root, including any edits you made
+jforge build list             # Shows installations in the current profile
+```
+
+Use `build show root` to read the recipe and `build plan root --verbose` for the CMake commands. From inside the workspace, `build run .` also works. To find one installed app's activation script, use `build env root --path`; if several outputs match, pass an exact output ID from `build list`.
+
+Use `--directory` to choose another workspace path, or fetch and build it in one command:
+
+```bash
+jforge build run root --directory "$HOME/workshops/root-forge" --jobs 8
 source "$HOME/workshops/root-forge/activate.sh"
 ```
 
-To inspect or edit the recipe first:
+To fetch without building into a custom workspace:
 
 ```bash
-jforge build fetch root-build --directory "$HOME/workshops/root-forge"
+jforge build fetch root --directory "$HOME/workshops/root-forge"
 jforge build run "$HOME/workshops/root-forge" --jobs 8
 ```
 
@@ -267,12 +293,12 @@ With the Forge shell hook loaded, successful `jforge build run` and `jforge buil
 
 In an interactive terminal, `build run` and `build resume` show a progress bar while downloading a source archive. The bar shows the bytes transferred and a percentage when the downloader knows the total size. Raw downloader output stays in the run logs. `--verbose` prints the download log path.
 
-An uncached Release ID is downloaded on explicit `build fetch/run`; cached IDs and existing workspaces remain usable offline. `build update` refreshes the catalog explicitly and never overwrites an editable workspace. The existing `fetch --output file.yaml` still copies only an editable card and its companion scripts; it does not create a workspace. `validate/plan` stay read-only and do not implicitly download missing recipes.
+An uncached app recipe is downloaded on explicit `build fetch/run`; cached IDs and existing workspaces remain usable offline. `build update` refreshes the catalog explicitly and never overwrites an editable workspace. Use `fetch --output file.yaml` for just the recipe and its scripts. The old names such as `root-build` still resolve to the same app. Existing workspaces, installed outputs and saved runs retain their records. `validate/plan` stay read-only and do not implicitly download missing recipes.
 
 Build cards use native Forge project sections: `dependencies`, `build` and `checks`. The ROOT card explicitly lists its source URL/checksum, packages, CMake options, extra dependency search paths and acceptance commands. A shortened excerpt is:
 
 ```yaml
-name: root-build
+name: root
 dependencies: [gsl, openblas+shared, openssl, libbsd, libmd]  # Full list in the actual card.
 build:
   name: ROOT
@@ -302,13 +328,13 @@ checks:
         args: ["${path}", "${build.version}", "${parameters.cxx_standard}", "${build.features}"]
 ```
 
-Only engine policy is implicit: Forge home selection, work/build/install/log directories, phase defaults, ordinary build type and timeouts. These defaults live in `card/build_default.yaml`; process-log layout lives in `card/logging.yaml`. Dependency path lists resolve from selected apt package prefixes. Includes/libraries feed both CMake discovery and compiler/linker search paths, including nested builds. Runtime paths apply during builds and after installation, with CMake RPATH defaults. Each CMake step saves resolved paths in `dependency-paths.json`. The independently released `builds/root-build.yaml` declares the project requirements; its companion `builds/scripts/root_acceptance.py` implements ROOT-specific acceptance. `build show` summarizes the recipe. `--expanded` adds the resolved steps, and `--json` prints the card data.
+Only engine policy is implicit: Forge home selection, work/build/install/log directories, phase defaults, ordinary build type and timeouts. These defaults live in `card/build_default.yaml`; process-log layout lives in `card/logging.yaml`. Dependency path lists resolve from selected apt package prefixes. Includes/libraries feed both CMake discovery and compiler/linker search paths, including nested builds. Runtime paths apply during builds and after installation, with CMake RPATH defaults. Each CMake step saves resolved paths in `dependency-paths.json`. The independently released `builds/root.yaml` declares the project requirements; its companion `builds/scripts/root_acceptance.py` implements ROOT-specific acceptance. `build show` summarizes the recipe. `--expanded` adds the resolved steps, and `--json` prints the card data.
 
 `build.source` accepts a local source directory or URL/SHA-256/subdir mapping. Use `build.cmake.preset` for a project's native preset, and `requires` to consume another build's installation output. Standard `checks.before/after` declare Python versions/development files, imported modules and executable requirements. Module/tool mappings add constraints, for example `modules: {numpy: ">=1.26"}`. Checks run with the selected Python, which does not need Forge installed. Reports preserve actual versions, paths and failures in `checks.json`. Custom Python belongs in relative companion scripts, with optional argument lists; shell strings, cmd/cwd mappings and literal argv lists remain supported. Previous LibDeps/Calculators spellings remain compatible aliases; new cards do not require HEP-specific keys. Similar log presentation does not add a dependency on Jarvis-HEP.
 
 `hep` is a user-registered environment; omit `--env` to inherit the current compiler/Python selection. The ROOT recipe currently targets Linux, needs an existing CMake/C/C++/Fortran toolchain and Python with NumPy/development headers, and defaults to C++17. Select the interpreter with pyenv or your shell before running the recipe. ROOT uses the interpreter, headers and library verified in preflight. It configures ROOT with `-Dall=ON` and turns off fcgi, dcache, R, Qt6Web, CUDA, and the GPU TMVA options. Acceptance requires the declared features, PyROOT, histogram and file I/O, and RooFit. `-Dall=ON` can build bundled XRootD, VDT, Clad, and RooFit MultiProcess when those packages are not already installed. It does not promise GPU support. ROOT's full real build requires separate target-machine validation of this new automation.
 
-User cards declare prerequisite modules with `required_modules`; the expanded execution schema represents external build outputs using `requires` entries. Compatible installed artifacts are reused; missing ones are built first. Recipes, local source digests, parameters, dependency instances and tool observations are locked. Multiple compatible instances require an explicit artifact binding; incompatible compiler/Python/C++ choices fail before consumer configuration. `cmake.project` consumes pinned prefixes and verifies the selected package-config path. History/show remain available; logs support qualified step names such as `root-build.ROOT.install`.
+User cards declare prerequisite modules with `required_modules`; the expanded execution schema represents external build outputs using `requires` entries. Compatible installed artifacts are reused; missing ones are built first. Recipes, local source digests, parameters, dependency instances and tool observations are locked. Multiple compatible instances require an explicit artifact binding; incompatible compiler/Python/C++ choices fail before consumer configuration. `cmake.project` consumes pinned prefixes and verifies the selected package-config path. History/show remain available; logs support qualified step names such as `root.ROOT.install`.
 
 `build run` and `build resume` show numbered stages, dependency and download progress, and a concise result. Failures show the stage, diagnostic, log paths and a resume command. Use `--verbose` or `--debug` to stream command lines and raw output. The attempt keeps the timestamped `build.log`, individual command logs and check reports in every mode.
 
@@ -319,15 +345,15 @@ Independent recipe distribution (once the maintainer publishes the assets):
 ```bash
 jforge build update
 jforge build list --available
-jforge build fetch root-build --output root.yaml
+jforge build fetch root --output root.yaml
 PYTHONPATH=src python3 tools/build_project_assets.py --version r1 --output /tmp/forge-build-release
 ```
 
 The asset builder prepares versioned YAML, referenced Python scripts and a checksum index. `update` validates the whole bundle; `fetch` copies the YAML and its scripts together, refusing conflicting local files. Script changes alter recipe identity, and resume uses the original script snapshots. Companion scripts should be self-contained. The builder never uploads or modifies `jfrel`. An unavailable Release does not prevent executing local or previously cached YAML.
 
-`CEPC-build` is the Linux parton-level recipe for 240 GeV WW generation with WHIZARD 3.2.0 and MadGraph 3.8.1. After fetching the recipe into a workspace, copy the CEPC project's `server_setup/` handoff into that workspace. The build checks its checksums, installs the pinned generators, and runs the handoff's WHIZARD, MG5 Born and standalone C++ export checks in a new acceptance directory. On success, source the workspace's `env.sh` to load the tools. For detector simulation, compose a separate build with an explicit dependency on `root-build` and a verified CEPC detector card.
+`cepc` is the Linux parton-level recipe for 240 GeV WW generation with WHIZARD 3.2.0 and MadGraph 3.8.1. After fetching the recipe into a workspace, copy the CEPC project's `server_setup/` handoff into that workspace. The build checks its checksums, installs the pinned generators, and runs the handoff's WHIZARD, MG5 Born and standalone C++ export checks in a new acceptance directory. On success, source the workspace's `env.sh` to load the tools. For detector simulation, compose a separate build with an explicit dependency on `root` and a verified CEPC detector card.
 
-`higgstools-build` installs HiggsTools 1.1.3 for GMFit. It uses the vendored source archive, applies the assignment-trace bridge v2 and the HS measurement-breakdown bridge v1, and builds the Python module from the bundled third-party sources. The wheel is installed into the `python3` on `PATH` with `pip --no-index --no-deps`. It also installs pinned HBDataSet v1.7 and HSDataSet v1.1 under the prefix and sets `HIGGSTOOLS_HBDATASET`, `HIGGSTOOLS_HSDATASET`, and `JARVIS_OPERAS_HTS_DATASET_CACHE_ROOT` for that interpreter. The legacy `HIGGSTOOLS_HB_DATASET` and `HIGGSTOOLS_HS_DATASET` names receive the same paths. It runs on Linux and macOS. Preflight requires CMake, a C++17 compiler, `make`, `patch`, Python development headers, and `setuptools`, `wheel`, and `pip` in that interpreter. Confirm with `python3 -m pip show HiggsTools` and `python3 -c 'import Higgs; import Higgs.predictions'`.
+`higgstools` installs HiggsTools 1.1.3 for GMFit. It uses the vendored source archive, applies the assignment-trace bridge v2 and the HS measurement-breakdown bridge v1, and builds the Python module from the bundled third-party sources. The wheel is installed into the `python3` on `PATH` with `pip --no-index --no-deps`. It also installs pinned HBDataSet v1.7 and HSDataSet v1.1 under the prefix and sets `HIGGSTOOLS_HBDATASET`, `HIGGSTOOLS_HSDATASET`, and `JARVIS_OPERAS_HTS_DATASET_CACHE_ROOT` for that interpreter. The legacy `HIGGSTOOLS_HB_DATASET` and `HIGGSTOOLS_HS_DATASET` names receive the same paths. It runs on Linux and macOS. Preflight requires CMake, a C++17 compiler, `make`, `patch`, Python development headers, and `setuptools`, `wheel`, and `pip` in that interpreter. Confirm with `python3 -m pip show HiggsTools` and `python3 -c 'import Higgs; import Higgs.predictions'`.
 
 `jforge test` also runs schema 1 checker cards: commands, builds, or the same structured standard checks. Standard checks use `check: {python: {modules: [numpy]}}` and run every time by default. Default selection for command/build checks compares declared input globs (including additions/deletions), check configuration, prerequisite signatures and the observed environment with the last successful evidence. It does not infer all software dependencies from Git changes. Checks with external/untracked inputs should use `cache: false` or be run with `--full`. Schema 2 cards use `test plan` instead of `test list`.
 

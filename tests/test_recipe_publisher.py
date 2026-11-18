@@ -410,11 +410,11 @@ def test_root_release_bundle_is_accepted_by_current_client(tmp_path, monkeypatch
     from jarvis_forge.storage import ForgeHome
 
     source = SCRIPT.parent / "builds"
-    if not (source / "root-build.yaml").is_file():
+    if not (source / "root.yaml").is_file():
         pytest.skip("Independent recipe sources are not shipped in the Python distribution")
     output = tmp_path / "assets"
     manifest = publisher.build_projects("2026.11.05.1", source, output)
-    root = next(row for row in manifest["builds"] if row["id"] == "root-build")
+    root = next(row for row in manifest["builds"] if row["id"] == "root")
     assert root["platforms"] == ["linux"]
     assert any(resource["path"] == "scripts/root_acceptance.py" for resource in root["files"])
     monkeypatch.setattr(build_catalog, "fetch", lambda url, target, logs: target.write_bytes((output / url.rsplit("/", 1)[1]).read_bytes()))

@@ -56,14 +56,14 @@ def test_build_list_summarizes_the_catalog_and_preserves_json(tmp_path, capsys):
     args = ["--home", str(tmp_path), "build", "list", "--available"]
     assert main(args) == 0
     output = capsys.readouterr().out
-    assert "root-build" in output and "2026.11.09.1" in output and "Scripts" in output
+    assert "root-build" not in output and "root" in output and "2026.11.09.1" in output and "Scripts" in output
     assert "math-libraries" in output and "Shared math tools" in output
     assert "https://" not in output and "root_acceptance.py" not in output
     assert "sha256" not in output.lower()
     assert main([*args, "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["command"] == "build list"
-    assert result["builds"] == [recipe] and result["libraries"] == libraries
+    assert result["builds"] == [{**recipe, "app": "root"}] and result["libraries"] == libraries
 
 
 def test_build_list_defaults_to_present_installations(tmp_path, capsys):
@@ -77,12 +77,12 @@ def test_build_list_defaults_to_present_installations(tmp_path, capsys):
     args = ["--home", str(tmp_path), "build"]
     assert main([*args, "list", "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["view"] == "installed" and result["builds"] == [installed]
+    assert result["view"] == "installed" and result["builds"] == [{**installed, "app": "root"}]
     assert main([*args, "artifacts", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["artifacts"] == [installed, missing]
+    assert json.loads(capsys.readouterr().out)["artifacts"] == [{**installed, "app": "root"}, {**missing, "app": "root"}]
     assert main([*args, "list"]) == 0
     output = capsys.readouterr().out
-    assert "Installed builds (1)" in output and str(prefix) in output
+    assert "Installed apps (1)" in output and str(prefix) in output
 
 
 def test_workflow_is_reserved(capsys):

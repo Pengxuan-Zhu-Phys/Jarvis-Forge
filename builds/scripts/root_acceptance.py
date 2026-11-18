@@ -1,4 +1,4 @@
-"""ROOT feature and scientific smoke checks shipped with root-build.yaml."""
+"""ROOT feature and scientific smoke checks shipped with root.yaml."""
 
 import argparse
 import json

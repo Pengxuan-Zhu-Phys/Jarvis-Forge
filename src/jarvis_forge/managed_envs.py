@@ -64,11 +64,12 @@ def repair_managed(home, *, dry_run=False, install_hook=False):
             if entry.is_symlink():
                 raise ForgeError(f"Managed activation must not be a symbolic link: {entry}")
             workspace_sources.add(entry)
-            if entry.exists():
-                with entry.open("rb") as stream:
-                    if stream.readline() != WORKSPACE_HEADER.encode():
-                        raise ForgeError(f"Unrecognized workspace activation script: {entry}")
-                entries.append(entry)
+            for script in (entry, *build_workspace.profile_activations(directory)):
+                if script.exists():
+                    with script.open("rb") as stream:
+                        if stream.readline() != WORKSPACE_HEADER.encode():
+                            raise ForgeError(f"Unrecognized workspace activation script: {script}")
+                    entries.append(script)
         except (ForgeError, OSError, ValueError) as exc:
             failed("workspace", directory, exc)
 

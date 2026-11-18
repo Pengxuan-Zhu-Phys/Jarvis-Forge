@@ -229,12 +229,19 @@ groups:
 - id: toolchains
   match:
   - tests/test_toolchains.py
+  - tests/test_unified_profiles.py
   inputs:
   - src/jarvis_forge/toolchain*.py
+  - src/jarvis_forge/unified_profiles.py
+  - src/jarvis_forge/card/apt_profiles.json
+  - src/jarvis_forge/env_entries.py
+  - src/jarvis_forge/build_cli.py
+  - src/jarvis_forge/build_workspace.py
   - src/jarvis_forge/apt_profiles.py
   - src/jarvis_forge/builds.py
   - src/jarvis_forge/spack_backend.py
   - tests/test_toolchains.py
+  - tests/test_unified_profiles.py
   - src/jarvis_forge/storage.py
   - src/jarvis_forge/package_operations.py
   - src/jarvis_forge/suite.py
@@ -252,7 +259,7 @@ checks:
       - [jforge, --version]
 - id: root-recipe
   inputs:
-  - builds/root-build.yaml
+  - builds/root.yaml
   - src/jarvis_forge/builds.py
   - src/jarvis_forge/schemas/build.schema.json
   - src/jarvis_forge/storage.py
@@ -271,4 +278,4 @@ checks:
   - jarvis_forge
   - build
   - validate
-  - builds/root-build.yaml
+  - builds/root.yaml

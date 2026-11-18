@@ -4,7 +4,20 @@
 
 ### Added
 
+- Create and select versioned compiler environments with `apt profile check`, `apt profile build`, and `apt profile global`. Built-in Ubuntu LTS and macOS presets provision native tools through Spack or Homebrew and validate the Python selected by pyenv.
+- Track ROOT, GAMBIT and other project build outputs by their managed profile. Switching profiles changes the visible builds and activation paths, while resuming a build keeps its saved profile.
+- List and toggle installed build outputs with `apt profile apps`. Build recipes can declare `environment.outputs_off` for build-only exclusions. The CBS recipe prepares ROOT and excludes Rivet before configuring GAMBIT.
 - Use `jforge playlist` to register a library of projects and inspect the pytest groups and checks declared by their schema 2 test cards. Keep checkout paths per machine, filter cases by shelf or project, and validate or refresh the local inventory without running tests.
+
+### Fixed
+
+- Apt validates the selected profile's CPU and pyenv Python before operating and preserves the selection if backend files are damaged. Spack enforces the CPU target throughout its concrete package graph, including cached and source plans.
+- New Spack profiles keep their package store, compiler toolchain, metadata, and activation scripts in a private instance directory. Existing profiles keep their original paths.
+
+### Changed
+
+- Use app names such as `root`, `cepc`, `cbs` and `higgstools` for build recipes and profile switches. The old `-build` names still resolve. Existing JSON IDs are preserved and inventory entries include the short `app` name.
+- `build fetch <app>` defaults to an editable workspace at `./<app>`; `build run <app>` reuses it. Build help groups commands by purpose, plans summarize dependency order, and `build env` accepts an unambiguous installed app name.
 
 ## 1.1.10 — 2026-11-17
 
