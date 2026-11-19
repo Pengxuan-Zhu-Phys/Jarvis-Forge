@@ -1,0 +1,14 @@
+project:
+  format: jarvis-forge-bench-project
+  version: 1
+  name: cbs-test-atlas
+  runtime: jforge-bench
+  defaults:
+    main_config: bin/bench.yaml
+  entrypoints:
+    - bin/bench.yaml
+    - bin/smoke.yaml
+  artifact_roots:
+    outputs: outputs
+    logs: logs
+    checkpoints: checkpoints

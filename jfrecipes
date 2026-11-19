@@ -341,8 +341,6 @@ def stage(manifest, output, github, tag):
             raise ValueError("Refusing to break the existing index URL/schema")
         if tag == "recipes" and not set(previous.get("engine_versions", [])) <= set(manifest["engine_versions"]):
             raise ValueError("Refusing to drop supported Spack engines")
-        if tag == "builds" and previous.get("requires_forge") != manifest["requires_forge"]:
-            raise ValueError("Refusing to change existing client compatibility; use a compatible build catalog")
         if revision_of(previous, tag) == revision and previous != manifest:
             raise ValueError("Recipe revision already exists with different metadata; choose a new revision")
     verified = set()

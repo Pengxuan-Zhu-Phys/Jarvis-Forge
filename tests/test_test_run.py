@@ -374,6 +374,99 @@ def test_status_history_and_report(tmp_path, home, capsys):
     assert main(["--home", str(home.root), "test", "summarize", "--acceptance-id", result["acceptance_id"], "--rebuild"]) == 0
 
 
+def test_accept_discovery_and_newer_full_failure(tmp_path, home, capsys, monkeypatch):
+    root, path = project(tmp_path, {"test_a.py": "from pathlib import Path\n"
+                                              "def test_ok():\n    assert not Path('deps/fail').exists()\n"},
+                         profiles={"acceptance": ["unit"]}, coverage={"paths": ["tests/test_*.py"]})
+    monkeypatch.chdir(root / "tests")
+    base = ["--home", str(home.root), "--json", "test"]
+    assert main([*base, "accept"]) == 0
+    first = json.loads(capsys.readouterr().out)["acceptance_id"]
+    (root / "deps").mkdir()
+    (root / "deps" / "fail").touch()
+    assert main([*base, "run", "--group", "unit", "--full"]) == 1
+    assert json.loads(capsys.readouterr().out)["status"] == "failed"
+    assert main([*base, "status"]) == 0
+    assert json.loads(capsys.readouterr().out)["cards"][0]["acceptance_id"] == first
+    assert main([*base, "accept", "--full"]) == 1
+    value = json.loads(capsys.readouterr().out)
+    assert value["cards"][0]["status"] == "failed"
+    latest = value["acceptance_id"]
+    testing_run.summarize(home, first)
+    assert main([*base, "status"]) == 1
+    assert json.loads(capsys.readouterr().out)["cards"][0]["acceptance_id"] == latest
+    assert path.is_file()
+
+
+def test_status_invalidates_group_dependencies_and_editable_contents(tmp_path, home):
+    groups = [{"id": "unit", "match": ["tests/test_*.py"], "pythonpath": ["deps"], "skip_allow": [],
+               "inputs": INPUTS}]
+    root, path = project(tmp_path, groups=groups, profiles={"acceptance": ["unit"]},
+                         coverage={"paths": ["tests/test_*.py"]})
+    dependency = tmp_path / "dependency"
+    dependency.mkdir()
+    module = dependency / "demo_dependency.py"
+    module.write_text("VALUE = 1\n")
+    git(dependency, "init", "-q")
+    commit(dependency)
+    info = root / "deps" / "demo_dependency-1.0.dist-info"
+    info.mkdir(parents=True)
+    metadata = info / "METADATA"
+    metadata.write_text("Name: demo-dependency\nVersion: 1.0\n")
+    (info / "direct_url.json").write_text(json.dumps({"url": dependency.as_uri(), "dir_info": {"editable": True}}))
+    assert testing_run.accept(home, path)["accepted"]
+    module.write_text("VALUE = 2\n")
+    current = testing_run.status(home, path)["cards"][0]
+    assert current["status"] == "stale" and "editable Python dependency" in current["reason"]
+    module.write_text("VALUE = 1\n")
+    metadata.write_text("Name: demo-dependency\nVersion: 2.0\n")
+    current = testing_run.status(home, path)["cards"][0]
+    assert current["status"] == "stale" and "Installed Python distributions" in current["reason"]
+
+
+def test_status_invalidates_same_named_environment_at_a_new_revision(tmp_path, home):
+    from jarvis_forge import environment_registry
+
+    _, path = project(tmp_path, profiles={"acceptance": ["unit"]}, coverage={"paths": ["tests/test_*.py"]})
+    shell = tmp_path / "env.sh"
+    environment_registry.add(home, "science", shell)
+    assert testing_run.accept(home, path, environment_name="science")["accepted"]
+    shell.write_text(shell.read_text() + "# environment revision change\n")
+    environment_registry.add(home, "science", shell, replace=True)
+    current = testing_run.status(home, path, environment_name="science")["cards"][0]
+    assert current["status"] == "stale" and "its revision changed" in current["reason"]
+
+
+def test_archive_gate_verifies_project_and_pinned_archive(tmp_path, home):
+    import tarfile
+    from jarvis_forge.storage import digest
+
+    root = tmp_path / "Extracted"
+    root.mkdir()
+    sample = root / "sample.txt"
+    sample.write_text("original\n")
+    archive = tmp_path / "release.tar.gz"
+    with tarfile.open(archive, "w:gz") as stream:
+        stream.add(root, arcname=root.name)
+    card = tmp_path / "jforge-tests.yaml"
+    card.write_text(yaml.safe_dump({
+        "schema_version": 2, "kind": "checker", "id": "demo-archive", "project": root.name,
+        "subject": {"archive": archive.name, "sha256": digest(archive)},
+        "environment": {"shell": python_shell(tmp_path)},
+        "default_profile": "acceptance", "profiles": {"acceptance": ["sample"]},
+        "checks": [{"id": "sample", "argv": ["${python}", "-c", "print('verified')"], "cache": False}],
+    }))
+    assert testing_run.accept(home, card)["accepted"]
+    sample.write_text("modified\n")
+    current = testing_run.status(home, card)["cards"][0]
+    assert current["status"] == "stale" and "sample.txt" in current["reason"]
+    assert testing_run.accept(home, card)["runs"][0]["steps"] == []
+    sample.write_text("original\n")
+    with archive.open("ab") as stream:
+        stream.write(b"tampered")
+    assert "differs from the pinned digest" in testing_run.status(home, card)["cards"][0]["reason"]
+
+
 # Evidence parsing and argv
 
 def test_parse_junit_needs_files_and_rebuilds_empty_classnames(tmp_path):

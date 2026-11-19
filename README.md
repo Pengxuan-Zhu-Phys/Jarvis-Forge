@@ -4,7 +4,7 @@ Jarvis-Forge is an independent Python package for user-space software environmen
 
 Forge runs local command suites, test cards, and benchmark cards, and preserves their evidence. Its `jforge apt` command uses a pinned, user-local Spack installation on Linux and an existing Homebrew installation on macOS by default. Old source installations remain queryable as archived records. Named environments keep private, versioned shell copies in one shared user directory. Benchmark cards can submit Slurm array jobs through `jforge bench`. Managed services, suite-level scientific comparison policies, and the `Jarvis forge` forwarding command are planned extensions.
 
-The root commands are `apt`, `env`, `build`, `test`, `bench`, `suite`, `playlist`, `history`, `show`, `logs`, `init`, and `doctor`. Use `playlist` to register and inspect test cards across projects. See the [playlist library guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/PLAYLIST.md).
+The root commands are `apt`, `env`, `build`, `test`, `bench`, `suite`, `playlist`, `dashboard`, `history`, `show`, `logs`, `init`, and `doctor`. Use `playlist` to organize and run cases across projects and `dashboard start` to open the local UI. See the [playlist library guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/PLAYLIST.md).
 
 ## Install
 
@@ -161,7 +161,7 @@ jforge apt list
 jforge apt prefix libgsl-dev --path
 ```
 
-Maintainers publish all package recipes, project build YAMLs, library cards and companion scripts with `./jfrecipes <recipe-revision>`. Use `--dry` to prepare and check both catalogs without network access. The fixed `recipes/recipes.json` and `builds/builds.json` entries keep their independent release cycles. `jforge apt update` refreshes the selected package backend and the build recipes supported by this OS. Use `jforge build update` to refresh just the build catalog. See the [recipe publishing guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/RELEASING.md#%E7%8B%AC%E7%AB%8B%E5%8F%91%E5%B8%83%E6%89%A9%E5%B1%95%E9%85%8D%E6%96%B9).
+Maintainers publish all package recipes, project build YAMLs, library cards and companion scripts with `./jfrecipes <recipe-revision>`. Use `--dry` to prepare and check both catalogs without network access. The fixed `recipes/recipes.json` and `builds/builds.json` entries keep their independent release cycles. `jforge apt update` refreshes the selected package backend and the build recipes supported by this OS. Use `jforge build update` to refresh just the build catalog. The current build catalog requires Jarvis-Forge 1.1.11 or newer; upgrade the client before refreshing the catalog. See the [recipe publishing guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/RELEASING.md#%E7%8B%AC%E7%AB%8B%E5%8F%91%E5%B8%83%E6%89%A9%E5%B1%95%E9%85%8D%E6%96%B9).
 
 `apt import spack` prepares and selects `spack-default`. `apt profile NAME --create` creates and selects a separate store and configuration. Use `apt profile` to list configured profiles and `apt profile NAME` to select an existing one. Select Python before creating a profile. Forge registers the active interpreter as an external Spack dependency and keeps it for the life of the profile. A package plan that requires a Spack-managed interpreter or virtual environment is rejected. The interpreter running Forge executes Spack itself. Select compilers and variants with native quoted specs when needed:
 
@@ -178,6 +178,8 @@ jforge apt profile default
 ```
 
 Common Debian development names are aliases to Spack names, for example `libgsl-dev` → `gsl`, `libeigen3-dev` → `eigen`, and `sqlite3` → `sqlite`. Native Spack specs and `name=version` are accepted. This does not import Ubuntu/Debian binary packages: Spack owns the dependency graph and uses its own recipes and signed build caches. Search/list use cached package names; show fetches detailed metadata from the managed local Spack installation.
+
+On Linux, install fonts in the selected Spack profile with `jforge apt install font-fira-code font-liberation-sans font-inter font-noto-sans-sc`. Forge discovers TrueType and OpenType fonts under installed packages' `share/fonts` directories and configures Fontconfig when the profile is activated. The generated `fonts.conf` stays with the activation revision and Fontconfig's cache lives at `cache/fontconfig` under the profile. The standard Linux system font directories are still available. A profile on shared storage makes its fonts available to activated jobs on each node without requiring root access or user font directories. Verify with `fc-list 'Fira Code' family file` in the active shell.
 
 Spack 1.2.2 and an engine-compatible recipe commit are bootstrapped from checksum-pinned official archives, without Git checkouts. Import requires HTTPS access, curl/wget, Bash, and a working Python. Source builds require a usable host compiler and relevant platform tools. The solver may bootstrap into the managed directory. Spack normally uses the host glibc; Forge does not build glibc or promise an isolated Ubuntu user space. AlmaLinux users use a compiler module or Spack compiler package as appropriate for their site.
 
@@ -369,15 +371,17 @@ jforge test report <checker-run-id>
 
 The development checker covers local test modules plus ROOT YAML validation. Real Spack integration and ROOT/CBS/MadGraph builds run separately. `--full` reruns checks but does not erase CMake incremental builds or force successful build artifacts to rebuild. Byte/scientific comparison policies for these run types are not yet part of `suite compare`.
 
-`jforge test` runs schema 2 test cards and test catalogs. A card selects pytest files into groups by globs and markers, names profiles such as `daily` and `acceptance`, and can require that every test file belongs to an acceptance group. `validate` and `plan` read only the YAML and the file tree. `run` executes the selected groups, records counts, skip reasons, per-case results, the Git source identity and the installed packages, and reuses unchanged groups. A project passes acceptance when `jforge test status` exits 0: an accepted `acceptance` report exists for the current committed source tree.
+`jforge test` runs schema 2 test cards and test catalogs. A card selects pytest files by globs and markers, names profiles such as `daily` and `acceptance`, and can require that every test file belongs to an acceptance group. `validate` and `plan` read the YAML and file tree. `run` executes selected groups, records their results and reuses matching evidence. Run `jforge test accept` in a project directory to run its complete gate. `jforge test status` exits 0 when the latest complete result accepts the current Git source or pinned release archive with its current dependencies and benchmark evidence.
+
+Use `jforge bench init ./`, `jforge bench fetch cbs-test-atlas`, and `jforge bench run smoke.yaml` in a benchmark workspace. After the smoke test, `jforge bench run` selects the physics card. See the [CBS setup and run commands](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/PROJECT_ACCEPTANCE_DESIGN.md#%E5%9C%A8-nas-%E4%B8%8A%E8%BF%90%E8%A1%8C).
 
 ```bash
 jforge test validate tests/jforge-tests.yaml
 jforge test plan tests/jforge-tests.yaml --profile acceptance --batch 2/4
-jforge test run tests/jforge-tests.yaml --profile acceptance
+jforge test accept
 jforge test run tests/jforge-tests.yaml --profile acceptance --batch 2/4 --acceptance-id ID
 jforge test summarize --acceptance-id ID
-jforge test status tests/jforge-tests.yaml
+jforge test status
 jforge test history --case test_resume
 jforge test report RUN_ID
 ```

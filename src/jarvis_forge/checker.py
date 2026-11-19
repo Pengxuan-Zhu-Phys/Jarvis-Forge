@@ -37,8 +37,7 @@ def validate_checks(checks, *, extra_fields=frozenset(), standard=None):
             standard(check["check"])
         if "uses" in check:
             _validate_uses(check["uses"])
-            if "cache" not in check:
-                check["cache"] = False
+            check["cache"] = False
         if "argv" in check and (not isinstance(check["argv"], list) or not check["argv"] or not all(isinstance(x, str) for x in check["argv"])):
             raise ForgeError("Checker argv must be a nonempty string list.")
         if check.get("cache", "check" not in check) and not check.get("inputs"):
@@ -138,8 +137,10 @@ def prepare_environment(home, directory, environment_config, card_dir, environme
     variables = environment_config.get("variables", {})
     environment = builds.safe_environment({**cmake.capture(shell), **variables}, variables)
     observed = cmake.tools(environment)
-    write_json(directory / "environment.json", {"variables": environment, "tools": observed, "source": origin})
-    script = cmake.write_environment(directory / "environment.sh", base=environment)
+    script = None
+    if directory is not None:
+        write_json(directory / "environment.json", {"variables": environment, "tools": observed, "source": origin})
+        script = cmake.write_environment(directory / "environment.sh", base=environment)
     return environment, observed, origin, script, name
 
 
@@ -165,7 +166,8 @@ def run_check(home, check, context, step_dir, *, cached, prerequisites, full, ru
     signature = builds.fingerprint({"check": check, "inputs": inputs, "build": build_graph,
         "standard_checks": standard,
         "environment": context["environment"], "environment_origin": context["environment_origin"],
-        "tools": context["observed"], "prerequisites": {n: token for n, (_, token) in prerequisites.items()}})
+        "tools": context["observed"], "acceptance": context.get("acceptance"),
+        "prerequisites": {n: token for n, (_, token) in prerequisites.items()}})
     token, slot = signature, None
     write_json(step_dir / "inputs.json", {"fingerprint": signature, "inputs": inputs})
     cacheable = check.get("cache", "check" not in check)
@@ -200,7 +202,7 @@ def run_check(home, check, context, step_dir, *, cached, prerequisites, full, ru
                 evidence[str(child_result)] = digest(child_result)
             else:
                 python = context["observed"].get("python", {}).get("path", "python3")
-                bindings = {"project": str(project), "python": python,
+                bindings = {"project": str(project), "card_dir": str(context["card_dir"]), "python": python,
                             "project_python": python, "controller_python": sys.executable,
                             "run_dir": str(context["run_dir"]), "step_dir": str(step_dir)}
                 def invoke(argv):
@@ -218,7 +220,10 @@ def run_check(home, check, context, step_dir, *, cached, prerequisites, full, ru
                     elif "uses" in check:
                         from . import bench
                         target = (Path(context["card_dir"]) / check["uses"]["bench"]).resolve()
-                        bench.acceptance_check(home, target, profile=check["uses"]["profile"])
+                        value = bench.acceptance_check(home, target, profile=check["uses"]["profile"])
+                        record["bench"] = value
+                        write_json(step_dir / "bench.json", value)
+                        evidence[str(step_dir / "bench.json")] = digest(step_dir / "bench.json")
                     else:
                         invoke(builds.interpolate(check["argv"], bindings))
                 finally:

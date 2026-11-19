@@ -1,6 +1,7 @@
 include CHANGELOG.md
 recursive-include tests *.py
 include tests/checker.yaml
+recursive-include tests/acceptance *.yaml
 recursive-include tests/fixtures *.json *.yaml
 
 # Git ignores do not control source distributions.

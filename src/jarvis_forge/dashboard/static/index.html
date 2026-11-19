@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Playlists · Jarvis Forge</title>
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">Skip to content</a>
+  <div class="shell">
+    <aside class="rail" aria-label="Workspace navigation">
+      <a class="brand" href="#overview">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+        <span>Jarvis Forge <small>Playlists</small></span>
+      </a>
+      <nav id="navigation" aria-label="Views"></nav>
+      <div id="shelves" class="rail-section"></div>
+      <div id="host" class="host"></div>
+    </aside>
+    <div class="shell-body">
+      <header class="topbar">
+        <div id="breadcrumbs" class="breadcrumbs"></div>
+        <div class="toolbar">
+          <label class="search"><span class="search-icon" aria-hidden="true">⌕</span>
+            <input id="search" type="search" placeholder="Find a case…" aria-label="Find a case">
+            <kbd class="search-key" aria-hidden="true">/</kbd>
+          </label>
+          <button id="refresh" class="button secondary" type="button" title="Refresh library">Refresh</button>
+        </div>
+      </header>
+      <main id="workspace" tabindex="-1" aria-busy="true"></main>
+      <footer id="run-bar" class="run-bar" hidden></footer>
+    </div>
+  </div>
+  <dialog id="dialog"></dialog>
+  <div id="toast" role="status" class="toast" hidden></div>
+</body>
+</html>

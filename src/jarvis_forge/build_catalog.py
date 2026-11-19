@@ -120,12 +120,16 @@ def _refresh(home, url, platform, temporary, logs):
 
     fetch(url, temporary / "index.json", logs / "index")
     index = read_json(temporary / "index.json")
+    if index.get("schema_version") != 1 or not isinstance(index.get("builds"), list):
+        raise ForgeError("Invalid build Release index.")
+    requirement = index.get("requires_forge", "")
     try:
-        compatible = Version(__version__) in SpecifierSet(index.get("requires_forge", ""))
-    except (InvalidSpecifier, TypeError):
-        compatible = False
-    if index.get("schema_version") != 1 or not compatible or not isinstance(index.get("builds"), list):
-        raise ForgeError("Invalid or incompatible build Release index.")
+        supported = SpecifierSet(requirement)
+    except (InvalidSpecifier, TypeError) as exc:
+        raise ForgeError("Invalid requires_forge in build Release index.") from exc
+    if Version(__version__) not in supported:
+        raise ForgeError(f"This build catalog requires Jarvis-Forge {requirement}; installed version is {__version__}.",
+                         hint="Upgrade Jarvis-Forge in your selected Python environment and retry jforge build update.")
     seen = set()
     selected, excluded = [], {}
     library_files = {}

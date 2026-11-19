@@ -7,12 +7,19 @@ import re
 import shutil
 import sys
 
+PROJECT_SOURCE = Path(__file__).resolve().parents[1] / 'builds'
+
 
 def build(version, output, *, source=None, base_url='https://github.com/Pengxuan-Zhu-Phys/Jarvis-Forge/releases/download/builds'):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,100}', version):
         raise ValueError('Invalid build revision')
     from jarvis_forge.builds import load
-    source = source or Path(__file__).resolve().parents[1] / 'builds'
+    source = source or PROJECT_SOURCE
+    release = source / 'release.json'
+    metadata = json.loads((release if release.is_file() else PROJECT_SOURCE / 'release.json').read_text())
+    if (not isinstance(metadata, dict) or metadata.get('schema_version') != 1
+            or not isinstance(metadata.get('requires_forge'), str) or not metadata['requires_forge']):
+        raise ValueError('Build release metadata must declare schema_version and requires_forge')
     if (output / 'builds.json').exists():
         raise FileExistsError(output / 'builds.json')
     output.mkdir(parents=True, exist_ok=True)
@@ -46,7 +53,7 @@ def build(version, output, *, source=None, base_url='https://github.com/Pengxuan
                      'description':config.get('description',''), 'files':companions})
     if not rows:
         raise ValueError('No build YAML files found')
-    result = {'schema_version':1, 'requires_forge':'>=1.1.0', 'builds':rows, 'libraries':libraries}
+    result = {'schema_version':1, 'requires_forge':metadata['requires_forge'], 'builds':rows, 'libraries':libraries}
     (output / 'builds.json').write_text(json.dumps(result,indent=2)+'\n')
     return result
 

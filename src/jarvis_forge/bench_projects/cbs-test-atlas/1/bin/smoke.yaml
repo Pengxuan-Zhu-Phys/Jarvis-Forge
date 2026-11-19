@@ -1,0 +1,23 @@
+kind: bench
+name: cbs-fixed-sample
+subject: cbs
+software:
+  cbs: {build: cbs, rebuild: never, entrypoint: CBS}
+cases: data/smoke-cases/*
+default_profile: smoke
+profiles:
+  smoke: {require: complete}
+steps:
+  - name: analyze
+    software: [cbs]
+    files:
+      - ${case.dir}/cbs.yaml
+      - ${case.dir}/smoke.hepmc.gz
+      - ${project.dir}/deps/scripts/cbs_benchmark.py
+    commands:
+      - [python3, cbs_benchmark.py, analyze, "${software.cbs.entrypoint}", "${case.analysis}",
+         "${case.region}", cbs.yaml, --sample, smoke.hepmc.gz, "${case.events}", "${case.sha256}"]
+    outputs:
+      result: CBS_result.json
+      metrics: metrics.json
+      input: run.yaml

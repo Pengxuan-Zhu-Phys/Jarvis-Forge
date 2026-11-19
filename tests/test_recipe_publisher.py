@@ -381,7 +381,7 @@ def test_failure_restores_both_previously_public_catalogs(source, build_source, 
     assert not any(event.startswith("delete:") for event in package_github.events + build_github.events)
 
 
-def test_build_update_keeps_only_the_latest_recipe_files(source, build_source, tmp_path):
+def test_build_update_can_raise_client_floor_and_keeps_only_latest_files(source, build_source, tmp_path):
     package_github, build_github = FakeGitHub(), FakeGitHub("builds")
     first = tmp_path / "first"
     verify = lambda url, expected: (build_github if "/builds/" in url else package_github).verify(url, expected)
@@ -391,12 +391,15 @@ def test_build_update_keeps_only_the_latest_recipe_files(source, build_source, t
     ], verify)
     second = tmp_path / "second"
     (build_source / "scripts/accept.py").write_text("print('accepted again')\n")
+    (build_source / "release.json").write_text(json.dumps({"schema_version": 1, "requires_forge": ">=1.1.11"}))
     projects = publisher.build_projects("r2", build_source, second / "builds")
     publisher.publish_all([
         ("recipes", publisher.build("r2", source, second / "recipes"), second / "recipes", package_github),
         ("builds", projects, second / "builds", build_github),
     ], verify)
     row = projects["builds"][0]
+    index = publisher.asset_named(build_github.state, "builds.json")
+    assert json.loads(build_github.download(index))["requires_forge"] == ">=1.1.11"
     expected = {"builds.json", row["url"].rsplit("/", 1)[1], row["files"][0]["url"].rsplit("/", 1)[1]}
     assert {asset["name"] for asset in build_github.state["assets"]} == expected
     assert not any("2026" in asset["name"] or asset["name"].startswith("builds-previous-")
@@ -405,20 +408,37 @@ def test_build_update_keeps_only_the_latest_recipe_files(source, build_source, t
     assert any(event.startswith("delete:") and "r1" in event for event in build_github.events)
 
 
-def test_root_release_bundle_is_accepted_by_current_client(tmp_path, monkeypatch):
+def test_project_release_requires_the_current_client(tmp_path, monkeypatch):
     from jarvis_forge import build_catalog
-    from jarvis_forge.storage import ForgeHome
+    from jarvis_forge.storage import ForgeError, ForgeHome
+    from tools.build_project_assets import build
 
     source = SCRIPT.parent / "builds"
     if not (source / "root.yaml").is_file():
         pytest.skip("Independent recipe sources are not shipped in the Python distribution")
     output = tmp_path / "assets"
     manifest = publisher.build_projects("2026.11.05.1", source, output)
+    assert manifest["requires_forge"] == ">=1.1.11"
+    local = build("2026.11.05.1", tmp_path / "local", source=source)
+    assert local["requires_forge"] == manifest["requires_forge"]
     root = next(row for row in manifest["builds"] if row["id"] == "root")
     assert root["platforms"] == ["linux"]
     assert any(resource["path"] == "scripts/root_acceptance.py" for resource in root["files"])
-    monkeypatch.setattr(build_catalog, "fetch", lambda url, target, logs: target.write_bytes((output / url.rsplit("/", 1)[1]).read_bytes()))
+    downloads = []
+
+    def fetch(url, target, logs):
+        name = url.rsplit("/", 1)[1]
+        downloads.append(name)
+        target.write_bytes((output / name).read_bytes())
+
+    monkeypatch.setattr(build_catalog, "fetch", fetch)
     home = ForgeHome(tmp_path / "home")
     home.initialize()
+    with monkeypatch.context() as previous:
+        previous.setattr(build_catalog, "__version__", "1.1.10")
+        with pytest.raises(ForgeError, match="requires Jarvis-Forge >=1.1.11; installed version is 1.1.10"):
+            build_catalog.update(home, platform="linux")
+    assert downloads == ["builds.json"]
+    assert not (home.root / "builds/catalog/index.json").exists()
     build_catalog.update(home, platform="linux")
     assert build_catalog.resolve(home, "root-build").is_file()

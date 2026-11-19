@@ -1,0 +1,18 @@
+{
+  "name": "cbs-test-atlas",
+  "version": "1",
+  "files": {
+    "bin/bench.yaml": "a226c611738fabe0d4796d009f3e9763a655bf3a96c56a81d42d877eda35b38e",
+    "bin/smoke.yaml": "1fc3bb7b56639b6d18db4ac404267dedd82aeae9e40ff800ccd7f90a610ac5eb",
+    "data/physics-cases/atlas-bh/case.yaml": "24eb2e8f63f5b2b3aecaa1af5cea287d7289c330cdd3a895efcbcad51fbb1619",
+    "data/physics-cases/atlas-bh/generate-w/proc_card.dat": "14e118808d3b2c68f956bf7476f59ca6bb6cf75f1d0351c8e19ae4a117b51c32",
+    "data/physics-cases/atlas-bh/generate-z/proc_card.dat": "d1037ce01651913e516289d62b04bef2029cf8aa62d1711b9fefcbc81d57b914",
+    "data/physics-cases/atlas-bh/reference.yaml": "531845b57e32309b96516090cf6a68649c0e977640151d82614f862116927193",
+    "data/smoke-cases/atlas-bh/case.yaml": "e2728d5a0667860f0d1ef30bf05e7041f10724570c85fc5ede244280809b8dd0",
+    "data/smoke-cases/atlas-bh/cbs.yaml": "d80e4879ddeb1c29dcb9be542c27f6c13536a9d85a92ddc3f656ba00f8292169",
+    "data/smoke-cases/atlas-bh/smoke.hepmc.gz": "7c33d38998e1097736870d0706ac9ff4190c032fc1fc44d8abf89f467c6d4b15",
+    "deps/scripts/cbs_benchmark.py": "256b44f7388b73ac64463ca1fe5bfb67519b6df06cf822e8a5e1ec2fee68081e",
+    "deps/templates/launch.mg5": "e65d9307f6438507848da9a6cc6938f3bd7a18671a09cd517e78cf764938f736",
+    "jarvis.project.yaml": "0c55772b1e8b9e34771e9af87c43e82cc34b107e4e2e5dfdd3d6da166911ddbf"
+  }
+}

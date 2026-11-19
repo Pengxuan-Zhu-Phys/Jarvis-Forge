@@ -58,13 +58,11 @@ def test_mg5_card_requires_the_pythia8_variant():
     assert builds.host_requirements(loaded["config"])["platforms"] == ["linux"]
 
 
-def test_cbs_acceptance_detects_a_signal_region():
+def test_cbs_build_acceptance_requires_registered_analyses():
     module = _load("cbs_acceptance", "builds/scripts/cbs_acceptance.py")
-    assert module.has_signal_region({
-        "analyses": {"ATLAS_EXOT_2019_04": {"signal_regions": {"SR_1b": {"n_sig_scaled": 1.0}}}}
-    })
-    assert not module.has_signal_region({"analyses": {"ATLAS_EXOT_2019_04": {"signal_regions": {}}}})
-    assert module.sample_path(["script", "/src"], __file__) is None
+    assert module.listed_count("CBS analyses: 2 (from /src)\n\nAnalysis ID\n") == 2
+    assert not module.listed_count("No ColliderBit analyses pass the validation policy.")
+    assert not module.listed_count("CBS analyses: 0 (from /src)\n")
 
 
 def test_mg5_acceptance_rejects_an_update_enabled_configuration(tmp_path):

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 
@@ -20,7 +21,7 @@ from .suite import UniqueLoader
 
 
 CARD_FIELDS = frozenset({"schema_version", "kind", "id", "project", "environment", "checks", "groups",
-                         "profiles", "default_profile", "coverage"})
+                         "profiles", "default_profile", "coverage", "subject", "card_inputs"})
 GROUP_FIELDS = frozenset({"id", "isolate", "import_mode", "match", "omit", "markers", "pythonpath",
                           "distributions", "env", "inputs", "needs", "cache", "timeout_seconds",
                           "pytest_args", "workers", "skip_allow", "exclusive", "artifacts"})
@@ -249,6 +250,14 @@ def load_card(path):
     if not project.is_dir():
         raise ForgeError(f"Test card project directory missing: {project}")
     checker.validate_environment(config.get("environment", {}))
+    subject = config.get("subject")
+    if subject is not None:
+        if (not isinstance(subject, dict) or set(subject) != {"archive", "sha256"}
+                or not isinstance(subject["archive"], str) or not subject["archive"].strip()
+                or not isinstance(subject["sha256"], str) or not re.fullmatch("[a-f0-9]{64}", subject["sha256"])):
+            raise ForgeError("subject requires an archive path and a lowercase SHA-256.")
+        subject = {**subject, "archive": str((path.parent / subject["archive"]).resolve())}
+    card_inputs = _relative(_strings(config.get("card_inputs", []), "card_inputs"), "card_inputs")
     raw_checks, raw_groups = config.get("checks", []), config.get("groups", [])
     if not isinstance(raw_checks, list) or not isinstance(raw_groups, list):
         raise ForgeError("checks and groups must be lists.")
@@ -312,7 +321,8 @@ def load_card(path):
 
     return {"schema_version": 2, "id": card_id, "path": str(path), "text": text, "project": str(project),
             "environment": config.get("environment", {}), "groups": {group["id"]: group for group in groups}, "checks": {c["id"]: c for c in raw_checks},
-            "order": order, "profiles": profiles, "default_profile": default, "coverage": coverage, "_files": {}}
+            "order": order, "profiles": profiles, "default_profile": default, "coverage": coverage,
+            "subject": subject, "card_inputs": card_inputs, "_files": {}}
 
 
 def load_catalog(path, root=None):
@@ -380,6 +390,24 @@ def load_target(path, *, root=None, project=None):
             "entries": [{"id": None, "path": card["path"], "env": None, "card": card}]}
 
 
+def project_card(path=None):
+    """Find the nearest standard card without crossing a project boundary."""
+    start = Path(path or Path.cwd()).expanduser().resolve()
+    if path is not None and not start.is_dir():
+        return start
+    for directory in (start, *start.parents):
+        candidates = [directory / "tests" / name for name in ("jforge-tests.yaml", "checker.yaml")]
+        found = [card for card in candidates if card.is_file() and Path(load_card(card)["project"]) == directory]
+        if len(found) == 1:
+            return found[0]
+        if found:
+            raise ForgeError(f"Multiple test cards in {directory}. Pass a card path.")
+        if any((directory / name).exists() for name in (".git", "jarvis.project.yaml", "pyproject.toml")):
+            break
+    raise ForgeError(f"No project test card found at {start}.",
+                     hint="Pass a test card path or add tests/jforge-tests.yaml.")
+
+
 # Selection, files and shards
 
 def _needs(card, item_id):
@@ -436,6 +464,22 @@ def expand(card, patterns):
 
 def group_files(card, group):
     return sorted(expand(card, group["match"]) - expand(card, group["omit"]))
+
+
+def python_environment(base, project, group=None):
+    values = dict(base)
+    if group is None:
+        return values
+    values.update(group["env"])
+    if group["isolate"] == "installed":
+        for name in ("PYTHONPATH", "PYTHONHOME", "PYTEST_ADDOPTS"):
+            values.pop(name, None)
+    elif group["pythonpath"]:
+        parts = [str(project / path) for path in group["pythonpath"]]
+        if values.get("PYTHONPATH"):
+            parts.append(values["PYTHONPATH"])
+        values["PYTHONPATH"] = os.pathsep.join(parts)
+    return values
 
 
 def check_intersections(card, ids, profile=None):

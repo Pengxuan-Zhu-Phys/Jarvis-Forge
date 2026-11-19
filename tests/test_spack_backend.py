@@ -2,8 +2,10 @@
 
 import json
 from pathlib import Path
+import shlex
 import sys
 import subprocess
+from xml.etree import ElementTree
 
 import pytest
 import yaml
@@ -216,6 +218,54 @@ def test_transaction_dependency_snapshot_and_cache_policy(managed):
     assert read_json(home.root / "apt/state.json")["spack"]["roots"] == ["fixture-app"]
 
 
+@pytest.mark.parametrize("shell", ["bash", "zsh"])
+def test_profile_fonts_follow_apt_activation(managed, monkeypatch, shell):
+    home, _ = managed
+    store = b.root(home) / "store"
+    directories = [store / name / "share/fonts" for name in ("fixture-app", "fixture-lib")]
+    for directory, filename in zip(directories, ("Family & style/Face.TTF", "Another.otf")):
+        font = directory / filename
+        font.parent.mkdir(parents=True)
+        font.touch()
+    ignored = store / "no-fonts/share/fonts"
+    ignored.mkdir(parents=True)
+    (ignored / "readme.txt").touch()
+    (ignored / "missing.ttf").symlink_to(ignored / "unknown")
+
+    def adapter(_home, _envdir, revision):
+        rows = json.loads((revision / "modifications.json").read_text())
+        return "".join(f"export {row['name']}={shlex.quote(row['value'])}\n" for row in rows)
+
+    monkeypatch.setattr(b, "_adapter_script", adapter)
+    with_fonts = b.transact(home, "install", ["fixture-app", "no-fonts"], cache="only")
+    config = Path(with_fonts["activation"]).with_name("fonts.conf")
+    document = ElementTree.parse(config)
+    assert [Path(entry.text) for entry in document.findall("dir")] == [
+        *(directory.resolve() for directory in directories),
+        Path("/usr/local/share/fonts"), Path("/usr/share/fonts"),
+    ]
+    assert document.findtext("cachedir") == str(home.root / "cache/fontconfig")
+    assert document.findall("include") == []
+
+    without_fonts = b.transact(home, "remove", ["fixture-app"], cache="only")
+    assert not Path(without_fonts["activation"]).with_name("fonts.conf").exists()
+    assert config.is_file()
+    assert all(directory.is_dir() for directory in directories)
+    script = '''
+set -e
+export FONTCONFIG_FILE=/site/fonts.conf
+source "$1"
+printf '%s\\n' "$FONTCONFIG_FILE"
+source "$2"
+printf '%s\\n' "$FONTCONFIG_FILE"
+'''
+    output = subprocess.check_output(
+        [shell, "-c", script, shell, with_fonts["activation"], without_fonts["activation"]],
+        text=True,
+    )
+    assert output.splitlines() == [str(config), "/site/fonts.conf"]
+
+
 def named_layout(home):
     (b.root(home) / 'config/config.yaml').write_text(yaml.safe_dump({'config':{'install_tree':{
         'root':str(b.root(home) / 'store'), 'padded_length':False, 'projections':{'all':'{name}'}}}}))
@@ -372,6 +422,7 @@ def test_apt_shell_repair_preserves_snapshot_and_selected_python(managed, monkey
         {"type": "PrependPath", "name": "PATH", "value": str(missing)},
         {"type": "PrependPath", "name": "PATH", "value": str(live)},
         {"type": "SetEnv", "name": "ROOTSYS", "value": str(missing)},
+        {"type": "SetEnv", "name": "FONTCONFIG_FILE", "value": str(missing / "fonts.conf")},
         lua_template,
     ]))
     evidence = {file: file.read_bytes() for file in (original, source, original.with_name("spack-environment.sh"))}
@@ -386,7 +437,7 @@ def test_apt_shell_repair_preserves_snapshot_and_selected_python(managed, monkey
     monkeypatch.delenv("JFORGE_CONTROLLER_LAUNCHER", raising=False)
     argv = ["--home", str(home.root), "env", "repair", "apt", "--json"]
     assert main([*argv, "--dry-run"]) == 0
-    assert json.loads(capsys.readouterr().out)["removed"] == 2 and read_json(state_path) == before
+    assert json.loads(capsys.readouterr().out)["removed"] == 3 and read_json(state_path) == before
     second_profile = home.root / "apt/profiles/spack-other"
     second_activation = second_profile / "environments/apt/revisions/other/activate.sh"
     second_activation.parent.mkdir(parents=True)

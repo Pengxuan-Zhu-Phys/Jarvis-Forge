@@ -1,0 +1,18 @@
+schema_version: 2
+kind: checker
+id: eggbox-official
+project: Eggbox
+subject:
+  archive: Eggbox_share_081916_01.tar.gz
+  sha256: fa410464efa39d12eea0ec2f820120cf1425988f9b7ffdf695b861f6f54e7921
+card_inputs: [eggbox_smoke.py]
+default_profile: daily
+profiles:
+  daily: [bridson-pipeline]
+  acceptance: [bridson-pipeline]
+checks:
+  - id: bridson-pipeline
+    inputs: [bin/Example_Bridson_Operas.yaml, deps/environment_default.yaml]
+    argv: ["${python}", "${card_dir}/eggbox_smoke.py", "${project}", "${step_dir}"]
+    cache: false
+    timeout_seconds: 180

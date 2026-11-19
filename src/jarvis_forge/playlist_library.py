@@ -9,7 +9,7 @@ import re
 
 import yaml
 
-from . import testing
+from . import playlist_commands, testing
 from .builds import file_lock
 from .storage import ForgeError, digest, identifier, read_json, write_text
 from .suite import UniqueLoader
@@ -75,6 +75,9 @@ def _validate_source(source, project, projects):
         _fields(source, label, (*common, "list", "run"), ("env", "subjects"))
         for key in ("list", "run"):
             _strings(source[key], f"{label}.{key}", nonempty=True)
+        for value in ("${request}", "${result_dir}"):
+            if source["run"].count(value) != 1:
+                raise ForgeError(f"{label}.run must pass {value} as a separate argument.")
     else:
         raise ForgeError(f"{label} has invalid kind {kind!r}; use test, bench or command.")
     if "path" in source:
@@ -104,6 +107,8 @@ def load(directory):
     _text(data["title"], "Library title")
     shelves = {row["id"]: row for row in _records(data["shelves"], "shelves")}
     for shelf in shelves.values():
+        if shelf["id"] == "library":
+            raise ForgeError("library is reserved for whole-library profiles.")
         _fields(shelf, f"Shelf {shelf['id']}", ("id", "title"))
         _text(shelf["title"], f"Shelf {shelf['id']} title")
     projects = {row["id"]: row for row in _records(data["projects"], "projects")}
@@ -125,12 +130,20 @@ def load(directory):
     return {**data, "path": str(path)}
 
 
-def initialize(directory, name=None, title=None):
+def initialize(directory, name=None, title=None, *, demo=None):
+    if demo not in {None, "sarah"}:
+        raise ForgeError("Available demo: sarah.")
     directory = Path(directory).expanduser().resolve()
     name = identifier(name if name is not None else directory.name)
-    title = _text(title if title is not None else name, "Library title")
+    title = _text(title if title is not None else "Research Workshop" if demo else name, "Library title")
     data = {"schema_version": 1, "kind": "playlist-library", "id": name, "title": title,
             "shelves": [], "projects": []}
+    if demo:
+        module = ["${python}", "-m", "jarvis_forge.playlist_demo"]
+        data["shelves"].append({"id": "examples", "title": "Examples"})
+        data["projects"].append({"id": "sarah", "title": "SARAH-Jarvis", "shelf": "examples",
+                                 "sources": [{"id": "demo", "kind": "command", "list": [*module, "list"],
+                                              "run": [*module, "run", "${request}", "${result_dir}"]}]})
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "library.yaml"
     try:
@@ -141,8 +154,12 @@ def initialize(directory, name=None, title=None):
     return {**data, "path": str(path)}
 
 
+def _json(data):
+    return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n"
+
+
 def _write(path, data):
-    content = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    content = _json(data)
     if not path.is_file() or path.read_bytes() != content.encode("utf-8"):
         write_text(path, content)
 
@@ -256,11 +273,14 @@ def inventory(home, library, *, shelf=None, project=None):
             continue
         for source in row["sources"]:
             label = f"{name}/{source['id']}"
-            if source["kind"] != "test":
-                warnings.append(f"{label}: {source['kind']} sources are not supported yet.")
+            if source["kind"] == "bench":
+                warnings.append(f"{label}: bench sources are not supported yet.")
                 continue
             try:
-                found, notices = _test_cases(row, source)
+                if source["kind"] == "command":
+                    found, notices = playlist_commands.inventory(row, source), []
+                else:
+                    found, notices = _test_cases(row, source)
             except ForgeError as exc:
                 errors.append(f"{label}: {exc}")
             else:

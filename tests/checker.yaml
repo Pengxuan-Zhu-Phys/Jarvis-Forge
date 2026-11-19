@@ -57,6 +57,8 @@ groups:
   - src/jarvis_forge/standard_checks.py
   - builds/scripts/*.py
   - tools/build_project_assets.py
+  - builds/release.json
+  - src/jarvis_forge/__init__.py
   - tests/test_standard_checks.py
   - tests/test_build_cards.py
   skip_allow: []
@@ -95,9 +97,12 @@ groups:
   - tests/test_homebrew_backend.py
   inputs:
   - src/jarvis_forge/spack*.py
+  - src/jarvis_forge/profile_fonts.py
   - src/jarvis_forge/apt*.py
   - src/jarvis_forge/package_operations.py
   - src/jarvis_forge/recipe_releases.py
+  - src/jarvis_forge/build_catalog.py
+  - src/jarvis_forge/__init__.py
   - src/jarvis_forge/downloads.py
   - tests/test_spack*.py
   - tests/test_apt.py
@@ -172,6 +177,8 @@ groups:
   - builds/library/*.yaml
   - builds/scripts/*.py
   - src/jarvis_forge/recipe_releases.py
+  - src/jarvis_forge/build_catalog.py
+  - src/jarvis_forge/__init__.py
   - tools/build*assets.py
   - tests/test_recipe_releases.py
   - tests/test_recipe_publisher.py
@@ -204,6 +211,9 @@ groups:
   - tests/test_playlist*.py
   inputs:
   - src/jarvis_forge/playlist*.py
+  - src/jarvis_forge/dashboard_cli.py
+  - src/jarvis_forge/dashboard/**/*.py
+  - src/jarvis_forge/dashboard/static/*
   - src/jarvis_forge/cli.py
   - src/jarvis_forge/presentation.py
   - src/jarvis_forge/testing.py
@@ -218,8 +228,12 @@ groups:
   - tests/test_bench.py
   - tests/test_bench_baseline.py
   - tests/test_bench_land.py
+  - tests/test_bench_project.py
+  - tests/test_cbs_bench.py
   inputs:
   - src/jarvis_forge/bench*.py
+  - src/jarvis_forge/bench_projects/**
+  - tests/test_cbs_bench.py
   - src/jarvis_forge/executor*.py
   - src/jarvis_forge/schemas/*.json
   - tests/test_bench*.py

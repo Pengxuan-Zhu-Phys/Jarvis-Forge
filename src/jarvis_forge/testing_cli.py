@@ -44,7 +44,7 @@ def validate(ctx: typer.Context,
 
 @app.command()
 def plan(ctx: typer.Context,
-         config: Path = typer.Argument(..., help="Test card or test catalog YAML.", metavar="<card_or_catalog>"),
+         config: Optional[Path] = typer.Argument(None, help="Test card, catalog or project directory.", metavar="[target]"),
          profile: Optional[str] = typer.Option(None, "--profile", help="Select a named profile.", metavar="<name>"),
          group: list[str] = typer.Option([], "--group", help="Select group or check IDs and their prerequisites.", metavar="<id>"),
          batch: Optional[str] = typer.Option(None, "--batch", help="Show shard k of n for each pytest group.", metavar="<k/n>"),
@@ -52,12 +52,13 @@ def plan(ctx: typer.Context,
          root: Optional[Path] = typer.Option(None, "--root", help="Resolve catalog card paths under this directory.", metavar="<dir>")):
     """Show selected steps, files and shards without running pytest or creating user state."""
     from .cli import emit
-    emit(ctx, "test plan", **testing.plan(config, profile=profile, groups=group, batch=batch, root=root, project=project))
+    emit(ctx, "test plan", **testing.plan(testing.project_card(config), profile=profile, groups=group, batch=batch,
+                                         root=root, project=project))
 
 
 @app.command()
 def run(ctx: typer.Context,
-        config: Path = typer.Argument(..., help="Test card or test catalog YAML.", metavar="<card_or_catalog>"),
+        config: Optional[Path] = typer.Argument(None, help="Test card, catalog or project directory.", metavar="[target]"),
         profile: Optional[str] = typer.Option(None, "--profile", help="Select a named profile.", metavar="<name>"),
         group: list[str] = typer.Option([], "--group", help="Select group or check IDs and their prerequisites.", metavar="<id>"),
         batch: Optional[str] = typer.Option(None, "--batch", help="Run shard k of n for each pytest group.", metavar="<k/n>"),
@@ -70,6 +71,7 @@ def run(ctx: typer.Context,
         jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Concurrent build jobs inside build checks.", metavar="<n>")):
     """Run the selected groups and checks, reuse unchanged results, and record the evidence."""
     from .cli import emit, _console, line
+    config = testing.project_card(config)
     if _schema1(config):
         rejected = [name for name, value in (("--profile", profile), ("--batch", batch),
                                               ("--acceptance-id", acceptance_id), ("--rerun-failed", rerun_failed),
@@ -92,6 +94,30 @@ def run(ctx: typer.Context,
 
 
 @app.command()
+def accept(ctx: typer.Context,
+           config: Optional[Path] = typer.Argument(None, help="Test card, catalog or project directory.", metavar="[target]"),
+           profile: str = typer.Option("acceptance", "--profile", help="Gate profile (acceptance or release)."),
+           env: Optional[str] = typer.Option(None, "--env", help="Use this registered environment."),
+           project: Optional[str] = typer.Option(None, "--project", help="Select one catalog card."),
+           root: Optional[Path] = typer.Option(None, "--root", help="Resolve catalog card paths under this directory."),
+           full: bool = typer.Option(False, "--full", help="Run every selected step again."),
+           jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Concurrent build jobs inside build checks.")):
+    """Run a full gate and succeed only when the current project is accepted."""
+    from .cli import _console, emit, line
+    from . import testing_run
+    target = testing.project_card(config)
+    console = _console(stderr=True)
+    if console.is_terminal and not ctx.obj.as_json:
+        line(console, f"Running {profile} · {target.name}", style="bold")
+    result = testing_run.accept(ctx.obj.home, target, profile=profile, full=full,
+                                environment_name=env, root=root, project=project, jobs=jobs)
+    interrupted = result["status"] == "interrupted"
+    accepted = result.get("accepted", False)
+    emit(ctx, "test accept", ok=accepted, **result)
+    raise typer.Exit(130 if interrupted else 0 if accepted else 1)
+
+
+@app.command()
 def summarize(ctx: typer.Context,
               acceptance_id: str = typer.Option(..., "--acceptance-id", help="Acceptance to summarize.", metavar="<id>"),
               rebuild: bool = typer.Option(False, "--rebuild", help="Also rewrite the run index from the run records.")):
@@ -105,7 +131,7 @@ def summarize(ctx: typer.Context,
 
 @app.command()
 def status(ctx: typer.Context,
-           config: Path = typer.Argument(..., help="Test card or test catalog YAML.", metavar="<card_or_catalog>"),
+           config: Optional[Path] = typer.Argument(None, help="Test card, catalog or project directory.", metavar="[target]"),
            profile: str = typer.Option("acceptance", "--profile", help="Gate profile to check.", metavar="<name>"),
            env: Optional[str] = typer.Option(None, "--env", help="Require a report from this registered environment.", metavar="<name>"),
            project: Optional[str] = typer.Option(None, "--project", help="Select one catalog card.", metavar="<id>"),
@@ -113,7 +139,8 @@ def status(ctx: typer.Context,
     """Tell whether an accepted report covers the current source; read only."""
     from .cli import emit
     from . import testing_run
-    value = testing_run.status(ctx.obj.home, config, profile=profile, environment_name=env, root=root, project=project)
+    value = testing_run.status(ctx.obj.home, testing.project_card(config), profile=profile, environment_name=env,
+                               root=root, project=project)
     emit(ctx, "test status", ok=value["accepted"], **value)
     raise typer.Exit(0 if value["accepted"] else 1)
 

@@ -14,7 +14,8 @@ from pathlib import Path
 
 import yaml
 
-from .storage import ForgeError, digest, identifier
+from . import bench_project
+from .storage import ForgeError, digest, identifier, package_name
 from .suite import UniqueLoader
 
 
@@ -23,16 +24,16 @@ TOP_LEVEL = {"kind", "name", "subject", "environment", "software", "settings", "
              "profiles", "default_profile", "coverage", "report", "fetch"}
 STEP_FIELDS = {"name", "after", "software", "repeat", "seed", "reuse", "files", "templates", "commands",
                "compare", "outputs", "verify", "clean", "env", "resources", "retries"}
-SOFTWARE_FIELDS = {"build", "source", "set", "rebuild", "version", "features", "artifact"}
+SOFTWARE_FIELDS = {"build", "source", "set", "rebuild", "version", "features", "artifact", "package", "entrypoint"}
 PROFILE_FIELDS = {"cases", "tags", "settings", "data", "require"}
 COMPARE_FIELDS = {"actual", "select", "value", "error", "expected", "tolerance"}
 TOLERANCE_FIELDS = {"abs", "rel", "sigma", "max_ratio", "min_ratio"}
 RESOURCE_FIELDS = {"cores", "memory", "time", "gpus"}
-_SEGMENT = r"[A-Za-z_][A-Za-z0-9_]*"
+_SEGMENT = r"[A-Za-z_][A-Za-z0-9_-]*"
 _VAR = re.compile(rf"\$\{{({_SEGMENT}(?:\.{_SEGMENT})*)\}}")
 _WHOLE = re.compile(rf"^\$\{{({_SEGMENT}(?:\.{_SEGMENT})*)\}}$")
 _TIME = re.compile(r"^(\d+)([smhd])$")
-PATH_VARIABLES = {"bench.dir", "case.dir", "task.dir", "seed", "repeat.index"}
+PATH_VARIABLES = {"bench.dir", "project.dir", "case.dir", "task.dir", "seed", "repeat.index"}
 
 
 def load(path):
@@ -54,6 +55,7 @@ def load(path):
     card = {
         "path": str(path),
         "dir": str(path.parent),
+        "project": bench_project.discover(path.parent),
         "sha256": digest(path),
         "name": name,
         "subject": _optional_name(raw.get("subject"), "subject"),
@@ -74,6 +76,8 @@ def load(path):
         raise ForgeError(f"Unknown default profile: {card['default_profile']}")
     known_software = set(card["software"])
     for step in card["steps"]:
+        if card["project"] and step["name"] == "project":
+            raise ForgeError("A bench project reserves the step name 'project'.")
         missing = [item for item in step["software"] if item not in known_software]
         if missing:
             raise ForgeError(f"{step['name']} uses unknown software: " + ", ".join(missing))
@@ -272,7 +276,7 @@ def referenced_fetch(step, bindings=None):
             visit(_template_text(raw, bindings, step["name"]))
     ids = []
     for name in sorted(found):
-        if name.startswith("fetch.") and name.endswith(".path"):
+        if name.startswith("fetch.") and name.endswith((".path", ".entrypoint")):
             ident = name[len("fetch."):-len(".path")]
             if ident and "." not in ident and ident not in ids:
                 ids.append(ident)
@@ -288,12 +292,14 @@ def bindings_for(card, case, step, *, index, count, task, upstream, software, fe
             continue
         if re.fullmatch(_SEGMENT, key):
             case_vars[key] = value
-    software_vars = {name: {"path": item["path"]} for name, item in software.items()}
+    software_vars = {name: {"path": item["path"], "entrypoint": item.get("entrypoint")}
+                     for name, item in software.items()}
     upstream_vars = {}
     for name, item in upstream.items():
         upstream_vars[name] = {"outputs": item.get("outputs", {}), "dirs": item.get("dirs", [])}
     return {
         "bench": {"dir": card["dir"]},
+        "project": {"dir": str(card["project"]["root"])} if card.get("project") else {},
         "case": case_vars,
         "settings": case["settings"],
         "seed": seed,
@@ -334,16 +340,32 @@ def definition(step):
 def _excluded(name):
     if name in PATH_VARIABLES or name.startswith("resources.") or name.startswith("fetch."):
         return True
-    if name.startswith("software.") and name.endswith(".path"):
+    if name.startswith("software.") and name.endswith((".path", ".entrypoint")):
         return True
     if ".outputs." in name or name.endswith(".dirs"):
         return True
     return False
 
 
+def card_root(card):
+    return card["project"]["root"] if card.get("project") else Path(card["dir"])
+
+
+def command_argv(card, command):
+    root = card_root(card)
+    argv = []
+    for part in command:
+        path = Path(part)
+        if not path.is_absolute() and "/" in part:
+            path = bench_project.inside(root, part) if card.get("project") else root / path
+            part = str(path)
+        argv.append(part)
+    return argv
+
+
 def _discover(card):
     spec = card["cases"]
-    base = Path(card["dir"])
+    base = card_root(card)
     if isinstance(spec, dict):
         return _matrix(spec)
     patterns = [spec] if isinstance(spec, str) else list(spec)
@@ -353,11 +375,13 @@ def _discover(card):
     seen = set()
     for pattern in patterns:
         if pattern.startswith("/") or ".." in Path(pattern).parts:
-            raise ForgeError(f"Case pattern must stay under the card directory: {pattern}")
+            raise ForgeError(f"Case pattern must stay under its input root: {pattern}")
         matches = sorted(path for path in base.glob(pattern) if path.is_dir())
         if not matches:
             raise ForgeError(f"No case directories match {pattern}.")
         for directory in matches:
+            if card.get("project"):
+                bench_project.inside(base, str(directory.relative_to(base) / "case.yaml"))
             name = directory.name
             if name in seen:
                 raise ForgeError(f"Duplicated case name: {name}")
@@ -445,8 +469,17 @@ def _software(value):
         unknown = set(spec) - SOFTWARE_FIELDS
         if unknown:
             raise ForgeError(f"Unknown software.{name} fields: " + ", ".join(sorted(unknown)))
-        if not spec.get("build") and not spec.get("source"):
-            raise ForgeError(f"software.{name} needs build or source.")
+        if spec.get("package"):
+            package_name(spec["package"])
+            if spec.get("build") or spec.get("source"):
+                raise ForgeError(f"software.{name} package cannot be combined with build or source.")
+        elif not spec.get("build") and not spec.get("source"):
+            raise ForgeError(f"software.{name} needs build, package or source.")
+        entrypoint = spec.get("entrypoint")
+        if entrypoint is not None:
+            bench_project.relative(entrypoint)
+            if not (spec.get("package") or spec.get("build")):
+                raise ForgeError(f"software.{name} entrypoint needs build or package.")
         rebuild = spec.get("rebuild", "auto")
         if rebuild not in {"auto", "never"}:
             raise ForgeError(f"software.{name} rebuild must be auto or never.")
@@ -456,6 +489,8 @@ def _software(value):
         parameters = _scalars(spec.get("set") or {}, f"software.{name} set")
         items[name] = {
             "build": spec.get("build"),
+            "package": spec.get("package"),
+            "entrypoint": entrypoint,
             "source": spec.get("source"),
             "set": parameters,
             "rebuild": rebuild,

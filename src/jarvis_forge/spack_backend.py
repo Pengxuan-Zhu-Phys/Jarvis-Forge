@@ -1064,6 +1064,7 @@ def repaired_runtime_environment(home, state, *, materialize=True):
 
 
 def _publish(home, op, envdir, roots, snapshot):
+    from . import profile_fonts
     from .shell_activation import activation
     from .package_operations import key_for
 
@@ -1096,6 +1097,10 @@ def _publish(home, op, envdir, roots, snapshot):
 
     revision = home.root / "environments/apt/revisions" / op.name
     revision.mkdir(parents=True, exist_ok=True)
+    if snapshot["packages"]:
+        config = profile_fonts.write_config(home, store_root(home), revision, snapshot["packages"])
+        if config:
+            modifications.append({"type": "SetEnv", "name": "FONTCONFIG_FILE", "value": str(config)})
     bridge = revision / "spack_bridge.py"
     shutil.copy2(Path(__file__).with_name("spack_bridge.py"), bridge)
     mods = revision / "modifications.json"

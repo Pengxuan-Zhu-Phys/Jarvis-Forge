@@ -110,12 +110,15 @@ def prefetch(home, path):
         if item.get("unpack"):
             target = home.root / "cache" / "fetch" / f"{item['id']}-{item['sha256']}"
             marker = target / ".jforge-fetch"
-            if not marker.is_file():
-                if target.exists():
-                    shutil.rmtree(target)
-                from .downloads import unpack
-                unpack(archive, target)
-                marker.write_text(item["sha256"] + "\n")
+            from .builds import file_lock
+            from .downloads import unpack
+
+            with file_lock(target.with_suffix(".lock"), blocking=True):
+                if not marker.is_file():
+                    if target.exists():
+                        shutil.rmtree(target)
+                    unpack(archive, target)
+                    marker.write_text(item["sha256"] + "\n")
             stored = target
         else:
             stored = archive
@@ -129,15 +132,10 @@ def coverage_report(card, *, required):
     spec = card.get("coverage")
     if not spec:
         return None
-    argv = []
-    root = Path(card["dir"])
-    for part in spec["list"]:
-        path = Path(part)
-        if path.is_absolute() or "/" in part:
-            path = path if path.is_absolute() else root / path
-            argv.append(str(path))
-        else:
-            argv.append(part)
+    from . import bench_cards
+
+    root = bench_cards.card_root(card)
+    argv = bench_cards.command_argv(card, spec["list"])
     if shutil.which(argv[0]) is None and not Path(argv[0]).is_file():
         if required:
             raise ForgeError(f"Coverage command is not runnable: {argv[0]}")
@@ -145,7 +143,6 @@ def coverage_report(card, *, required):
     result = subprocess.run(argv, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if result.returncode != 0:
         raise ForgeError(f"Coverage command failed (exit {result.returncode}).\n{result.stdout}")
-    from . import bench_cards
     names = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     cases = {item["name"] for item in bench_cards._discover(card)}
     exclude = spec.get("exclude") or {}
@@ -503,8 +500,11 @@ def _sbatch(directory, prepared, unit, indexes):
     else:
         task = f"{unit['case']}/{unit['step']}/{indexes[0]}"
     log_dir = directory / "slurm"
-    lines.append(f"#SBATCH --output={log_dir}/%A_%a.out")
-    lines.append(f"#SBATCH --error={log_dir}/%A_%a.err")
+    if (directory / "logs").is_dir():
+        log_dir = (directory / "logs").resolve() / "slurm"
+        log_dir.mkdir(exist_ok=True)
+    lines.append(f"#SBATCH --output={shlex.quote(str(log_dir / '%A_%a.out'))}")
+    lines.append(f"#SBATCH --error={shlex.quote(str(log_dir / '%A_%a.err'))}")
     if spec.get("preamble"):
         lines.append(spec["preamble"].rstrip())
     import sys

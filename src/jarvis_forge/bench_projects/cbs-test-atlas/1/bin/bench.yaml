@@ -1,0 +1,85 @@
+kind: bench
+name: cbs-madgraph
+subject: cbs
+software:
+  cbs: {build: cbs, rebuild: never, entrypoint: CBS}
+  generator: {package: jforge-mg5amc, version: "==3.6.3", features: [pythia8], entrypoint: bin/mg5_aMC}
+cases: data/physics-cases/*
+settings: {events: 20000}
+default_profile: acceptance
+profiles:
+  acceptance: {require: complete}
+fetch:
+  - id: vlq
+    url: https://cp3.irmp.ucl.ac.be/projects/feynrules/raw-attachment/wiki/NLOModels/vlq_v4_4fns.ufo.tgz
+    sha256: 48f1375ffef101a22acc11c57701dd7ae5e610973d112b0471e0f7ce8b58cd8c
+    unpack: true
+  - id: nnpdf
+    url: https://lhapdfsets.web.cern.ch/current/NNPDF23_lo_as_0130_qed.tar.gz
+    sha256: 60d3c1df1c31e5840f91f4217163ae30a256b9291a5adc894882e86607ef5d63
+    unpack: true
+steps:
+  - name: generate-w
+    software: [generator]
+    seed: 4242
+    reuse: true
+    clean: true
+    files:
+      - ${case.dir}/generate-w/proc_card.dat
+      - ${fetch.vlq.path}/VLQ_v4_4FNS_UFO
+      - ${project.dir}/deps/scripts/cbs_benchmark.py
+    templates:
+      - ${project.dir}/deps/templates/launch.mg5
+    commands:
+      - ["${software.generator.entrypoint}", proc_card.dat]
+      - [python3, cbs_benchmark.py, launch, "${software.generator.entrypoint}", "${fetch.nnpdf.path}"]
+    outputs:
+      events: PROC/Events/run_01/tag_1_pythia8_events.hepmc.gz
+      banner: PROC/Events/run_01/run_01_tag_1_banner.txt
+    verify:
+      [python3, cbs_benchmark.py, verify, PROC/Events/run_01/tag_1_pythia8_events.hepmc.gz,
+       PROC/Events/run_01/run_01_tag_1_banner.txt, "${settings.events}"]
+    resources: {cores: 1, memory: 8G, time: 4h}
+  - name: generate-z
+    software: [generator]
+    seed: 4243
+    reuse: true
+    clean: true
+    files:
+      - ${case.dir}/generate-z/proc_card.dat
+      - ${fetch.vlq.path}/VLQ_v4_4FNS_UFO
+      - ${project.dir}/deps/scripts/cbs_benchmark.py
+    templates:
+      - ${project.dir}/deps/templates/launch.mg5
+    commands:
+      - ["${software.generator.entrypoint}", proc_card.dat]
+      - [python3, cbs_benchmark.py, launch, "${software.generator.entrypoint}", "${fetch.nnpdf.path}"]
+    outputs:
+      events: PROC/Events/run_01/tag_1_pythia8_events.hepmc.gz
+      banner: PROC/Events/run_01/run_01_tag_1_banner.txt
+    verify:
+      [python3, cbs_benchmark.py, verify, PROC/Events/run_01/tag_1_pythia8_events.hepmc.gz,
+       PROC/Events/run_01/run_01_tag_1_banner.txt, "${settings.events}"]
+    resources: {cores: 1, memory: 8G, time: 4h}
+  - name: analyze
+    after: [generate-w, generate-z]
+    software: [cbs]
+    reuse: true
+    files:
+      - ${project.dir}/data/smoke-cases/atlas-bh/cbs.yaml
+      - ${project.dir}/deps/scripts/cbs_benchmark.py
+    commands:
+      - [python3, cbs_benchmark.py, analyze, "${software.cbs.entrypoint}", "${case.analysis}", "${case.region}", cbs.yaml,
+         --process, W, "${generate-w.outputs.events}", "${generate-w.outputs.banner}", "${settings.events}",
+         --process, Z, "${generate-z.outputs.events}", "${generate-z.outputs.banner}", "${settings.events}"]
+    outputs:
+      result: CBS_result.json
+      metrics: metrics.json
+      input: run.yaml
+    resources: {cores: 1, memory: 8G, time: 2h}
+  - name: compare
+    after: [analyze]
+    compare:
+      actual: ${analyze.outputs.metrics}
+      select: metrics.*
+      expected: baseline

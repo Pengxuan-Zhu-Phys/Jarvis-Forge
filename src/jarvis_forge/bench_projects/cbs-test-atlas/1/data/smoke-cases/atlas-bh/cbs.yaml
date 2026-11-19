@@ -1,0 +1,6 @@
+settings:
+  jet_collection_taus: antikt_R04
+  jet_collections:
+    antikt_R04: {algorithm: antikt, R: 0.4, recombination_scheme: E_scheme, strategy: Best}
+    antikt_R10: {algorithm: antikt, R: 1.0, recombination_scheme: E_scheme, strategy: Best}
+    VRTrackJets: {algorithm: VariableR, rho: 30.0, Rmin: 0.02, Rmax: 0.4, pt_min: 5.0}

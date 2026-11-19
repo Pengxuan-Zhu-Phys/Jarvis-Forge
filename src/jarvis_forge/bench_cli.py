@@ -8,7 +8,7 @@ from typing import Optional
 
 import typer
 
-from . import bench
+from . import bench, bench_project
 from .storage import ForgeError
 
 app = typer.Typer(help="Run benchmark cards, reuse finished steps, and compare numbers.",
@@ -26,14 +26,26 @@ def _echo(ctx, command, result, *, ok=True, exit_code=0):
 
 
 @app.command()
-def validate(ctx: typer.Context, card: Path = typer.Argument(..., help="Bench card.", metavar="<card>")):
+def init(ctx: typer.Context, directory: Path = typer.Argument(Path("."), help="Project directory.", metavar="<dir>")):
+    """Create a bench project in a directory."""
+    _echo(ctx, "bench init", bench_project.initialize(directory))
+
+
+@app.command()
+def fetch(ctx: typer.Context, project: str = typer.Argument(..., help="Official project name.", metavar="<name>")):
+    """Fetch a verified benchmark project and its data into the current workspace."""
+    _echo(ctx, "bench fetch", bench_project.fetch(ctx.obj.home, project))
+
+
+@app.command()
+def validate(ctx: typer.Context, card: Optional[str] = typer.Argument(None, help="Bench card or registered entrypoint.", metavar="<card>")):
     """Check the card, cases and reference files without running commands."""
-    _echo(ctx, "bench validate", bench.validate(card))
+    _echo(ctx, "bench validate", bench.validate(bench_project.resolve_card(card)))
 
 
 @app.command()
 def plan(ctx: typer.Context,
-         card: Path = typer.Argument(..., help="Bench card.", metavar="<card>"),
+         card: Optional[str] = typer.Argument(None, help="Bench card or registered entrypoint.", metavar="<card>"),
          profile: Optional[str] = typer.Option(None, "--profile", help="Select a named profile.", metavar="<name>"),
          case: list[str] = typer.Option([], "--case", help="Select case names or globs.", metavar="<id>"),
          tag: list[str] = typer.Option([], "--tag", help="Select cases with any of these tags.", metavar="<tag>"),
@@ -42,21 +54,21 @@ def plan(ctx: typer.Context,
          env: Optional[str] = typer.Option(None, "--env", help="Use this registered environment.", metavar="<name>"),
          executor: str = typer.Option("local", "--executor", help="Plan against this executor's data directory.", metavar="<name>")):
     """Show which software and tasks would run. Do not run them."""
-    result = bench.plan(ctx.obj.home, card, profile=profile, cases=case, tags=tag, redo=redo, keep=keep,
+    result = bench.plan(ctx.obj.home, bench_project.resolve_card(card), profile=profile, cases=case, tags=tag, redo=redo, keep=keep,
                         environment_name=env, executor=executor)
     _echo(ctx, "bench plan", result)
 
 
 @app.command()
-def prefetch(ctx: typer.Context, card: Path = typer.Argument(..., help="Bench card.", metavar="<card>")):
+def prefetch(ctx: typer.Context, card: Optional[str] = typer.Argument(None, help="Bench card or registered entrypoint.", metavar="<card>")):
     """Download fetch items into the cache. Unpack when the card asks for it."""
     from . import bench_exec
-    _echo(ctx, "bench prefetch", bench_exec.prefetch(ctx.obj.home, card))
+    _echo(ctx, "bench prefetch", bench_exec.prefetch(ctx.obj.home, bench_project.resolve_card(card)))
 
 
 @app.command()
 def run(ctx: typer.Context,
-        card: Path = typer.Argument(..., help="Bench card.", metavar="<card>"),
+        card: Optional[str] = typer.Argument(None, help="Bench card or registered entrypoint.", metavar="<card>"),
         profile: Optional[str] = typer.Option(None, "--profile", help="Select a named profile.", metavar="<name>"),
         case: list[str] = typer.Option([], "--case", help="Select case names or globs.", metavar="<id>"),
         tag: list[str] = typer.Option([], "--tag", help="Select cases with any of these tags.", metavar="<tag>"),
@@ -74,7 +86,7 @@ def run(ctx: typer.Context,
     from .cli import line, _console
     if verify not in {None, "full"}:
         raise ForgeError("--verify takes full.")
-    result = bench.run(ctx.obj.home, card, profile=profile, cases=case, tags=tag, jobs=jobs, no_build=no_build,
+    result = bench.run(ctx.obj.home, bench_project.resolve_card(card), profile=profile, cases=case, tags=tag, jobs=jobs, no_build=no_build,
                        redo=redo, keep=keep, verify_full=verify == "full", environment_name=env, executor=executor,
                        baseline=baseline, rerun_failed=rerun_failed, detach=detach,
                        progress=lambda text: line(_console(stderr=True), text))
@@ -90,19 +102,19 @@ def verify(ctx: typer.Context,
            case: list[str] = typer.Option([], "--case", help="Select case names or globs.", metavar="<id>"),
            env: Optional[str] = typer.Option(None, "--env", help="Use this registered environment.", metavar="<name>")):
     """Re-run verify on finished results. Failures are generated again on the next run."""
-    result = bench.verify(ctx.obj.home, card, step=step, profile=profile, cases=case, environment_name=env)
+    result = bench.verify(ctx.obj.home, bench_project.resolve_card(card), step=step, profile=profile, cases=case, environment_name=env)
     result["text"] = f"{result['step']}: checked {result['checked']}, failed {result['failed']}\n"
     _echo(ctx, "bench verify", result, ok=result["failed"] == 0, exit_code=0 if result["failed"] == 0 else 1)
 
 
 @app.command()
 def status(ctx: typer.Context,
-           target: str = typer.Argument(..., help="Run ID, or a bench card when --profile is set.", metavar="<run_or_card>"),
+           target: Optional[str] = typer.Argument(None, help="Run ID or bench card. Defaults to the project main card.", metavar="<run_or_card>"),
            profile: Optional[str] = typer.Option(None, "--profile", help="Read the gate for this profile of a card.", metavar="<name>"),
            env: Optional[str] = typer.Option(None, "--env", help="Require this registered environment.", metavar="<name>")):
     """Show one run, or tell whether a card profile meets its gate."""
-    if profile or target.endswith((".yaml", ".yml")) or Path(target).expanduser().exists():
-        result = bench.card_status(ctx.obj.home, target, profile=profile, environment_name=env)
+    if target is None or profile or target.endswith((".yaml", ".yml")) or Path(target).expanduser().exists():
+        result = bench.card_status(ctx.obj.home, bench_project.resolve_card(target), profile=profile, environment_name=env)
         _echo(ctx, "bench status", result, ok=result["accepted"], exit_code=0 if result["accepted"] else 1)
         return
     result = bench.status(ctx.obj.home, target)
@@ -195,7 +207,7 @@ def trend(ctx: typer.Context,
     from .cli import emit
     if output_format not in {"csv", "json"}:
         raise ForgeError("--format takes csv or json.")
-    result = bench.trend(ctx.obj.home, card, case=case, step=step, item=item)
+    result = bench.trend(ctx.obj.home, bench_project.resolve_card(card), case=case, step=step, item=item)
     if output_format == "json" or ctx.obj.as_json:
         emit(ctx, "bench trend", **{key: value for key, value in result.items() if key != "text"})
         return

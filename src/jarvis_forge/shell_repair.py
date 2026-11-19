@@ -26,6 +26,7 @@ NAMED_HEADER = "# Managed by Jarvis-Forge; explicitly source this file to activa
 PATH_LISTS = PATH_VARIABLES | {"CMAKE_INCLUDE_PATH", "CMAKE_LIBRARY_PATH", "MANPATH", "INFOPATH", "PYTHONPATH"}
 DIRECTORIES = {"ROOTSYS", "ROOT_DIR", "EIGEN3_ROOT", "EIGEN3_INCLUDE_DIR", "Eigen3_DIR"}
 EXECUTABLES = {"CC", "CXX", "FC"}
+FILES = {"FONTCONFIG_FILE"}
 PYTHON_SELECTION = {"PYENV_ROOT", "PYENV_VERSION", "PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX"}
 
 _EXPANSION = r"\$\{(?:[^{}\n]|\$\{[A-Za-z_][A-Za-z_0-9]*\})*\}|\$[A-Za-z_][A-Za-z_0-9]*"
@@ -87,6 +88,8 @@ def _path_status(value, kind):
 def _variable_kind(name):
     if name in EXECUTABLES:
         return "executable"
+    if name in FILES:
+        return "source"
     if name in DIRECTORIES or (name in PATH_LISTS and name != "PYTHONPATH"):
         return "directory"
     return "path"
@@ -153,7 +156,7 @@ class Repair:
 
     def _setting(self, path, number, match, parts):
         name = match["name"]
-        if name not in PATH_LISTS | DIRECTORIES | EXECUTABLES:
+        if name not in PATH_LISTS | DIRECTORIES | EXECUTABLES | FILES:
             self._record(path, number, "variable", "unchecked", "no filesystem check defined", name=name)
             return match[0]
         kind = _variable_kind(name)
@@ -455,7 +458,7 @@ def repair_apt_profile(home, *, dry_run=False, save_unchanged=True):
             name, action, value = row["name"], row["type"], row.get("value")
             path_list = action in {"SetPath", "PrependPath", "AppendPath"} or (
                 action == "SetEnv" and name in PATH_LISTS)
-            scalar = action == "SetEnv" and name in DIRECTORIES | EXECUTABLES
+            scalar = action == "SetEnv" and name in DIRECTORIES | EXECUTABLES | FILES
             if (not path_list and not scalar) or name in PYTHON_SELECTION or row.get("raw"):
                 operation._record(modifications, index, action, "unchecked", "no filesystem check defined",
                                   name=name, entry=True)

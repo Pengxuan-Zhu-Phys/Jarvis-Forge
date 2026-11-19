@@ -21,7 +21,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 
-from . import __version__, builds, checker, cmake, testing
+from . import __version__, builds, checker, cmake, testing, testing_evidence
 from .package_operations import run_command
 from .storage import ForgeError, digest, identifier, new_id, now, read_json, write_json
 
@@ -125,8 +125,9 @@ for dist in metadata.distributions():
         direct = dist.read_text("direct_url.json")
     except Exception:
         direct = None
-    rows.append({"name": re.sub(r"[-_.]+", "-", name).lower(), "version": dist.version, "direct_url": direct})
-rows.sort(key=lambda row: (row["name"], row["version"] or "", row["direct_url"] or ""))
+    rows.append({"name": re.sub(r"[-_.]+", "-", name).lower(), "version": dist.version,
+                 "direct_url": direct, "location": str(dist.locate_file(""))})
+rows.sort(key=lambda row: (row["name"], row["version"] or "", row["direct_url"] or "", row["location"]))
 sys.stdout.write(json.dumps(rows))
 '''
 
@@ -471,7 +472,7 @@ def load_rerun(home, run_id):
 
 
 def preflight(home, path, *, profile=None, groups=(), batch=None, acceptance_id=None,
-              environment_name=None, root=None, project=None, rerun_failed=None, full=False):
+              environment_name=None, root=None, project=None, rerun_failed=None, full=False, strict=False):
     if profile and groups:
         raise ForgeError("--profile and --group are mutually exclusive.")
     previous = None
@@ -519,6 +520,8 @@ def preflight(home, path, *, profile=None, groups=(), batch=None, acceptance_id=
                 if group is not None and not testing.group_files(card, group):
                     raise ForgeError(f"Selected group {item_id} matches no files after omit.")
             _gate_checks(card, selection["profile"], selection["ids"])
+            if strict:
+                testing.validate_card(card)
             name = environment_name or entry["env"] or card["environment"].get("name")
             if name:
                 from .environment_registry import show
@@ -541,10 +544,10 @@ def _sigterm(signum, frame):
 
 
 def run(home, path, *, profile=None, groups=(), batch=None, acceptance_id=None, full=False,
-        environment_name=None, root=None, project=None, jobs=1, progress=None, rerun_failed=None):
+        environment_name=None, root=None, project=None, jobs=1, progress=None, rerun_failed=None, strict=False):
     prepared = preflight(home, path, profile=profile, groups=groups, batch=batch, acceptance_id=acceptance_id,
                          environment_name=environment_name, root=root, project=project,
-                         rerun_failed=rerun_failed, full=full)
+                         rerun_failed=rerun_failed, full=full, strict=strict)
     target, index, count = prepared["target"], prepared["index"], prepared["count"]
     generated = acceptance_id is None and rerun_failed is None
     if generated and target["kind"] == "catalog":
@@ -561,7 +564,7 @@ def run(home, path, *, profile=None, groups=(), batch=None, acceptance_id=None, 
                 locks.acquire(_locks_dir(home) / f"{plan['key']}.{step}.lock",
                               message=f"Test step is busy: {step}")
         for plan in prepared["plans"]:
-            run_record = _CardRun(home, prepared, plan, acceptance_id, full, jobs, progress, locks)
+            run_record = _CardRun(home, prepared, plan, acceptance_id, full, jobs, progress, locks, strict=strict)
             try:
                 run_record.execute()
             except _Interrupted:
@@ -588,7 +591,7 @@ def run(home, path, *, profile=None, groups=(), batch=None, acceptance_id=None, 
 
 
 class _CardRun:
-    def __init__(self, home, prepared, plan, acceptance_id, full, jobs, progress, locks):
+    def __init__(self, home, prepared, plan, acceptance_id, full, jobs, progress, locks, *, strict=False):
         self.home, self.plan, self.full, self.jobs, self.progress, self.locks = home, plan, full, jobs, progress, locks
         self.card, self.selection, self.key = plan["card"], plan["selection"], plan["key"]
         self.index, self.count = prepared["index"], prepared["count"]
@@ -599,6 +602,8 @@ class _CardRun:
         self.acceptance_id = None if self.previous else acceptance_id or self.run_id
         self.directory = home.root / "runs" / self.run_id
         self.config = prepared["config"]
+        self.gate = self.selection["profile"] in testing.GATE_PROFILES and self.previous is None
+        self.strict = strict
         self.packages = {}
         self.cases = []
 
@@ -651,11 +656,22 @@ class _CardRun:
         self.request["environment"] = {key: value for key, value in origin.items() if key != "files"}
         packages = self._packages(self._step_environment(None, None, None), self.project)
         self.request["packages_digest"] = packages
+        if self.gate:
+            subject, evidence, problems = self._evidence((environment, observed, origin), self.request["source"])
+            self.request.update(source=subject, evidence=evidence, evidence_problems=problems)
         write_json(self.directory / "request.json", self.request)
-        self.result.update(environment=self.request["environment"], packages_digest=packages)
+        self.result.update(self.request)
+        if self.gate and self.request["evidence_problems"] and (self.strict or card.get("subject")):
+            self.result.update(status="blocked", error=" ".join(self.request["evidence_problems"]))
+            return
         self.context = {"project": self.project, "card_dir": Path(card["path"]).parent, "environment": environment,
                         "environment_origin": origin, "observed": observed, "env_script": script,
-                        "environment_name": name, "jobs": self.jobs, "run_dir": self.directory}
+                        "environment_name": name, "jobs": self.jobs, "run_dir": self.directory,
+                        "acceptance": self.request.get("evidence")}
+
+    def _evidence(self, prepared=None, source=None):
+        return testing_evidence.snapshot(self.home, self.card, self.selection, self.plan["environment_name"],
+                                         prepared=prepared, source=source)
 
     def _packages(self, environment, cwd):
         key = (_effective(environment), str(cwd))
@@ -668,27 +684,19 @@ class _CardRun:
         return self.packages[key]
 
     def _step_environment(self, group, step_dir, plugin):
-        environment = dict(self.environment)
-        installed = group is not None and group["isolate"] == "installed"
+        environment = testing.python_environment(self.environment, self.project, group)
         if group is not None:
-            environment.update(group["env"])
             environment["JFORGE_RUN_DIR"] = str(self.directory)
             environment["JFORGE_STEP_DIR"] = str(step_dir)
-        if installed:
-            for name in ("PYTHONPATH", "PYTHONHOME", "PYTEST_ADDOPTS"):
-                environment.pop(name, None)
-            effective = ""
-        else:
-            parts = [str(self.project / item) for item in (group["pythonpath"] if group else [])]
-            if environment.get("PYTHONPATH"):
-                parts.append(environment["PYTHONPATH"])
-            effective = os.pathsep.join(parts)
+        effective = environment.get("PYTHONPATH")
         # The plugin directory always leads so the probe key and the fingerprint can drop it.
         environment["PYTHONPATH"] = os.pathsep.join([str(plugin or self.directory / "no-plugin"),
                                                      *([effective] if effective else [])])
         return environment
 
     def _steps(self):
+        if self.result["status"] == "blocked":
+            return
         statuses, tokens = {}, {}
         seeds = set(self.selection["seeds"])
         for item_id in self.selection["ids"]:
@@ -925,6 +933,7 @@ class _CardRun:
                     if file.is_file():
                         evidence[str(file)] = digest(file)
                 new_slot = {"fingerprint": fingerprint, "packages_digest": packages,
+                            "acceptance": self.request.get("evidence"),
                             "source_key": None if record["tree_modified"] else source_key,
                             "run_id": self.run_id, "step_id": step, "junit": str(step_dir / "junit.xml"),
                             "rootdir": str(rootdir), "evidence": evidence, "counts": counts,
@@ -948,7 +957,8 @@ class _CardRun:
     def _reusable(self, group, slot, fingerprint, source_key, gate, step):
         if self.full or not group["cache"] or not slot or slot.get("fingerprint") != fingerprint:
             return None
-        if gate and (not slot.get("source_key") or slot["source_key"] != source_key):
+        if gate and (not slot.get("source_key") or slot["source_key"] != source_key
+                     or slot.get("acceptance") != self.request.get("evidence")):
             return None
         for filename, sha in slot.get("evidence", {}).items():
             if not Path(filename).is_file() or digest(Path(filename)) != sha:
@@ -965,8 +975,16 @@ class _CardRun:
         return testing_package.installed_problems(self.project, step_dir, paths)
 
     def _finish(self):
-        end = self.source.identity() if hasattr(self, "source") else None
         start = self.request.get("source")
+        end = self.source.identity()
+        evidence = self.request.get("evidence")
+        if evidence and self.result["status"] == "passed":
+            end, current, problems = self._evidence()
+            changes = testing_evidence.changes(evidence, current)
+            self.result["evidence_end"] = current
+            self.result["evidence_changes"] = changes or (problems if not self.request["evidence_problems"] else [])
+        elif self.card.get("subject"):
+            end = start
         self.result["source_end"] = end
         self.result["source_changed"] = bool(start and (end is None or end["source_key"] != start["source_key"]))
         if self.result["source_changed"]:
@@ -1012,6 +1030,8 @@ def run_report(result):
             "acceptance_id": result.get("acceptance_id"), "status": result["status"], "error": result.get("error"),
             "partial": bool(result.get("partial")), "rerun_of": result.get("rerun_of"),
             "source": result.get("source"), "source_changed": result.get("source_changed"),
+            "evidence": result.get("evidence"), "evidence_problems": result.get("evidence_problems", []),
+            "evidence_changes": result.get("evidence_changes", []),
             "environment": result.get("environment"), "packages_digest": result.get("packages_digest"),
             "started_at": result.get("started_at"), "finished_at": result.get("finished_at"),
             "commit": source.get("commit"), "warnings": result.get("warnings", []), "steps": steps}
@@ -1119,12 +1139,19 @@ def _entry(name, runs):
                     for request in requests}
     if len(environments) > 1:
         reasons.append("mixed environment")
+    evidence = first.get("evidence")
+    if any(request.get("evidence") != evidence for request in requests):
+        reasons.append("mixed acceptance evidence")
+    evidence_problems = list(dict.fromkeys(problem for request in requests
+                                           for problem in request.get("evidence_problems", [])))
+    evidence_changes = list(dict.fromkeys(change for _, result in runs if result
+                                          for change in result.get("evidence_changes", [])))
     wanted = []
     for request in requests:
         for item_id in request.get("groups", []):
             if item_id not in wanted:
                 wanted.append(item_id)
-    groups, checks, source_changed = {}, {}, False
+    groups, checks, check_errors, source_changed = {}, {}, {}, False
     started, finished, step_seconds = [], [], 0.0
     for request, result in runs:
         started.append(request.get("started_at"))
@@ -1134,7 +1161,10 @@ def _entry(name, runs):
         finished.append(result["finished_at"])
         source_changed = source_changed or bool(result.get("source_changed"))
         if result["status"] != "passed":
-            reasons.append(f"run {request['run_id']} {result['status']}")
+            if result.get("error") and result["status"] != "blocked":
+                reasons.append(result["error"])
+            elif not result.get("steps") and result["status"] != "blocked":
+                reasons.append(f"run {request['run_id']} {result['status']}")
         for step in result.get("steps", []):
             if step.get("kind") == "pytest":
                 batch = step["batch"]
@@ -1151,6 +1181,8 @@ def _entry(name, runs):
                 step_seconds += step.get("duration_seconds") or 0.0
             else:
                 checks.setdefault(step["id"], []).append(step["status"])
+                if step.get("error") or step.get("reason"):
+                    check_errors[step["id"]] = step.get("error") or step["reason"]
     group_rows = {}
     for item_id in wanted:
         if item_id in groups:
@@ -1176,14 +1208,21 @@ def _entry(name, runs):
                                    "reused": sum(step["status"] == "reused" for step in steps)}
         elif item_id in checks:
             if any(status not in PASSING for status in checks[item_id]):
-                reasons.append(f"check {item_id} did not pass")
+                reasons.append(f"{item_id}: {check_errors.get(item_id) or 'check did not pass'}")
         else:
             reasons.append(f"{item_id} has no result")
-    status = "failed" if reasons else "passed"
+    complete = (len(finished) == len(runs) and not any(result["status"] == "interrupted"
+                                                       for _, result in runs if result)
+                and all(row["count"] == row["shards"] for row in group_rows.values())
+                and (all(item in group_rows or item in checks for item in wanted)
+                     or (len(runs) == 1 and first["batch"]["count"] == 1)))
+    blocked = any(result and result.get("status") == "blocked" for _, result in runs)
+    status = "blocked" if blocked else "failed" if reasons or not complete else "passed"
     source = first.get("source")
     profile = first.get("profile")
     accepted = (status == "passed" and profile in testing.GATE_PROFILES and source is not None
-                and bool(source.get("source_key")) and not source.get("dirty") and not source_changed)
+                and bool(source.get("source_key")) and not source.get("dirty") and not source_changed
+                and evidence is not None and not evidence_problems and not evidence_changes)
     if status == "passed" and not accepted:
         if profile not in testing.GATE_PROFILES:
             reasons.append(f"profile {profile or 'groups'} is not a gate profile")
@@ -1193,6 +1232,7 @@ def _entry(name, runs):
             reasons.append("uncommitted changes")
         elif source_changed:
             reasons.append("source changed during the run")
+    reasons.extend(evidence_problems + evidence_changes)
     wall = None
     if started and finished:
         from datetime import datetime
@@ -1201,6 +1241,8 @@ def _entry(name, runs):
             "card": first.get("card"), "profile": profile, "status": status, "accepted": accepted,
             "reasons": reasons, "source": source, "source_changed": source_changed,
             "environment": first.get("environment"), "packages_digest": first.get("packages_digest"),
+            "evidence": evidence, "complete": complete, "selected": wanted,
+            "finished_at": max(finished, default=None),
             "runs": sorted(request["run_id"] for request in requests), "groups": group_rows,
             "checks": {item_id: values for item_id, values in checks.items()},
             "step_seconds": round(step_seconds, 3), "wall_seconds": wall}
@@ -1262,7 +1304,8 @@ def rebuild_index(home):
         os.replace(temporary, path)
 
 
-def status(home, path, *, profile="acceptance", environment_name=None, root=None, project=None):
+def status(home, path, *, profile="acceptance", environment_name=None, root=None, project=None,
+           acceptance_id=None):
     target = testing.load_target(path, root=root, project=project)
     home.require_initialized()
     reports = []
@@ -1271,38 +1314,65 @@ def status(home, path, *, profile="acceptance", environment_name=None, root=None
             reports.append(read_json(file))
         except ForgeError:
             continue
-    reports.sort(key=lambda report: report.get("created_at", ""), reverse=True)
     cards = []
     for entry in target["entries"]:
         card = entry["card"]
-        identity = Source(card["project"]).identity()
         env = environment_name or entry["env"]
+        selection = testing.select(card, profile)
+        identity, current, problems = testing_evidence.snapshot(home, card, selection, env)
+        name = env or card["environment"].get("name")
         matches = [(report, item) for report in reports for item in report.get("entries", [])
                    if item.get("suite_id") == card["id"] and item.get("profile") == profile
+                   and (acceptance_id is None or report["acceptance_id"] == acceptance_id)
                    and (entry["id"] is None or item.get("project_id") in (None, entry["id"]))
-                   and (env is None or (item.get("environment") or {}).get("name") == env)]
-        key = identity["source_key"] if identity else None
-        accepted = next(((report, item) for report, item in matches
-                         if item.get("accepted") and key and (item.get("source") or {}).get("source_key") == key), None)
-        row = {"project_id": entry["id"], "suite_id": card["id"], "profile": profile, "environment": env,
-               "source": identity, "accepted": accepted is not None,
-               "acceptance_id": accepted[0]["acceptance_id"] if accepted else None, "reason": None}
-        if accepted is None:
-            if identity is None:
-                row["reason"] = "The project is not in Git, so no report can accept it."
-            elif identity["dirty"]:
-                row["reason"] = "The working tree has uncommitted changes."
-            elif not matches:
-                row["reason"] = f"No {profile} report for this card."
-            elif (matches[0][1].get("source") or {}).get("source_key") == key:
-                row["reason"] = f"The latest {profile} report {matches[0][0]['acceptance_id']} did not accept this source."
-                row["acceptance_id"] = matches[0][0]["acceptance_id"]
-            else:
-                row["reason"] = f"The source changed after the latest {profile} report {matches[0][0]['acceptance_id']}."
-                row["acceptance_id"] = matches[0][0]["acceptance_id"]
+                   and (item.get("environment") or {}).get("name") == name
+                   and item.get("complete", True)]
+        matches.sort(key=lambda pair: (pair[1].get("finished_at") or pair[0]["created_at"],
+                                       pair[0]["acceptance_id"]), reverse=True)
+        report, previous = next(((report, item) for report, item in matches
+                                 if item.get("evidence") == current), matches[0] if matches else (None, None))
+        if problems:
+            verdict = "stale" if previous and previous.get("accepted") else "blocked"
+            reasons = problems
+        elif previous is None:
+            verdict, reasons = "not_run", [f"No {profile} report for this card."]
+        elif differences := testing_evidence.changes(previous.get("evidence"), current):
+            verdict, reasons = "stale", differences
+        elif previous["accepted"]:
+            verdict, reasons = "accepted", []
+        else:
+            verdict = "blocked" if previous["status"] == "blocked" else "failed"
+            reasons = previous["reasons"] or ["The latest complete run did not pass."]
+        argv = ["jforge", "test", "accept", target["path"]]
+        for flag, value in (("--profile", profile if profile != "acceptance" else None), ("--env", environment_name),
+                            ("--root", root), ("--project", project)):
+            if value is not None:
+                argv.extend((flag, str(value)))
+        for external in (current.get("bench") or {}).values():
+            if external["reason"]:
+                argv = external["next_argv"]
+                break
+        row = {"project_id": entry["id"], "suite_id": card["id"], "profile": profile, "environment": name,
+               "source": identity, "accepted": verdict == "accepted", "status": verdict,
+               "acceptance_id": report["acceptance_id"] if report else None,
+               "reason": " ".join(reasons) or None, "reasons": reasons,
+               "next_argv": argv if verdict != "accepted" else None}
         cards.append(row)
     return {"target": target["kind"], "path": target["path"], "catalog_id": target["id"], "profile": profile,
             "accepted": all(row["accepted"] for row in cards), "cards": cards}
+
+
+def accept(home, path, *, profile="acceptance", full=False, environment_name=None, root=None, project=None,
+           jobs=1, progress=None):
+    if profile not in testing.GATE_PROFILES:
+        raise ForgeError("test accept requires the acceptance or release profile.")
+    result = run(home, path, profile=profile, full=full, environment_name=environment_name, root=root,
+                 project=project, jobs=jobs, progress=progress, strict=True)
+    if result["status"] == "interrupted":
+        return result
+    verdict = status(home, path, profile=profile, environment_name=environment_name, root=root, project=project,
+                     acceptance_id=result["acceptance_id"])
+    return {**result, **verdict, "accepted": verdict["accepted"] and result["status"] == "passed"}
 
 
 def history(home, *, suite=None, project=None, profile=None, group=None, case=None):

@@ -1,0 +1,4 @@
+# Optional literature reference. The default bench records and compares its own runs.
+source: "ATLAS JHEP 11 (2023) 168, Sec. 5: https://arxiv.org/abs/2308.02595"
+values:
+  efficiency: {value: 0.007}

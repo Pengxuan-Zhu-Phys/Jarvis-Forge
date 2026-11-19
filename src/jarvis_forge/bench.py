@@ -7,11 +7,13 @@ comparison and trend do too.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import hashlib
 import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -22,7 +24,7 @@ import yaml
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import Version
 
-from . import __version__, bench_cards, builds, cmake
+from . import __version__, bench_cards, bench_project, builds, cmake
 from .storage import ForgeError, digest, identifier, new_id, now, read_json, write_json, write_text
 from .suite import UniqueLoader
 
@@ -66,68 +68,76 @@ def plan(home, path, *, profile=None, cases=(), tags=(), redo=(), keep=(), verif
 def run(home, path, *, profile=None, cases=(), tags=(), jobs=1, redo=(), keep=(), verify_full=False,
         environment_name=None, no_build=False, executor="local", progress=None, baseline=None,
         rerun_failed=None, detach=False):
-    home.require_initialized()
-    if jobs < 1:
-        raise ForgeError("Jobs must be a positive integer.")
-    partial = False
-    rerun_of = None
-    selected_cases = cases
-    selected_profile = profile
-    selected_tags = tags
-    if rerun_failed:
-        if profile or cases or tags:
-            raise ForgeError("--rerun-failed takes its cases from the finished run.",
-                             hint="Run the card again without --rerun-failed for a result that can pass the gate.")
-        previous = _finished_bench(home, rerun_failed)
-        card = bench_cards.load(path)
-        if previous["name"] != card["name"]:
-            raise ForgeError(f"Run {rerun_failed} belongs to {previous['name']}.")
-        selected_cases = [item["name"] for item in previous["report"]["cases"]
-                          if item["status"] in {"failed", "error", "incomplete"}]
-        if not selected_cases:
-            raise ForgeError(f"Run {rerun_failed} has no failed or incomplete cases.")
-        selected_profile = previous["profile"]
-        selected_tags = ()
-        partial = True
-        rerun_of = rerun_failed
-    if baseline:
-        baseline_request = read_json(_run_dir(home, baseline) / "bench.json")
-        if baseline_request.get("kind") != "bench":
-            raise ForgeError(f"Run {baseline} is not a bench run.")
-    prepared = _prepare(home, path, profile=selected_profile, cases=selected_cases, tags=selected_tags,
-                        redo=redo, keep=keep, verify_full=verify_full, environment_name=environment_name,
-                        intent="dry" if no_build else "run", executor=executor)
-    if prepared["blocked"]:
-        raise ForgeError(_block_message(prepared))
-    _coverage_gate(prepared)
-    if baseline and baseline_request["name"] != prepared["card"]["name"]:
-        raise ForgeError(f"Run {baseline} belongs to {baseline_request['name']}.")
-    prepared["partial"] = partial
-    prepared["rerun_of"] = rerun_of
-    prepared["baseline_run"] = baseline
-    run_id = new_id("bench")
-    prepared["run_id"] = run_id
-    directory = home.root / "runs" / run_id
-    directory.mkdir(parents=True)
-    request = _request(prepared, run_id, jobs=jobs, executor=executor, cases=selected_cases, tags=selected_tags)
-    write_json(directory / "request.json", request)
-    write_json(directory / "bench.json", {**request, "card_snapshot": prepared["card"]["sha256"]})
-    write_json(directory / "plan.json", _plan_view(prepared))
-    write_json(directory / "result.json", {**request, "status": "running"})
-    if prepared["executor_spec"]["kind"] == "slurm":
-        from . import bench_exec
-        outcome = bench_exec.run_slurm(home, directory, prepared, detach=detach, progress=progress)
-        if outcome.get("interrupted"):
-            raise KeyboardInterrupt
-        return outcome
-    try:
-        with builds.file_lock(directory / "run.lock", blocking=True, message=f"Bench run is busy: {run_id}"):
-            _execute(home, directory, prepared, jobs=jobs, progress=progress)
-    except KeyboardInterrupt:
-        _finish(home, directory, prepared, "interrupted")
-        raise
-    status = _finish(home, directory, prepared, None)
-    return _public_result(directory, status)
+    project = bench_project.discover(Path(path).expanduser().resolve().parent)
+    with _project_lock(project):
+        if project:
+            bench_project.ensure_idle(home, project)
+        home.require_initialized()
+        if jobs < 1:
+            raise ForgeError("Jobs must be a positive integer.")
+        partial = False
+        rerun_of = None
+        selected_cases = cases
+        selected_profile = profile
+        selected_tags = tags
+        if rerun_failed:
+            if profile or cases or tags:
+                raise ForgeError("--rerun-failed takes its cases from the finished run.",
+                                 hint="Run the card again without --rerun-failed for a result that can pass the gate.")
+            previous = _finished_bench(home, rerun_failed)
+            card = bench_cards.load(path)
+            if previous["name"] != card["name"]:
+                raise ForgeError(f"Run {rerun_failed} belongs to {previous['name']}.")
+            selected_cases = [item["name"] for item in previous["report"]["cases"]
+                              if item["status"] in {"failed", "error", "incomplete"}]
+            if not selected_cases:
+                raise ForgeError(f"Run {rerun_failed} has no failed or incomplete cases.")
+            selected_profile = previous["profile"]
+            selected_tags = ()
+            partial = True
+            rerun_of = rerun_failed
+        if baseline:
+            baseline_request = read_json(_run_dir(home, baseline) / "bench.json")
+            if baseline_request.get("kind") != "bench":
+                raise ForgeError(f"Run {baseline} is not a bench run.")
+        prepared = _prepare(home, path, profile=selected_profile, cases=selected_cases, tags=selected_tags,
+                            redo=redo, keep=keep, verify_full=verify_full, environment_name=environment_name,
+                            intent="dry" if no_build else "run", executor=executor)
+        if prepared["blocked"]:
+            raise ForgeError(_block_message(prepared))
+        _coverage_gate(prepared)
+        if baseline and baseline_request["name"] != prepared["card"]["name"]:
+            raise ForgeError(f"Run {baseline} belongs to {baseline_request['name']}.")
+        prepared["partial"] = partial
+        prepared["rerun_of"] = rerun_of
+        prepared["baseline_run"] = baseline
+        run_id = new_id("bench")
+        prepared["run_id"] = run_id
+        directory = home.root / "runs" / run_id
+        directory.mkdir(parents=True)
+        request = _request(prepared, run_id, jobs=jobs, executor=executor, cases=selected_cases, tags=selected_tags)
+        request.update(_link_project_run(directory, prepared["card"].get("project")))
+        write_json(directory / "request.json", request)
+        write_json(directory / "bench.json", {**request, "card_snapshot": prepared["card"]["sha256"]})
+        write_json(directory / "plan.json", _plan_view(prepared))
+        write_json(directory / "result.json", {**request, "status": "running"})
+        if prepared["executor_spec"]["kind"] == "slurm":
+            from . import bench_exec
+            outcome = bench_exec.run_slurm(home, directory, prepared, detach=detach, progress=progress)
+            if outcome.get("interrupted"):
+                raise KeyboardInterrupt
+            return outcome
+        try:
+            with builds.file_lock(directory / "run.lock", blocking=True, message=f"Bench run is busy: {run_id}"):
+                _execute(home, directory, prepared, jobs=jobs, progress=progress)
+        except KeyboardInterrupt:
+            _finish(home, directory, prepared, "interrupted")
+            raise
+        except Exception:
+            _finish(home, directory, prepared, "error")
+            raise
+        status = _finish(home, directory, prepared, None)
+        return _public_result(directory, status)
 
 
 def verify(home, path, *, step, profile=None, cases=(), tags=(), environment_name=None):
@@ -189,67 +199,52 @@ def status(home, run_id):
 
 
 def card_status(home, path, *, profile=None, environment_name=None):
-    """Gate read: the latest run of this card and profile, without executing it."""
+    """Check the latest complete bench evidence against current inputs."""
     card = bench_cards.load(path)
-    selected = bench_cards.profile_of(card, profile)
-    environment = environment_name if environment_name is not None else card.get("environment")
-    rows = [item for item in history(home, card=card["name"], profile=selected["name"])
-            if item.get("environment") == environment and not item.get("partial")]
-    latest = None
-    report = None
-    for item in rows:
-        report_path = home.root / "runs" / item["run_id"] / "report.json"
-        if not report_path.is_file():
+    selected, found = bench_cards.select_cases(card, profile=profile)
+    name = selected["name"]
+    environment = environment_name or card.get("environment")
+    needed = {item["name"] for item in found if not item.get("skip")}
+    report = {"cases": []}
+    run_id = evidence = None
+    reason = f"No bench run covers {card['name']} {name}."
+    for item in history(home, card=card["name"], profile=name, environment=environment):
+        if (item.get("environment") != environment or item.get("partial")
+                or item.get("status") in {"running", "cancelled", "interrupted"}
+                or not needed <= set(item.get("cases") or [])):
             continue
-        latest = item
-        report = read_json(report_path)
+        directory = home.root / "runs" / item["run_id"]
+        if not (directory / "report.json").is_file():
+            continue
+        request = read_json(directory / "bench.json")
+        if (request.get("project_id") != _project_id(card)
+                or Path(request["card"]).resolve() != Path(card["path"])):
+            continue
+        run_id = item["run_id"]
+        report = read_json(directory / "report.json")
+        try:
+            if not _gate(report, selected.get("require")):
+                raise ForgeError(_gate_reason(report, selected.get("require")))
+            evidence = _check_gate_receipt(home, card, request, report, needed)
+        except (ForgeError, OSError) as exc:
+            reason = str(exc)
+        else:
+            reason = None
         break
-    if latest is None:
-        return {"accepted": False, "name": card["name"], "profile": selected["name"],
-                "reason": "No bench run covers this profile.", "text": "No bench run covers this profile.\n"}
-    accepted = _gate(report, selected.get("require"))
-    reason = None if accepted else _gate_reason(report, selected.get("require"))
-    return {"accepted": accepted, "name": card["name"], "profile": selected["name"],
-            "run_id": latest["run_id"], "require": selected.get("require"), "reason": reason,
-            "cases": report["cases"], "text": _gate_text(card["name"], selected["name"], report, accepted, reason)}
+    hint = ["jforge", "bench", "run", card["path"], "--profile", name, "--no-build"]
+    if environment:
+        hint.extend(("--env", environment))
+    return {"accepted": reason is None, "name": card["name"], "profile": name, "run_id": run_id,
+            "require": selected.get("require"), "reason": reason, "evidence": evidence, "next_argv": hint,
+            "cases": report["cases"], "text": _gate_text(card["name"], name, report, reason is None, reason)}
 
 
 def acceptance_check(home, path, *, profile):
-    """Pass when the latest full run covers the profile, the gate holds, and software matches.
-
-    A newer covering run whose software id differs fails the check. An older
-    matching run is not used in its place.
-    """
-    card = bench_cards.load(path)
-    selected, found = bench_cards.select_cases(card, profile=profile)
-    needed = {item["name"] for item in found if not item.get("skip")}
-    chosen = None
-    report = None
-    for item in history(home, card=card["name"], profile=selected["name"]):
-        if item.get("partial") or item.get("status") in {"running", "cancelled", "interrupted"}:
-            continue
-        if not needed <= set(item.get("cases") or []):
-            continue
-        report_path = home.root / "runs" / item["run_id"] / "report.json"
-        if not report_path.is_file():
-            continue
-        chosen = item
-        report = read_json(report_path)
-        break
-    if chosen is None:
-        raise ForgeError(f"No bench run covers {card['name']} {selected['name']}.",
-                         hint=f"jforge bench run {card['path']} --profile {selected['name']}")
-    if not _gate(report, selected.get("require")):
-        raise ForgeError(_gate_reason(report, selected.get("require")))
-    current = _resolve_software(home, card, intent="dry")
-    recorded = {item["name"]: item.get("id") for item in report.get("software") or []}
-    names = [card["subject"]] if card.get("subject") else list(current)
-    for name in names:
-        if name not in current:
-            raise ForgeError(f"subject {name!r} is not a software item.")
-        if recorded.get(name) != current[name]["id"]:
-            raise ForgeError(f"software changed: {name} {recorded.get(name)} -> {current[name]['id']}")
-    return {"status": "passed", "run_id": chosen["run_id"], "name": card["name"], "profile": selected["name"]}
+    value = card_status(home, path, profile=profile)
+    if not value["accepted"]:
+        import shlex
+        raise ForgeError(value["reason"], hint=shlex.join(value["next_argv"]))
+    return {"status": "passed", **{key: value[key] for key in ("run_id", "name", "profile", "evidence")}}
 
 
 def resume(home, run_id, *, retry_failed=False, jobs=None, progress=None):
@@ -258,27 +253,31 @@ def resume(home, run_id, *, retry_failed=False, jobs=None, progress=None):
     request = read_json(directory / "bench.json")
     if request.get("kind") != "bench":
         raise ForgeError("This run is not a bench run.")
-    current = read_json(directory / "result.json").get("status")
-    if current in {"passed", "reported", "failed", "error", "incomplete"} and not retry_failed:
-        raise ForgeError(f"Run already finished: {run_id}", hint="Start a new bench run to apply a changed card.")
-    prepared = _prepare_saved(home, request)
-    prepared["run_id"] = run_id
-    if jobs:
-        request["jobs"] = jobs
-    if prepared["executor_spec"]["kind"] == "slurm":
-        from . import bench_exec
-        if retry_failed:
-            bench_exec.forget_failed(directory)
-        while True:
-            outcome = bench_exec.reconcile(home, directory, prepared, progress=progress)
-            if outcome["status"] != "running":
-                return outcome
-            time.sleep(bench_exec._poll())
-    with builds.file_lock(directory / "run.lock", blocking=True, message=f"Bench run is busy: {run_id}"):
-        _execute(home, directory, prepared, jobs=request.get("jobs", 1), progress=progress,
-                 retry_failed=retry_failed)
-    status_name = _finish(home, directory, prepared, None)
-    return _public_result(directory, status_name)
+    project = bench_project.discover(Path(request["card"]).parent)
+    with _project_lock(project):
+        if project and bench_project.active_run(home, project) not in {None, run_id}:
+            bench_project.ensure_idle(home, project)
+        current = read_json(directory / "result.json").get("status")
+        if current in {"passed", "reported", "failed", "error", "incomplete"} and not retry_failed:
+            raise ForgeError(f"Run already finished: {run_id}", hint="Start a new bench run to apply a changed card.")
+        prepared = _prepare_saved(home, request)
+        prepared["run_id"] = run_id
+        if jobs:
+            request["jobs"] = jobs
+        if prepared["executor_spec"]["kind"] == "slurm":
+            from . import bench_exec
+            if retry_failed:
+                bench_exec.forget_failed(directory)
+            while True:
+                outcome = bench_exec.reconcile(home, directory, prepared, progress=progress)
+                if outcome["status"] != "running":
+                    return outcome
+                time.sleep(bench_exec._poll())
+        with builds.file_lock(directory / "run.lock", blocking=True, message=f"Bench run is busy: {run_id}"):
+            _execute(home, directory, prepared, jobs=request.get("jobs", 1), progress=progress,
+                     retry_failed=retry_failed)
+        status_name = _finish(home, directory, prepared, None)
+        return _public_result(directory, status_name)
 
 
 def history(home, *, card=None, case=None, profile=None, environment=None):
@@ -364,7 +363,7 @@ def trend(home, path, *, case, step, item):
         raise ForgeError(f"Unknown step: {step}")
     rows = []
     for record in reversed(history(home, card=card["name"], case=case)):
-        if record.get("partial"):
+        if record.get("partial") or record.get("project_id") != _project_id(card):
             continue
         report_path = home.root / "runs" / record["run_id"] / "report.json"
         if not report_path.is_file():
@@ -391,22 +390,40 @@ def trend(home, path, *, case, step, item):
             "text": "\n".join(lines) + "\n"}
 
 
+def _data_roots(home, project):
+    if not project:
+        return [home.root / "bench/data"]
+    from .bench_exec import list_executors, load_executor
+
+    roots = {bench_project.data_root(project)}
+    for item in list_executors(home)["executors"]:
+        spec = load_executor(home, item["name"])
+        if spec.get("data_root") and project["record"]:
+            roots.add(bench_project.data_root(project, spec["data_root"]))
+    return sorted(roots)
+
+
+def _data_cards(root, name):
+    if root.is_symlink() or not root.is_dir():
+        return []
+    paths = [root / name] if name else sorted(root.iterdir())
+    return [path for path in paths if path.is_dir() and not path.is_symlink()]
+
+
 def data_list(home, card=None):
     """Bytes used by each stored step directory."""
     home.require_initialized()
-    _, name = _data_card(card)
-    root = home.root / "bench" / "data"
+    loaded, name = _data_card(card)
+    project = loaded.get("project") if loaded else bench_project.discover()
     rows = []
-    if root.is_dir():
-        cards = [root / name] if name else sorted(path for path in root.iterdir() if path.is_dir())
-        for card_dir in cards:
-            if not card_dir.is_dir():
-                continue
-            for profile_dir in sorted(path for path in card_dir.iterdir() if path.is_dir()):
-                for case_dir in sorted(path for path in profile_dir.iterdir() if path.is_dir()):
-                    for step_dir in sorted(path for path in case_dir.iterdir() if path.is_dir()):
+    for root in _data_roots(home, project):
+        for card_dir in _data_cards(root, name):
+            for profile_dir in _data_cards(card_dir, None):
+                for case_dir in _data_cards(profile_dir, None):
+                    for step_dir in _data_cards(case_dir, None):
                         rows.append({"card": card_dir.name, "profile": profile_dir.name, "case": case_dir.name,
-                                     "step": step_dir.name, "bytes": _tree_bytes(step_dir)})
+                                     "step": step_dir.name, "bytes": _tree_bytes(step_dir),
+                                     "path": str(step_dir)})
     lines = [f"{row['card']}  {row['profile']}  {row['case']}  {row['step']}  {_size(row['bytes'])}" for row in rows]
     return {"rows": rows, "text": ("\n".join(lines) + "\n") if lines else "No bench data.\n"}
 
@@ -417,18 +434,17 @@ def data_prune(home, card=None, *, yes=False):
     if not yes:
         raise ForgeError("Refusing to prune bench data without --yes.")
     loaded, name = _data_card(card)
-    root = home.root / "bench" / "data"
-    if not root.is_dir():
-        return {"removed": [], "text": "No bench data.\n"}
-    keep = _data_keep(loaded) if loaded else None
-    targets = [root / name] if name else sorted(path for path in root.iterdir() if path.is_dir())
+    project = loaded.get("project") if loaded else bench_project.discover()
     removed = []
-    for card_dir in targets:
-        if not card_dir.is_dir():
-            continue
-        for path in _prune_dirs(card_dir, keep):
-            shutil.rmtree(path)
-            removed.append(str(path.relative_to(root)))
+    with _project_lock(project):
+        if project:
+            bench_project.ensure_idle(home, project)
+        keep = _data_keep(loaded) if loaded else None
+        for root in _data_roots(home, project):
+            for card_dir in _data_cards(root, name):
+                for path in _prune_dirs(card_dir, keep):
+                    shutil.rmtree(path)
+                    removed.append(str(path if project else path.relative_to(root)))
     lines = [f"removed {len(removed)}"]
     lines.extend(f"  {item}" for item in removed)
     return {"removed": removed, "text": "\n".join(lines) + "\n"}
@@ -513,10 +529,17 @@ def _prepare(home, path, *, profile, cases, tags, redo, keep, verify_full, envir
     software = _resolve_software(home, card, intent=intent)
     bench_cards.check_references(card, found, software)
     environment = _environment(home, environment_name or card.get("environment"))
+    profiles = {item["apt_profile"] for item in software.values() if "apt_profile" in item}
+    if len(profiles) > 1:
+        raise ForgeError("The selected apt profile changed while resolving bench software.")
+    if profiles:
+        environment["apt_profile"] = profiles.pop()
     from . import bench_exec
     spec = bench_exec.load_executor(home, executor)
     fetch = bench_exec.cached_fetch(home, card) if card["fetch"] else {}
-    if spec.get("data_root"):
+    if card.get("project"):
+        data_root = str(bench_project.data_root(card["project"], spec.get("data_root")))
+    elif spec.get("data_root"):
         data_root = str(Path(spec["data_root"]).expanduser().resolve())
     else:
         data_root = str(home.root / "bench" / "data")
@@ -527,7 +550,7 @@ def _prepare(home, path, *, profile, cases, tags, redo, keep, verify_full, envir
                 "verify_full": verify_full, "home": home, "blocked": False, "blocks": [],
                 "machine_class": machine, "data_root": data_root, "executor_spec": spec, "fetch": fetch,
                 "partial": False, "rerun_of": None, "baseline_run": None, "run_id": None}
-    prepared["units"] = _decide(prepared)
+    prepared["units"] = [] if intent == "evidence" else _decide(prepared)
     prepared["blocked"] = any(unit["action"] == "blocked" for unit in prepared["units"])
     return prepared
 
@@ -543,6 +566,12 @@ def _prepare_saved(home, request):
                         keep=request.get("keep") or (), verify_full=request.get("verify_full", False),
                         environment_name=request.get("environment"), intent="dry",
                         executor=request.get("executor") or "local")
+    if request.get("project_id") != _project_id(prepared["card"]):
+        raise ForgeError("The workspace identity for this run changed.",
+                         hint="Start a new bench run in the current workspace.")
+    if request.get("apt_profile") != prepared["environment"].get("apt_profile"):
+        raise ForgeError("The selected apt profile differs from the one saved for this run.",
+                         hint="Select the original apt profile, then resume this run.")
     if request.get("data_root"):
         prepared["data_root"] = request["data_root"]
     if request.get("machine_class"):
@@ -582,17 +611,100 @@ def _check_flags(card, redo, keep):
 def _resolve_software(home, card, *, intent):
     resolved = {}
     for name, spec in card["software"].items():
-        if spec.get("build"):
+        if spec.get("package") or (card.get("project") and spec.get("build") and
+                                   not spec.get("source") and spec["rebuild"] == "never"):
+            resolved[name] = _resolve_profile_software(home, name, spec)
+        elif spec.get("build"):
             resolved[name] = _resolve_build(home, card, name, spec, intent=intent)
         else:
             resolved[name] = _resolve_source(card, name, spec)
         _check_requirement(name, spec, resolved[name])
+        if spec.get("entrypoint") and resolved[name]["path"]:
+            resolved[name]["entrypoint"] = _software_entrypoint(name, spec, resolved[name])
     return resolved
 
 
+def _resolve_profile_software(home, name, spec):
+    from . import homebrew_backend, spack_backend, unified_profiles
+    from .apt_profiles import active_home, backend_name, validate_active
+    from .build_names import app_name
+
+    profile = active_home(home)
+    managed = unified_profiles.record(profile)
+    if managed and os.environ.get("JFORGE_PROFILE_INSTANCE") not in {None, "", managed["id"]}:
+        raise ForgeError("Shell profile differs from the selected apt profile.",
+                         hint="Load the selected profile in a fresh shell.")
+    choices = []
+    if package := spec.get("package"):
+        if managed:
+            validate_active(profile)
+        backend = backend_name(profile)
+        backend_module = homebrew_backend if backend == "homebrew" else spack_backend
+        if (profile.root / "apt/state.json").is_file():
+            state = backend_module.current(profile)
+            for row in state["packages"]:
+                if row["name"] != package or not Path(row["prefix"]).is_dir():
+                    continue
+                variants = (row.get("spec") or row.get("provenance", {}).get("spec") or "").split("^", 1)[0]
+                features = re.findall(r"\+([\w-]+)", variants)
+                install_id = row.get("install_id") or row.get("hash")
+                choices.append({"name": name, "kind": "package", "action": "reuse",
+                                "path": row["prefix"], "id": f"{backend}:{install_id}",
+                                "version": row["version"], "features": features,
+                                "detail": install_id, "label": package,
+                                "activation": [state["activation"]] if state.get("activation") else [],
+                                "artifact": install_id})
+        install = f"jforge apt install {package}" + "".join(f"+{feature}" for feature in spec["features"])
+    else:
+        app = app_name(spec["build"])
+        for manifest in sorted((home.root / "builds/artifacts").glob("*/manifest.json")):
+            row = read_json(manifest)
+            if (row.get("status") != "ready" or row.get("output") != "installation"
+                    or app_name(row.get("build_id") or "") != app):
+                continue
+            if managed:
+                if row.get("profile_instance") != managed["id"]:
+                    continue
+            elif row.get("profile_instance") or (row.get("apt") or {}).get("profile", {}).get("path") != str(profile.root):
+                continue
+            choices.append(_build_item(name, spec, row, "reuse"))
+        install = f"jforge build fetch {app} && jforge build run {app}"
+    matches = []
+    rejected = []
+    for item in choices:
+        try:
+            _check_requirement(name, spec, item)
+            if spec.get("entrypoint"):
+                _software_entrypoint(name, spec, item)
+            if item["kind"] == "build":
+                builds.artifact(home, item["artifact"])
+            matches.append(item)
+        except ForgeError as exc:
+            rejected.append(str(exc))
+    if not matches:
+        details = "\n" + "\n".join(rejected) if rejected else ""
+        raise ForgeError(f"No compatible installed software for {name} in profile {profile.root.name}.{details}",
+                         hint=install)
+    if len(matches) > 1:
+        ids = ", ".join(item["artifact"] for item in matches)
+        raise ForgeError(f"Multiple installed matches for {name} in profile {profile.root.name}: {ids}",
+                         hint=f"Set software.{name}.artifact in the bench card.")
+    return {**matches[0], "apt_profile": str(profile.root)}
+
+
+def _software_entrypoint(name, spec, item):
+    path = Path(item["path"]) / spec["entrypoint"]
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise ForgeError(f"software.{name} executable is missing or not executable: {path}")
+    return str(path)
+
+
 def _resolve_source(card, name, spec):
-    path = _source_path(card, spec["source"])
-    identity = builds.source_identity({"path": str(path)}, Path(card["dir"]))
+    path = (Path(card["dir"]) / Path(spec["source"]).expanduser()).resolve()
+    if path.is_file():
+        identity = {"path": str(path), "sha256": digest(path)}
+    else:
+        identity = builds.source_identity({"path": str(path)}, Path(card["dir"]))
     return {"name": name, "kind": "source", "action": "record", "path": identity["path"],
             "id": f"source:{identity['sha256']}", "version": (identity.get("git") or {}).get("version"),
             "activation": [], "detail": f"source:{identity['sha256'][:12]}", "label": Path(identity["path"]).name}
@@ -634,7 +746,7 @@ def _build_item(name, spec, output, action):
 
 
 def _check_requirement(name, spec, item):
-    if spec.get("artifact") and item.get("artifact") and item["artifact"] != spec["artifact"]:
+    if spec.get("artifact") and item.get("artifact") != spec["artifact"] and item["action"] != "build":
         raise ForgeError(f"software.{name} artifact does not match the installed build.")
     if spec.get("features") and not set(spec["features"]) <= set(item.get("features") or []):
         raise ForgeError(f"software.{name} is missing features: " + ", ".join(spec["features"]))
@@ -645,7 +757,11 @@ def _check_requirement(name, spec, item):
             spec_set = SpecifierSet(spec["version"])
         except InvalidSpecifier as exc:
             raise ForgeError(f"Invalid version constraint for software.{name}: {exc}") from exc
-        if Version(str(item["version"])) not in spec_set:
+        try:
+            matches = Version(str(item["version"])) in spec_set
+        except ValueError as exc:
+            raise ForgeError(f"Invalid installed version for software.{name}: {item['version']}") from exc
+        if not matches:
             raise ForgeError(f"software.{name} version {item['version']} does not satisfy {spec['version']}.")
 
 
@@ -899,7 +1015,7 @@ def _inputs(prepared, case, step, index, count, produced, task=None):
             "files": files, "software": {name: prepared["software"][name]["id"] for name in step["software"]},
             "upstream": upstream, "fetch": fetch,
             "environment": {key: prepared["environment"][key]
-                            for key in ("name", "revision", "files") if key in prepared["environment"]}}
+                            for key in ("name", "revision", "files", "apt_profile") if key in prepared["environment"]}}
 
 
 def _task_bindings(prepared, case, step, index, count, task, produced=None):
@@ -1023,8 +1139,12 @@ def _run_repeat(home, directory, prepared, case, step, unit, repeat, work_root, 
     bindings = _task_bindings(prepared, case, step, index, count, final, produced=_previous(prepared, case["name"], step["name"]))
     files = _stage(step, bindings, partial, write=True)
     started = time.monotonic()
-    log_dir = partial / ".jforge"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    metadata = partial / ".jforge"
+    metadata.mkdir()
+    log_dir = metadata
+    if (directory / "logs").is_dir():
+        log_dir = directory / "logs" / case["name"] / f"{step['name']}.{index}"
+        log_dir.mkdir(parents=True, exist_ok=True)
     command_env = _command_env(env, prepared, step, case, partial, bindings)
     failed = None
     for number, command in enumerate(step["commands"], start=1):
@@ -1065,7 +1185,7 @@ def _run_repeat(home, directory, prepared, case, step, unit, repeat, work_root, 
             "verify": None if verify_summary is None else {"exit": 0, "summary": verify_summary},
             "run": directory.name, "host": socket.gethostname(), "seconds": round(time.monotonic() - started, 3),
             "finished_at": now(), "kept": [], "forge": __version__}
-    write_json(log_dir / "done.json", done)
+    write_json(metadata / "done.json", done)
     if unit["replace"]:
         if final.exists():
             shutil.rmtree(final)
@@ -1128,7 +1248,12 @@ def _compare_case(directory, prepared, case, step, unit, produced, compare):
         items = _baseline_items(prepared, case, step, compare, bindings, paths)
     else:
         expected_path = bench_cards.expand(compare["expected"], bindings, where=f"{step['name']} expected")
-        reference = _load_document(Path(expected_path))
+        expected_path = Path(expected_path)
+        checksum = digest(expected_path)
+        reference = _load_document(expected_path)
+        if digest(expected_path) != checksum:
+            raise ForgeError(f"Reference changed during comparison: {expected_path}")
+        unit["reference_sha256"] = checksum
         items = []
         for number, path in enumerate(paths):
             document = _load_document(Path(path))
@@ -1312,6 +1437,12 @@ def _command_env(base, prepared, step, case, task, bindings):
         "SEED": "" if seed is None else str(seed),
         "REPEAT_INDEX": str(bindings["repeat"]["index"]),
     })
+    if project := prepared["card"].get("project"):
+        checkpoint = bench_project.inside(project["root"], "/".join((
+            project["roots"]["checkpoints"], prepared["card"]["name"], prepared["data_profile"],
+            case["name"], step["name"], f"r{bindings['repeat']['index']:03d}",
+        )))
+        env["BENCH_CHECKPOINT_DIR"] = str(checkpoint)
     extra = bench_cards.expand(step.get("env") or {}, bindings, where=f"{step['name']} env")
     for key, value in extra.items():
         env[key] = str(value)
@@ -1362,7 +1493,7 @@ def _collect_outputs(task, outputs):
     return recorded
 
 
-def _outputs_present(done, task, full):
+def _outputs_present(done, task, full, *, update=True):
     if done.get("verify_status") == "failed":
         return False
     changed = False
@@ -1389,7 +1520,7 @@ def _outputs_present(done, task, full):
             if digest_now is not None and mtime != item.get("mtime"):
                 item["mtime"] = mtime
                 changed = True
-    if changed:
+    if changed and update:
         write_json(task / ".jforge" / "done.json", done)
     return True
 
@@ -1478,6 +1609,16 @@ def _read_done(directory):
     return done
 
 
+def _project_id(card):
+    return bench_project.identity(card["project"]) if card.get("project") else None
+
+
+def _project_lock(project):
+    if project:
+        return builds.file_lock(bench_project.inside(project["root"], ".jforge/bench.lock"), blocking=True)
+    return nullcontext()
+
+
 def _step_dir(prepared, case, step):
     root = Path(prepared.get("data_root") or prepared["home"].root / "bench" / "data")
     return root / prepared["card"]["name"] / prepared["data_profile"] / case / step
@@ -1510,6 +1651,32 @@ def _finish(home, directory, prepared, forced):
         _append_index(home, directory, prepared, status)
         _update_gate_state(home, prepared, directory.name, status)
     return status
+
+
+
+def _link_project_run(directory, project):
+    if not project:
+        return {}
+    paths = {}
+    for key, anchor in (("outputs", "reports"), ("logs", None)):
+        base = project["roots"][key]
+        path = f"{base}/{anchor}/{directory.name}" if anchor else f"{base}/{directory.name}"
+        target = bench_project.inside(project["root"], path)
+        target.mkdir(parents=True)
+        if key == "logs":
+            (directory / "logs").symlink_to(target, target_is_directory=True)
+            paths["logs_dir"] = str(target)
+        else:
+            for name in ("report.json", "report.md", "cases"):
+                (directory / name).symlink_to(target / name, target_is_directory=name == "cases")
+            (target / "cases").mkdir()
+            paths["report_dir"] = str(target)
+    return paths
+
+
+def _report_file(directory, name):
+    path = directory / name
+    return path.readlink() if path.is_symlink() else path
 
 
 def _write_reports(directory, prepared):
@@ -1549,9 +1716,89 @@ def _write_reports(directory, prepared):
                "partial": bool(prepared.get("partial")), "rerun_of": prepared.get("rerun_of"),
                "software": [{"name": item["name"], "id": item["id"], "action": item["action"],
                              "path": item["path"]} for item in prepared["software"].values()]}
-    write_json(directory / "report.json", payload)
-    write_text(directory / "report.md", _summary_markdown(payload))
+    if status in {"passed", "reported"}:
+        payload["gate_receipt"] = _gate_receipt(prepared)
+    write_json(_report_file(directory, "report.json"), payload)
+    write_text(_report_file(directory, "report.md"), _summary_markdown(payload))
     return payload
+
+
+def _gate_receipt(prepared):
+    cases = {}
+    for unit in prepared["units"]:
+        steps = cases.setdefault(unit["case"], {})
+        if unit["compare"]:
+            steps[unit["step"]] = {"reference": unit.get("reference_sha256")}
+        else:
+            steps[unit["step"]] = [{"inputs": (repeat.get("done") or {}).get("inputs"),
+                                    "outputs": _output_digests(repeat.get("done") or {})}
+                                   for repeat in unit["repeats"]]
+    environment = {key: value for key, value in prepared["environment"].items() if key != "activation"}
+    return {"version": 1, "environment": environment, "cases": cases,
+            "case_definitions": {case["name"]: builds.fingerprint(case) for case in prepared["cases"]}}
+
+
+def _output_digests(done):
+    return {name: [[row["path"], row["sha256"]] for row in rows]
+            for name, rows in (done.get("outputs") or {}).items()}
+
+
+def _check_gate_receipt(home, card, request, report, needed):
+    if request["card_sha256"] != card["sha256"]:
+        raise ForgeError("The bench card changed after the recorded run.")
+    receipt = report.get("gate_receipt")
+    if not receipt or receipt.get("version") != 1:
+        raise ForgeError("The benchmark report predates the current evidence format.")
+    prepared = _prepare(home, card["path"], profile=request["profile"], cases=(), tags=(), redo=(), keep=(),
+                        verify_full=False, environment_name=request["environment"], intent="evidence",
+                        executor=request.get("executor") or "local")
+    if prepared["data_root"] != request.get("data_root") or prepared["machine_class"] != request.get("machine_class"):
+        raise ForgeError("The benchmark executor, machine class or data directory changed.")
+    environment = {key: value for key, value in prepared["environment"].items() if key != "activation"}
+    if environment != receipt["environment"]:
+        raise ForgeError("The benchmark environment or its revision changed.")
+    recorded = {item["name"]: item["id"] for item in report["software"]}
+    for name, item in prepared["software"].items():
+        if recorded.get(name) != item["id"]:
+            raise ForgeError(f"software changed: {name} {recorded.get(name)} -> {item['id']}")
+    for case in prepared["cases"]:
+        if case["name"] in needed:
+            if (receipt.get("case_definitions") or {}).get(case["name"]) != builds.fingerprint(case):
+                raise ForgeError(f"The benchmark case settings changed: {case['name']}.")
+            _check_case_receipt(prepared, case, receipt["cases"].get(case["name"], {}), request.get("redo", []))
+    return builds.fingerprint(receipt)
+
+
+def _check_case_receipt(prepared, case, recorded, redo):
+    produced = {}
+    for step in prepared["card"]["steps"]:
+        name = step["name"]
+        label = f"{case['name']}/{name}"
+        if step["compare"]:
+            if step["compare"]["expected"] != "baseline":
+                bindings = _task_bindings(prepared, case, step, 0, 1, None, produced=produced)
+                reference = bench_cards.expand(step["compare"]["expected"], bindings, where=f"{label} expected")
+                if digest(Path(reference)) != (recorded.get(name) or {}).get("reference"):
+                    raise ForgeError(f"The benchmark reference changed: {reference}")
+            continue
+        count = _repeat_count(prepared["card"], case, step, prepared["software"])
+        rows = recorded.get(name) or []
+        if count != len(rows):
+            raise ForgeError(f"The benchmark repeat count changed: {label}.")
+        root = _step_dir(prepared, case["name"], name)
+        staging = root.with_name(root.name + ".new") if not step["reuse"] or name in redo else root
+        repeats = []
+        for index, row in enumerate(rows):
+            slot = root / f"r{index:03d}"
+            done = _read_done(slot)
+            if (not done or done.get("kept") or not _outputs_present(done, slot, False, update=False)
+                    or _output_digests(done) != row["outputs"]):
+                raise ForgeError(f"Benchmark outputs are missing or changed: {label} r{index:03d}.")
+            current = _inputs(prepared, case, step, index, count, produced, task=staging / slot.name)
+            if current != row["inputs"]:
+                raise ForgeError(f"Benchmark inputs changed: {label} r{index:03d}.")
+            repeats.append({"directory": str(slot), "done": done})
+        produced[name] = {"repeats": repeats}
 
 
 def _case_status(units):
@@ -1569,14 +1816,7 @@ def _case_status(units):
 
 
 def _custom_report(prepared, case_dir):
-    argv = []
-    for part in prepared["card"]["report"]:
-        path = Path(part)
-        if path.is_absolute() or "/" in part:
-            path = path if path.is_absolute() else Path(prepared["card"]["dir"]) / path
-            argv.append(str(path))
-        else:
-            argv.append(part)
+    argv = bench_cards.command_argv(prepared["card"], prepared["card"]["report"])
     result = subprocess.run(argv, cwd=case_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if result.returncode != 0:
         raise ForgeError(f"Report command failed (exit {result.returncode}).\n{result.stdout}")
@@ -1620,7 +1860,8 @@ def _append_index(home, directory, prepared, status):
     row = {"run_id": directory.name, "name": prepared["card"]["name"], "profile": prepared["profile"]["name"],
            "environment": prepared["environment"].get("name"), "status": status, "at": now(),
            "cases": [case["name"] for case in prepared["cases"]], "partial": bool(prepared.get("partial")),
-           "machine_class": prepared.get("machine_class"), "rerun_of": prepared.get("rerun_of")}
+           "machine_class": prepared.get("machine_class"), "rerun_of": prepared.get("rerun_of"),
+           "project_id": _project_id(prepared["card"])}
     path = home.root / "bench" / "index.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     with builds.file_lock(path.parent / "index.lock", blocking=True):
@@ -1633,7 +1874,7 @@ def _append_index(home, directory, prepared, status):
 
 
 def _state_key(prepared):
-    return builds.fingerprint({"id": prepared["card"]["name"], "project": prepared["card"]["dir"],
+    return builds.fingerprint({"id": prepared["card"]["name"], "project": _project_id(prepared["card"]) or prepared["card"]["dir"],
                                **({"environment": prepared["environment"]["name"]}
                                   if prepared["environment"].get("name") else {})})
 
@@ -1662,8 +1903,12 @@ def _update_gate_state(home, prepared, run_id, status):
 def _public_result(directory, status):
     payload = read_json(directory / "report.json") if (directory / "report.json").is_file() else {"cases": []}
     text = _summary_markdown(payload) if payload.get("cases") else f"{status}\n"
+    request = read_json(directory / "bench.json")
+    paths = {key: request[key] for key in ("report_dir", "logs_dir") if key in request}
+    if paths:
+        text += f"Run {directory.name}\nReports {paths['report_dir']}\nLogs {paths['logs_dir']}\n"
     return {"run_id": directory.name, "status": status, "path": str(directory), "cases": payload.get("cases", []),
-            "text": text}
+            "text": text, **paths}
 
 
 def _request(prepared, run_id, *, jobs, executor, cases, tags):
@@ -1674,6 +1919,8 @@ def _request(prepared, run_id, *, jobs, executor, cases, tags):
             "redo": prepared["redo"], "keep": prepared["keep"], "verify_full": prepared["verify_full"],
             "case_filter": list(cases), "tag_filter": list(tags), "jobs": jobs, "executor": executor,
             "executor_kind": prepared["executor_spec"]["kind"], "data_root": prepared.get("data_root"),
+            "project_id": _project_id(prepared["card"]),
+            "apt_profile": prepared["environment"].get("apt_profile"),
             "machine_class": prepared.get("machine_class"), "partial": bool(prepared.get("partial")),
             "rerun_of": prepared.get("rerun_of"), "baseline": prepared.get("baseline_run"),
             "subject": prepared["card"].get("subject"), "started_at": now(), "status": "running"}
@@ -1781,7 +2028,8 @@ def _gate(report, require):
 
 def _gate_reason(report, require):
     if require == "passed":
-        return "require passed: every case must pass"
+        missing = [item["name"] for item in report.get("cases", []) if item["status"] not in {"passed", "skipped"}]
+        return "require passed: every case must pass" + (". Check " + ", ".join(missing) if missing else ".")
     bad = [item["name"] for item in report.get("cases", []) if item["status"] in {"error", "incomplete", "failed"}]
     if bad:
         return "cases not accepted: " + ", ".join(bad)
@@ -1821,6 +2069,8 @@ def _status_text(request, result, tasks):
     lines = [f"{request['name']} {request['profile']} {result.get('status', 'running')}"]
     for task in tasks:
         lines.append(f"  {task['case']} {task['task']} {task['status']}")
+    if request.get("logs_dir"):
+        lines.append(f"Logs {request['logs_dir']}")
     return "\n".join(lines) + "\n"
 
 
@@ -1947,6 +2197,8 @@ def _baseline_from_run(home, run_id, prepared, case_name, step_name, current, su
         previous = _finished_bench(home, run_id)
     except ForgeError as exc:
         return None, str(exc)
+    if previous["request"].get("project_id") != _project_id(prepared["card"]):
+        return None, "different bench workspace"
     other_machine = previous["report"].get("machine_class")
     if other_machine != prepared.get("machine_class"):
         return None, f"different machine class {prepared.get('machine_class')} and {other_machine}"
@@ -2068,11 +2320,11 @@ def _compare_text(left, right, comparable, changes, rows, only_a, only_b, same_m
 def _data_card(card):
     if card is None:
         return None, None
-    path = Path(card).expanduser()
+    path = bench_project.resolve_card(card)
     if path.is_file():
         loaded = bench_cards.load(path)
         return loaded, loaded["name"]
-    return None, str(card)
+    return None, identifier(card)
 
 
 def _data_keep(card):
@@ -2092,7 +2344,7 @@ def _data_keep(card):
 def _prune_dirs(card_dir, keep):
     doomed = []
     for path in card_dir.rglob("*"):
-        if not path.is_dir():
+        if path.is_symlink() or not path.is_dir():
             continue
         if path.name.endswith(".partial") or path.name.endswith(".new"):
             doomed.append(path)

@@ -25,7 +25,7 @@ def build(version, output):
     ):
         with tarfile.open(fileobj=compressed, mode="w") as package:
             for file in sorted(source.rglob("*")):
-                if file.is_file() and file.suffix in {".py", ".yaml"}:
+                if file.is_file() and (file.suffix in {".py", ".yaml"} or file.name == "OFL.txt"):
                     content = file.read_bytes()
                     info = tarfile.TarInfo(
                         "jforge-spack-recipes/" + str(file.relative_to(source))

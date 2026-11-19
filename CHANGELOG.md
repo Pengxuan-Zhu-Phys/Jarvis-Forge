@@ -7,17 +7,24 @@
 - Create and select versioned compiler environments with `apt profile check`, `apt profile build`, and `apt profile global`. Built-in Ubuntu LTS and macOS presets provision native tools through Spack or Homebrew and validate the Python selected by pyenv.
 - Track ROOT, GAMBIT and other project build outputs by their managed profile. Switching profiles changes the visible builds and activation paths, while resuming a build keeps its saved profile.
 - List and toggle installed build outputs with `apt profile apps`. Build recipes can declare `environment.outputs_off` for build-only exclusions. The CBS recipe prepares ROOT and excludes Rivet before configuring GAMBIT.
-- Use `jforge playlist` to register a library of projects and inspect the pytest groups and checks declared by their schema 2 test cards. Keep checkout paths per machine, filter cases by shelf or project, and validate or refresh the local inventory without running tests.
+- Install Fira Code, Liberation Sans, Inter and Noto Sans SC with `jforge apt` on Linux. Forge discovers installed TrueType and OpenType fonts and keeps the Fontconfig configuration and cache in the active Spack profile. Nodes sharing the profile can use its fonts without administrator access or user font directories.
+- Use `jforge playlist` to browse project cases, save selections, and queue verification jobs. The local dashboard shares the CLI library and lets you filter cases, edit playlists, watch runs, and inspect output. A demo library connects to the arithmetic cases in SARAH-Jarvis.
+- Run a complete gate with `jforge test accept`. Test status checks current inputs, named environment revisions, Python dependencies, and benchmark evidence. Acceptance cards can bind to a pinned release archive and verify its extracted files.
+- Add acceptance examples for the official Eggbox release and for CBS, with a fixed HepMC smoke test and a MadGraph-to-CBS physics comparison.
+- Initialize and fetch versioned bench projects with `jforge bench init` and `jforge bench fetch`. Resolve installed software from the selected apt profile and keep reports, logs and reusable step results in the workspace. The bundled `cbs-test-atlas` project provides smoke and physics cards.
 
 ### Fixed
 
 - Apt validates the selected profile's CPU and pyenv Python before operating and preserves the selection if backend files are damaged. Spack enforces the CPU target throughout its concrete package graph, including cached and source plans.
 - New Spack profiles keep their package store, compiler toolchain, metadata, and activation scripts in a private instance directory. Existing profiles keep their original paths.
+- Environment repair detects missing Fontconfig files in managed shell settings.
+- Use the latest complete test result for the same evidence. Changing inputs, benchmark reference values, or the recorded outputs invalidates earlier acceptance.
 
 ### Changed
 
 - Use app names such as `root`, `cepc`, `cbs` and `higgstools` for build recipes and profile switches. The old `-build` names still resolve. Existing JSON IDs are preserved and inventory entries include the short `app` name.
 - `build fetch <app>` defaults to an editable workspace at `./<app>`; `build run <app>` reuses it. Build help groups commands by purpose, plans summarize dependency order, and `build env` accepts an unambiguous installed app name.
+- The build recipe catalog now requires Jarvis-Forge 1.1.11 or newer. Upgrade the client before refreshing recipes.
 
 ## 1.1.10 — 2026-11-17
 

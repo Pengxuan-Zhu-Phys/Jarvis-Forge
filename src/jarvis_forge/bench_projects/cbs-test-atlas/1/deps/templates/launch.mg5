@@ -1,0 +1,31 @@
+launch PROC -n run_01
+shower=Pythia8
+done
+set nevents ${settings.events}
+set iseed ${seed}
+set ebeam1 6500
+set ebeam2 6500
+set pdlabel lhapdf
+set lhaid 247000
+set maxjetflavor 4
+set asrwgtflavor 4
+set use_syst False
+set ickkw 0
+set ptj 10
+set ptb 0
+set etaj 6
+set etab -1
+set drjj 0
+set drbb 0
+set drbj 0
+set cut_decays False
+set bwcutoff 15
+set param_card mass 6000007 1200
+set param_card decay 6000007 45.36440388
+set param_card kblw 3 0.2063320632
+set param_card kblz 3 0.2000145685
+set param_card kblh 3 0.9854285362
+set pythia8_card Tune:pp 21
+set pythia8_card 25:mayDecay on
+set pythia8_card HEPMCoutput:file hepmc.gz
+done

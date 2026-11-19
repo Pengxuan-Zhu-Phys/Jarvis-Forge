@@ -1,0 +1,6 @@
+import model ./VLQ_v4_4FNS_UFO-3rdL
+define p = g u c d s u~ c~ d~ s~
+define j = u c d s u~ c~ d~ s~
+generate p p > bp b~ j / a h w+ w- QCD=1 QED=2 VLQ=1, bp > b h
+add process p p > bp~ b j / a h w+ w- QCD=1 QED=2 VLQ=1, bp~ > b~ h
+output PROC

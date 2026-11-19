@@ -307,6 +307,7 @@ from .build_cli import app as build_app
 from .testing_cli import app as testing_app
 from .bench_cli import app as bench_app
 from .playlist_cli import app as playlist_app
+from .dashboard_cli import app as dashboard_app
 
 # Leaf commands are merged from unnamed groups so the help panels follow
 # this registration order. Named groups are emitted before root commands.
@@ -325,6 +326,7 @@ app.add_typer(testing_app, name="test", rich_help_panel="Acceptance")
 app.add_typer(bench_app, name="bench", rich_help_panel="Acceptance")
 app.add_typer(suite_app, name="suite", rich_help_panel="Acceptance")
 app.add_typer(playlist_app, name="playlist", rich_help_panel="Acceptance")
+app.add_typer(dashboard_app, name="dashboard", rich_help_panel="Acceptance")
 app.add_typer(runs_app)
 app.add_typer(setup_app)
 

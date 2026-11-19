@@ -827,12 +827,21 @@ def test_summary(console, report):
 
 
 def test_status(console, values):
+    import shlex
+
+    if values.get("status") == "interrupted":
+        line(console, "Acceptance interrupted.", style="yellow")
+        return
     for card in values["cards"]:
         title = card["suite_id"] + (f" (catalog card {card['project_id']})" if card.get("project_id") else "")
-        if card["accepted"]:
-            line(console, f"{title}: accepted by {card['acceptance_id']}", style="green")
-        else:
-            line(console, f"{title}: not accepted. {card['reason']}", style="red")
+        verdict = card["status"].replace("_", " ")
+        line(console, f"{title} · {verdict}", style="green" if card["accepted"] else "yellow")
+        for reason in card["reasons"]:
+            line(console, f"  {reason}")
+        if card.get("acceptance_id"):
+            line(console, f"  Report  {card['acceptance_id']}", style="dim")
+        if card["next_argv"]:
+            line(console, f"  Next    {shlex.join(card['next_argv'])}", style="dim")
 
 
 def test_history(console, values):
@@ -876,6 +885,34 @@ def playlist(console, command, values):
                 line(console, f"  {case['id']}  {case['kind']}{detail}")
         else:
             line(console, "Inventory updated." if command == "playlist sync" else "Library verified.")
+    elif command == "playlist list":
+        for item in values["playlists"]:
+            kind = "saved" if item["stored"] else "profile"
+            detail = item.get("problem") or f"{len(item['members'])} cases"
+            line(console, f"{item['id']}  {kind} · {detail}")
+        if not values["playlists"]:
+            line(console, "No playlists.")
+    elif "playlist" in values:
+        item = values["playlist"]
+        line(console, item["title"], style="bold")
+        line(console, item["id"])
+        if item.get("problem"):
+            line(console, item["problem"])
+        for case in item["members"]:
+            line(console, f"  {case}")
+    elif "jobs" in values:
+        for job in values["jobs"]:
+            line(console, f"{job['id']}  {job['status']}  {job['label']}")
+        if not values["jobs"]:
+            line(console, "No playlist jobs.")
+    elif "job" in values:
+        job = values["job"]
+        line(console, f"{job['label']} · {job['status']}", style="bold")
+        line(console, job["id"])
+        for row in job["cases"]:
+            line(console, f"  {row['id']}  {row['status']}")
+            if row.get("reason"):
+                line(console, f"    {row['reason']}")
     else:
         action = "Created" if command == "playlist init" else "Selected"
         line(console, f"{action} playlist library {library}")
@@ -927,7 +964,7 @@ def render(console, command, values):
     if command == "test summarize":
         test_summary(console, values)
         return
-    if command == "test status":
+    if command in {"test status", "test accept"}:
         test_status(console, values)
         return
     if command == "test history":
