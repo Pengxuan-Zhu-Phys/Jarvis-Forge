@@ -1,7 +1,6 @@
 # Changelog
 
-## Unreleased
-
+## 1.1.12 — 2026-11-20
 ### Added
 
 - Create and select versioned compiler environments with `apt profile check`, `apt profile build`, and `apt profile global`. Built-in Ubuntu LTS and macOS presets provision native tools through Spack or Homebrew and validate the Python selected by pyenv.
