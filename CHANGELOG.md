@@ -1,7 +1,6 @@
 # Changelog
 
-## Unreleased
-
+## 1.1.17 — 2026-11-21
 ### Fixed
 
 - Recognize package completion events mixed into concurrent build output, including events joined to configure prompts. Completed packages now leave the in-flight count promptly.
