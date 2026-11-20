@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.16 — 2026-11-20
 ### Added
 
 - `jforge dashboard config` stores the library path and port in the selected Forge home's `dashboard/config.json`, so `start` works from any directory. Explicit start options override saved values for one invocation. `jforge dashboard restart` validates saved settings before restarting the service. All dashboard commands support JSON output.
