@@ -6,6 +6,19 @@ Forge runs local command suites, test cards, and benchmark cards, and preserves 
 
 The root commands are `apt`, `env`, `build`, `test`, `bench`, `suite`, `playlist`, `dashboard`, `history`, `show`, `logs`, `init`, and `doctor`. Use `playlist` to organize and run cases across projects and `dashboard start` to open the local UI. See the [playlist library guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/PLAYLIST.md).
 
+Configure the local dashboard once, then manage it from any directory:
+
+```bash
+jforge dashboard config --library /absolute/path/to/library --port 8787
+jforge dashboard start
+jforge dashboard status
+jforge dashboard restart
+jforge dashboard stop
+```
+
+`jforge dashboard config` shows the settings stored in `<Forge home>/dashboard/config.json`. Open the session link printed by `start` or `status`. The dashboard uses the same Forge home selection as other commands.
+
+
 ## Install
 
 Python 3.10 or newer and a POSIX system with Bash are required for execution. Use WSL on Windows. Forge does not depend on Jarvis-HEP.
@@ -17,6 +30,10 @@ jforge apt profile
 ```
 
 The pyenv setup script runs `jforge init` automatically. Initialization selects `spack-default` on Linux and `homebrew-mac` on macOS, and preserves a profile already selected on this system. Spack is prepared on first use. On macOS, Forge registers an existing Homebrew. If Homebrew is absent, the profile stays pending until it is available.
+
+Run `tools/jforge-pyenv-setup.sh` from a dedicated installation directory. It installs its own pyenv, Python versions, JForge launcher and caches there, initializes Forge data in `./jforge`, and creates `./activate.sh` using absolute paths. Source that script from your shared startup file. Startup-file changes require `--shell-config`; the default prints the activation command. Repeat the setup from the same directory to reuse its installed Python, and add `--upgrade` to upgrade JForge.
+
+On Linux, the setup script checks ncurses (including panels), Readline and SQLite development libraries before building Python. Missing libraries are built from checksum-pinned sources in `./python-deps/`, with runtime search paths embedded in the linked binaries. Readline links its terminal library explicitly. Each locally built shared library must load independently with immediate symbol resolution, without `LD_LIBRARY_PATH` or `LD_PRELOAD`; damaged libraries are rebuilt on retry. This needs a host C compiler and GNU Make, uses no sudo, and leaves shell startup files unchanged by default. Dependency build logs are saved in `./jforge-bootstrap/logs/`. Python validation includes `curses`, `curses.panel`, `readline` and `sqlite3`; rerunning the script rebuilds an incomplete interpreter with pyenv.
 
 The distribution name is `Jarvis-Forge`. For development from a checkout:
 
@@ -69,6 +86,8 @@ To register the hook for future shells, run `jforge env repair --hook` or use th
 The hook loads the selected environment at startup and refreshes it after successful package changes. It uses the selected Forge home, including an explicit `--home`. Source switching removes previous managed package paths and restores exported values while preserving user PATH additions. The hook is intended for interactive use.
 
 The shell entry for each environment is a short, stable script next to its metadata file. The package environment is `<home>/env/apt/activate.sh`, described by `<home>/env/apt/env.json`. `jforge apt env --path` prints that script. Its text sources the current package revision, so the command above keeps working after later installs. A successful `root` adds that build's activation script to this same file. A ready root already on disk is added the next time the entry is published. A failed build leaves the entry unchanged. `source "$(jforge apt env --path)"` in a shell startup file loads that entry in each new shell. It does not install the `jforge` command wrapper, so later package commands in that shell do not refresh it and a finished build does not activate itself. Use the hook above when you want both.
+
+Successful package changes publish the stable entry even without a shell hook, and show that path with `source "$(jforge apt env --path)"`. Unified profiles keep the entry inside their own profile directory. Transaction JSON retains the backend revision in `activation` and adds the stable path as `environment_activation`, with the copyable `source_command`. Historical revision paths remain in metadata and operation records.
 
 `jforge env switch <name>` selects `apt` or a named environment for new shells. With the Forge hook loaded, the current shell loads it when the command returns. Without the hook, the current shell stays unchanged. `jforge env detach` clears that selection. The environment files remain. `jforge env current` shows the selection. `jforge env drop root` removes that build from the apt environment and leaves the installation on disk; the next successful `root` adds it again. `jforge env list` shows shell environments and package profiles separately: switch an environment with `env switch`, and select a package profile with `apt profile`. `jforge env metadata [name]` prints the metadata file for that environment. With no name, it prints the selected environment.
 
@@ -245,6 +264,8 @@ jforge apt profile apps rivet --on
 ```
 
 Built-in Linux profiles prepare GCC, G++, GFortran, CMake, GNU Make, Autoconf and Automake with Spack. The `macos` profile uses Apple Clang and Homebrew tools. Select your Python with pyenv before building or activating a profile. The Forge shell hook loads the selected default and its build outputs. On Linux, each new Spack profile keeps its store, toolchain, metadata, and activation scripts inside its own instance directory. Apt checks the selected Python and CPU before operating, fails if a selected backend is damaged, and enforces the CPU target on the full package build graph. See the [unified profile design](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/PROFILE_DESIGN.md).
+
+Fixed tool suites may use their exact pinned versions even when Spack marks those versions deprecated. Forge records the permitted versions in toolchain metadata and each operation's `deprecation-policy.json`, applies the setting only to that operation's configuration, and rejects other deprecated source packages before installation, including after cache fallback. Bound profiles retain the same exact permissions. Ordinary package operations without a bound tool suite keep deprecated versions disabled. This does not change preset versions or require clearing a failed profile directory before retrying.
 
 `apt profile apps` lists installed build outputs in the selected profile, including libraries. Use an app name or an exact output ID with `--on` or `--off`. Turning an app off preserves its installation and selected version. Turn it back on by name, or select a different version by exact output ID. If another enabled app needs that output, turn the dependent app off first. The shell hook refreshes the currently loaded profile if it is the one you changed; a named or detached shell stays as it is. `cbs` prepares its required ROOT build and temporarily leaves Rivet out of the build environment.
 

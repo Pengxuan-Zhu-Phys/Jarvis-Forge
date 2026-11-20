@@ -306,6 +306,90 @@ def test_transaction_dependency_snapshot_and_cache_policy(managed):
     assert read_json(home.root / "apt/state.json")["spack"]["roots"] == ["fixture-app"]
 
 
+@pytest.mark.parametrize("cache", ["only", "never", "auto"])
+def test_pinned_deprecated_versions_are_scoped_to_the_candidate(managed, monkeypatch, cache):
+    home, calls = managed
+    original = b.root(home) / "config/config.yaml"
+    tree = {"root": str(b.root(home) / "store"), "projections": {"all": "{name}"}}
+    original.write_text(yaml.safe_dump({"config": {"deprecated": False, "install_tree": tree}}))
+    run = b.run
+
+    def deprecated(home, args, op, label, **kwargs):
+        config = yaml.safe_load((kwargs["envdir"] / ".jforge-config/config.yaml").read_text())
+        assert config["config"]["deprecated"] is True
+        result = run(home, args, op, label, **kwargs)
+        if args[0] == "python" and "tree" not in args:
+            snapshot = json.loads(result)
+            for package in snapshot["packages"]:
+                package["deprecated"] = package["name"] == "fixture-app"
+            return json.dumps(snapshot)
+        return result
+
+    monkeypatch.setattr(b, "run", deprecated)
+    allowed = {"fixture-app": "1.0"}
+    result = b.transact(home, "install", ["fixture-app"], cache=cache, deprecated_versions=allowed)
+    assert result["state_committed"]
+    assert result["deprecated_versions"] == allowed
+    assert any(args[0] == "install" for args, _ in calls)
+    assert yaml.safe_load(original.read_text())["config"]["deprecated"] is False
+    assert read_json(Path(result["path"]) / "deprecation-policy.json")["deprecated_versions"] == allowed
+
+
+@pytest.mark.parametrize("name,version", [("fixture-lib", "1.0"), ("fixture-app", "0.9")])
+def test_preset_permission_rejects_other_deprecated_versions_before_install(managed, monkeypatch, name, version):
+    home, calls = managed
+    run = b.run
+
+    def deprecated(home, args, op, label, **kwargs):
+        result = run(home, args, op, label, **kwargs)
+        if label == "dag":
+            snapshot = json.loads(result)
+            for package in snapshot["packages"]:
+                if package["name"] == name:
+                    package.update(version=version, deprecated=True)
+            return json.dumps(snapshot)
+        return result
+
+    monkeypatch.setattr(b, "run", deprecated)
+    with pytest.raises(ForgeError, match=f"unapproved deprecated versions: {name}@{version}"):
+        b.transact(home, "install", ["fixture-app"], deprecated_versions={"fixture-app": "1.0"})
+    assert not any(args[0] == "install" for args, _ in calls)
+    assert not (home.root / "apt/state.json").exists()
+
+
+def test_regular_apt_does_not_inherit_a_global_deprecation_override(managed, monkeypatch):
+    home, _ = managed
+    tree = {"root": str(b.root(home) / "store"), "projections": {"all": "{name}"}}
+    (b.root(home) / "config/config.yaml").write_text(
+        yaml.safe_dump({"config": {"deprecated": True, "install_tree": tree}}))
+    result = b.transact(home, "check", ["fixture-app"])
+    candidate = Path(result["path"]) / "candidate-environment/.jforge-config/config.yaml"
+    assert yaml.safe_load(candidate.read_text())["config"]["deprecated"] is False
+    assert result["deprecated_versions"] == {}
+
+
+def test_bound_profile_inherits_only_its_tool_suite_permissions(managed, monkeypatch):
+    from jarvis_forge import toolchains
+
+    home, _ = managed
+    permission = {"fixture-app": "1.0"}
+    monkeypatch.setattr(toolchains, "binding", lambda home: {"deprecated_versions": permission})
+    monkeypatch.setattr(toolchains, "spack_requirements", lambda record, packages: None)
+    monkeypatch.setattr(toolchains, "validate_plan", lambda *args: None)
+    result = b.transact(home, "check", ["fixture-app"])
+    assert result["deprecated_versions"] == permission
+    candidate = Path(result["path"]) / "candidate-environment/.jforge-config/config.yaml"
+    assert yaml.safe_load(candidate.read_text())["config"]["deprecated"] is True
+
+
+@pytest.mark.parametrize("value", [{"gcc": "13:"}, {"gcc": "*"}, {"gcc": True}, ["gcc@13.3.0"]])
+def test_deprecated_permissions_require_exact_versions(managed, value):
+    home, calls = managed
+    with pytest.raises(ForgeError, match="exact package versions"):
+        b.transact(home, "install", ["fixture-app"], deprecated_versions=value)
+    assert not calls
+
+
 @pytest.mark.parametrize("shell", ["bash", "zsh"])
 def test_profile_fonts_follow_apt_activation(managed, monkeypatch, shell):
     home, _ = managed
@@ -834,7 +918,7 @@ def test_binary_remainder_failure_does_not_start_source_build(managed, monkeypat
     assert not (home.root / "apt/state.json").exists()
 
 
-@pytest.mark.parametrize("invalid_retry", [None, "occupied", "python", "target"])
+@pytest.mark.parametrize("invalid_retry", [None, "occupied", "python", "target", "deprecated"])
 def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatch, invalid_retry):
     home, calls = managed
     named_layout(home)
@@ -851,6 +935,7 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
         if label == "concretize":
             lock.write_text("binary lock")
         if label == "concretize-cache-retry":
+            assert yaml.safe_load((envdir / ".jforge-config/config.yaml").read_text())["config"]["deprecated"] is True
             assert lock.read_text() == "committed lock"
             assert args == ["concretize"]
             document = yaml.safe_load((envdir / "spack.yaml").read_text())["spack"]
@@ -860,6 +945,12 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
             ]
             lock.write_text("source lock")
         output = run(home, args, op, label, **kwargs)
+        if invalid_retry == "deprecated" and label == "dag-cache-retry":
+            dag = json.loads(output)
+            for package in dag["packages"]:
+                if package["name"] == "fixture-lib":
+                    package["deprecated"] = True
+            return json.dumps(dag)
         if invalid_retry == "target" and label in {"dag", "dag-cache-retry"}:
             dag = json.loads(output)
             for package in dag["packages"]:
@@ -896,12 +987,13 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
 
     monkeypatch.setattr(b, "run", stale_index)
     if invalid_retry:
-        with pytest.raises(ForgeError, match="already occupies|requires the external Python|requires target=x86_64"):
+        with pytest.raises(ForgeError, match="already occupies|requires the external Python|requires target=x86_64|unapproved deprecated versions"):
             b.transact(home, "install", ["fixture-app", "fixture-source"],
-                       target="x86_64" if invalid_retry == "target" else None)
+                       target="x86_64" if invalid_retry == "target" else None,
+                       deprecated_versions={"fixture-app": "1.0"})
         assert (home.root / "apt/state.json").read_bytes() == before
     else:
-        result = b.transact(home, "install", ["fixture-app", "fixture-source"])
+        result = b.transact(home, "install", ["fixture-app", "fixture-source"], deprecated_versions={"fixture-app": "1.0"})
         op = Path(result["path"])
         assert result["state_committed"]
         assert Path(result["lockfile"]).read_text() == "source lock"

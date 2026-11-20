@@ -114,7 +114,11 @@ def test_profile_inventory_selection_and_reversible_shell(setup_brew):
     assert cli("apt", "search", "eigen")["packages"][0]["selected"] is False
     assert cli("apt", "show", "eigen")["installed_instances"][0]["prefix"] == str(prefix / "Cellar/eigen/1.0")
     assert cli("apt", "prefix", "eigen", "--path", as_json=False).strip() == str(prefix / "Cellar/eigen/1.0")
-    assert cli("apt", "install", "libeigen3-dev")["packages"][0]["name"] == "eigen"
+    installed = cli("apt", "install", "libeigen3-dev")
+    assert installed["packages"][0]["name"] == "eigen"
+    assert installed["environment_activation"] == str(home.root.parents[2] / "env/apt/activate.sh")
+    assert Path(installed["environment_activation"]).is_file()
+    assert installed["activation"] in Path(installed["environment_activation"]).read_text()
     assert cli("apt", "list", "eigen")["packages"][0]["selected"] is True
     active = cli("apt", "env", "--path", as_json=False).strip()
     # The alternate profile shares the same physical installation.

@@ -946,6 +946,26 @@ def _validate_external_python(home, packages):
             )
 
 
+def _deprecated_permissions(value):
+    """Validate exact package/version permissions supplied by a fixed tool suite."""
+    if not isinstance(value, dict) or any(
+        not isinstance(name, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_.+-]*", name)
+        or not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", version)
+        for name, version in value.items()
+    ):
+        raise ForgeError("Deprecated-version permissions must name exact package versions.")
+    return dict(value)
+
+
+def _validate_deprecated_versions(packages, allowed):
+    unexpected = sorted({f"{row['name']}@{row['version']}" for row in packages
+                         if row.get("deprecated") and not row.get("external")
+                         and allowed.get(row["name"]) != row["version"]})
+    if unexpected:
+        raise ForgeError("Dependency plan includes unapproved deprecated versions: " + ", ".join(unexpected),
+                         code=1, hint="Only exact versions declared by this profile's tool suite are permitted.")
+
+
 def validate_project_python(home, packages, roots, executable):
     """Check the runtime closure of this build's requested package roots."""
     if executable is None:
@@ -1221,11 +1241,16 @@ def transact(
     project_python=None,
     build_stage=None,
     target=None,
+    deprecated_versions=None,
 ):
     from .package_operations import locked, operation
     from .toolchains import binding, validate_plan as validate_toolchain_plan
     from .unified_profiles import record as profile_record
     from .apt_profiles import validate_active
+
+    # A binding carries only the exact permissions of its native tool suite.
+    # This never changes the profile's persistent Spack configuration.
+    requested_permissions = _deprecated_permissions(deprecated_versions) if deprecated_versions is not None else None
 
     if not dry_run and profile_record(home):
         validate_active(home)
@@ -1254,11 +1279,15 @@ def transact(
         operation(
             home,
             "spack-" + action,
-            {"specs": list(specs), "roots": roots, "cache": cache, "jobs": jobs},
+            {"specs": list(specs), "roots": roots, "cache": cache, "jobs": jobs,
+             "deprecated_versions": requested_permissions},
         ) as (op, result),
     ):
         before = current(home)
         toolchain = binding(home)
+        allowed = (requested_permissions if requested_permissions is not None
+                   else _deprecated_permissions((toolchain or {}).get("deprecated_versions", {})))
+        result["deprecated_versions"] = allowed
         bound_target = toolchain.get("target") if toolchain else None
         if target and bound_target and target != bound_target:
             raise ForgeError(f"Requested CPU target {target} conflicts with profile target {bound_target}.")
@@ -1267,11 +1296,15 @@ def transact(
         result["roots"] = roots
         previous = before.get("environment") if action not in {"upgrade", "full-upgrade"} else None
         envdir = _candidate(home, op, roots, previous, reuse_buildcache=cache != "never", target=target)
+        config_file = envdir / ".jforge-config/config.yaml"
+        config = yaml.safe_load(config_file.read_text()) if config_file.is_file() else {}
+        config.setdefault("config", {})["deprecated"] = bool(allowed)
         if build_stage is not None:
-            config_file = envdir / ".jforge-config/config.yaml"
-            config = yaml.safe_load(config_file.read_text())
             config["config"]["build_stage"] = [str(build_stage)]
-            config_file.write_text(yaml.safe_dump(config, sort_keys=False))
+        config_file.write_text(yaml.safe_dump(config, sort_keys=False))
+        write_json(op / "deprecation-policy.json", {"deprecated_versions": allowed})
+        if allowed and progress:
+            progress("Use pinned tool-suite versions: " + ", ".join(f"{name}@{version}" for name, version in allowed.items()))
         # In a flat store, validate binary and source work separately. Historical
         # build dependencies of installed/binary packages need no local prefix.
         cache_first = (bool(roots) and action != "remove" and cache == "auto"
@@ -1289,6 +1322,7 @@ def transact(
                 timeout=timeout, progress=progress, patch_jobs=patch_jobs)
             dag = _snapshot(home, envdir, op, "dag" + suffix)
             write_json(op / "dag.json", dag)
+            _validate_deprecated_versions(dag["packages"], allowed)
             _validate_target(dag["packages"], target)
             run(home, ["python", str(Path(__file__).with_name("spack_bridge.py")), "tree"],
                 op, "dependency-tree" + suffix, envdir=envdir, timeout=timeout,
@@ -1299,6 +1333,7 @@ def transact(
         def validate_plan(plan, label, policy, flags, *, omit_cached_build_deps=False):
             nonlocal runtime_retried
             write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
+            _validate_deprecated_versions(plan["packages"], allowed)
             _validate_external_python(home, plan["packages"])
             if toolchain and roots:
                 validate_toolchain_plan(toolchain, read_json(op / "dag.json")["packages"])
@@ -1318,6 +1353,7 @@ def transact(
                 plan = resolve_plan(policy, flags, suffix="-runtime-retry",
                                     omit_cached_build_deps=omit_cached_build_deps)
                 write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
+                _validate_deprecated_versions(plan["packages"], allowed)
                 _validate_external_python(home, plan["packages"])
                 if toolchain:
                     validate_toolchain_plan(toolchain, read_json(op / "dag.json")["packages"])
@@ -1450,6 +1486,7 @@ def transact(
                                 run(home, _install_args(jobs, "auto", source_hashes), op,
                                     "install", envdir=envdir, timeout=timeout, progress=progress)
             final = _snapshot(home, envdir, op, "installed") if roots else plan
+            _validate_deprecated_versions(final["packages"], allowed)
             _validate_target(final["packages"], target)
             missing = [
                 p["name"]

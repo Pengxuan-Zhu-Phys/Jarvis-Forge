@@ -64,6 +64,25 @@ def _confirm(ctx, yes, message):
         raise ForgeError("Removal cancelled.")
 
 
+def _source_command(ctx):
+    argv = ["jforge"]
+    if (home := ctx.find_root().params.get("home")) is not None:
+        argv.extend(["--home", home])
+    return 'source "$(' + shlex.join([*argv, "apt", "env", "--path"]) + ')"'
+
+
+def _transaction_activation(ctx, result):
+    if not result.get("state_committed") or not result.get("activation") or result.get("dry_run"):
+        return result
+    from .env_entries import publish_apt
+
+    backend = environment_path(ctx.obj.home)
+    entry = publish_apt(ctx.obj.user_home or ctx.obj.home, ctx.obj.home, backend)
+    # Preserve the backend's immutable revision path in JSON and operation evidence.
+    return {**result, "environment_activation": entry["activation"],
+            "source_command": _source_command(ctx)}
+
+
 def _transact(
     ctx,
     action,
@@ -81,9 +100,10 @@ def _transact(
             homebrew_backend.transact(ctx.obj.home, action, packages, jobs=jobs, timeout=timeout,
                                       cache=cache, dry_run=True)
             _ready(ctx)
-        _emit(ctx, command or action, **homebrew_backend.transact(
+        result = homebrew_backend.transact(
             ctx.obj.home, action, packages, jobs=jobs, timeout=timeout, cache=cache,
-            dry_run=dry_run, progress=_progress(ctx)))
+            dry_run=dry_run, progress=_progress(ctx))
+        _emit(ctx, command or action, **_transaction_activation(ctx, result))
         return
     preview = backend.transact(
         ctx.obj.home,
@@ -107,7 +127,7 @@ def _transact(
             progress=_progress(ctx),
         )
     )
-    _emit(ctx, command or action, **result)
+    _emit(ctx, command or action, **_transaction_activation(ctx, result))
 
 
 @app.callback()
@@ -678,7 +698,7 @@ def env(
             "env",
             activation=activation,
             backend_activation=str(backend),
-            source_command="source " + shlex.quote(activation),
+            source_command=_source_command(ctx),
         )
 
 

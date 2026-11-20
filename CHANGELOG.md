@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+### Added
+
+- `jforge dashboard config` stores the library path and port in the selected Forge home's `dashboard/config.json`, so `start` works from any directory. Explicit start options override saved values for one invocation. `jforge dashboard restart` validates saved settings before restarting the service. All dashboard commands support JSON output.
+
+### Changed
+
+- The pyenv setup script installs into the directory where it is run and creates a top-level `activate.sh`. It reuses Python versions in that installation, stores Forge data and caches alongside them, and offers `--shell-config` to register the activation script in Bash or Zsh startup files.
+- On Linux, the standalone pyenv setup checks and locally builds missing ncurses/panel, Readline and SQLite development libraries before building Python. It pins source checksums, embeds runtime library paths, validates the corresponding Python modules, and rebuilds an incomplete interpreter when retried.
+
+### Fixed
+
+- Build fixed Ubuntu tool suites when Spack marks a pinned version deprecated. Permit only the suite's exact versions inside each operation's configuration, preserve that permission for bound profiles, and reject any other deprecated source package across the full DAG, cache fallback and final publication. Original profile versions and persistent Spack settings remain intact.
+- Package-change summaries publish and display the stable environment activation entry and a short source command instead of the backend revision script. Transaction JSON retains `activation` for the backend revision and adds `environment_activation` and `source_command`. Plain `apt env` output keeps backend paths in JSON metadata.
+- Link the bootstrapped Readline shared library to its terminal library so CPython can import its extension during installation. Check local shared libraries with immediate dynamic symbol resolution before building Python and when reusing dependencies, without preloaded libraries or shell library paths concealing failures.
+
 ## 1.1.15 — 2026-11-20
 ### Added
 

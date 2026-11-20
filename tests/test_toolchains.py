@@ -30,6 +30,7 @@ def test_install_bind_and_apply_toolchain(tmp_path, monkeypatch, linux_apt):
         path.write_text("#!/bin/sh\necho 14.3.0\n")
         path.chmod(0o700)
     calls = []
+    policies = []
 
     def switch(base, *, name, select, extensions, toolchain_store, progress):
         assert base == home and not select and not extensions and toolchain_store
@@ -37,6 +38,7 @@ def test_install_bind_and_apply_toolchain(tmp_path, monkeypatch, linux_apt):
 
     def install(profile, action, specs, **kwargs):
         calls.append(specs)
+        policies.append(kwargs["deprecated_versions"])
         return {"packages": [{"name": "gcc", "version": "14.3.0", "prefix": str(prefix),
                               "root": True, "external": False}], "path": str(profile.root)}
 
@@ -47,14 +49,17 @@ def test_install_bind_and_apply_toolchain(tmp_path, monkeypatch, linux_apt):
     runtime.parent.mkdir()
     runtime.touch()
     monkeypatch.setattr(toolchains, "_inspect", lambda record: ({}, {runtime.name: runtime}))
-    assert toolchains.install(home, "gcc@14.3.0", target="x86_64_v3")["status"] == "installed"
+    permission = {"gcc": "14.3.0"}
+    assert toolchains.install(home, "gcc@14.3.0", target="x86_64_v3", deprecated_versions=permission)["status"] == "installed"
     name = "gcc-14.3.0-x86_64_v3"
     assert toolchains.install(home, "gcc@14.3.0", target="x86_64_v3")["status"] == "reused"
     assert calls == [["gcc@=14.3.0 languages=c,c++,fortran target=x86_64_v3"]]
+    assert policies == [permission]
     assert pointer.read_bytes() == selection
 
     toolchains.use(home, name)
     record = toolchains.binding(ForgeHome(project))
+    assert record["deprecated_versions"] == permission
     packages = {"python": {"buildable": False}}
     toolchains.spack_requirements(record, packages)
     assert packages["gcc"]["externals"][0]["prefix"] == str(prefix)

@@ -242,3 +242,88 @@ def test_failed_check_retains_real_failure_and_output(sample):
     assert result["status"] == "failed"
     assert result["cases"][-1]["status"] == "failed"
     assert "real failure output" in jobs.tail(home, selected, state["id"], "demo/checks/echo")
+
+
+def test_dashboard_config_read_does_not_initialize_home(tmp_path, capsys):
+    from jarvis_forge.cli import main
+    import json
+    home = tmp_path / "uninitialized"
+    assert main(["--home", str(home), "dashboard", "config", "--json"]) == 0
+    value = json.loads(capsys.readouterr().out)
+    assert value["port"] == 8787 and value["library_path"] is None
+    assert not home.exists()
+
+
+def test_dashboard_config_cli_persists_absolute_paths_and_controls_service(sample, monkeypatch, capsys):
+    from jarvis_forge.cli import main
+    from jarvis_forge.dashboard import config, server
+    import json
+    home, directory, _ = sample
+    monkeypatch.chdir(directory.parent)
+    args = ["--home", str(home.root), "dashboard"]
+    assert main([*args, "config", "--library", "library", "--port", "9876", "--json"]) == 0
+    saved = json.loads(capsys.readouterr().out)
+    assert saved["command"] == "dashboard config" and saved["library_path"] == str(directory)
+    assert read_json(config.path(home)) == {"schema_version": 1, "library_path": str(directory), "port": 9876}
+    monkeypatch.chdir(home.root)
+    calls = []
+    record = {"pid": 123, "port": 9876, "library_path": str(directory), "url": "http://127.0.0.1:9876/?token=test"}
+    def start(selected_home, selected_library, port, **options):
+        calls.append(("start", selected_home.root, selected_library, port))
+        return record
+    def stop(selected_home):
+        calls.append(("stop", selected_home.root))
+        return {"stopped": True}
+    monkeypatch.setattr(server, "start", start)
+    monkeypatch.setattr(server, "stop", stop)
+    monkeypatch.setattr(server, "status", lambda selected_home: record)
+    for operation in ("start", "status", "restart", "stop"):
+        assert main([*args, operation, "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["command"] == f"dashboard {operation}"
+    assert calls == [("start", home.root, directory, 9876), ("stop", home.root),
+                     ("start", home.root, directory, 9876), ("stop", home.root)]
+    assert main([*args, "start", "--port", "0", "--json"]) == 0
+    capsys.readouterr()
+    assert calls[-1][-1] == 0 and config.load(home)["port"] == 9876
+
+
+def test_dashboard_settings_fall_back_to_playlist_selection(sample):
+    from jarvis_forge.dashboard import config
+    home, directory, _ = sample
+    library.use(home, directory)
+    assert config.resolve(home) == (directory, 8787)
+    assert not config.path(home).exists()
+
+
+@pytest.mark.parametrize("bad", [{"schema_version": True, "library_path": None, "port": 8787},
+                                 {"schema_version": 1, "library_path": "relative", "port": 8787},
+                                 {"schema_version": 1, "library_path": None, "port": True},
+                                 {"schema_version": 1, "library_path": None, "port": 65536}])
+def test_dashboard_rejects_bad_saved_configuration(sample, bad):
+    from jarvis_forge.dashboard import config
+    from jarvis_forge.storage import write_json
+    home, _, _ = sample
+    write_json(config.path(home), bad)
+    with pytest.raises(ForgeError):
+        config.load(home)
+
+
+def test_dashboard_restart_checks_library_before_stopping(sample, monkeypatch, capsys):
+    from jarvis_forge.cli import main
+    from jarvis_forge.dashboard import config, server
+    from jarvis_forge.storage import write_json
+    import json
+    home, directory, _ = sample
+    write_json(config.path(home), {"schema_version": 1, "library_path": str(directory / "missing"), "port": 8787})
+    monkeypatch.setattr(server, "stop", lambda home: pytest.fail("A valid service must not be stopped"))
+    assert main(["--home", str(home.root), "dashboard", "restart", "--json"]) == 2
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+@pytest.mark.parametrize("operation", ["config", "start", "status", "stop", "restart"])
+def test_dashboard_cli_help(operation, capsys):
+    from jarvis_forge.cli import main
+    assert main(["dashboard", operation, "-h"]) == 0
+    output = capsys.readouterr().out
+    assert f"Usage: jforge dashboard {operation}" in output
+    assert "Show this message and exit." in output and "\x1b[" not in output

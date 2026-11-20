@@ -24,3 +24,4 @@ prune recipes
 include tools/build_recipe_assets.py
 prune builds
 include tools/build_project_assets.py
+include tools/jforge-pyenv-setup.sh

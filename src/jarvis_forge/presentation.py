@@ -199,7 +199,11 @@ def apt_transaction(console, command, values):
             line(console, "Plan only; no packages built or activated.", style="dim")
         else:
             line(console, "Preview only." if preview else "Installed packages: jforge apt list", style="dim")
-    for key in ("note", "activation", "plan", "path"):
+    if values.get("activation"):
+        field(console, "activation", values.get("environment_activation", values["activation"]))
+    if values.get("source_command"):
+        field(console, "activate", values["source_command"])
+    for key in ("note", "plan", "path"):
         if values.get(key):
             field(console, "logs" if key == "path" else key, values[key])
     if values.get("store_retained"):
@@ -1045,6 +1049,11 @@ def render(console, command, values):
                 field(console, key, values[key])
         if "path" in values:
             field(console, "logs", values["path"])
+        return
+    if command == "apt env":
+        for key, label in (("activation", "activation"), ("source_command", "activate")):
+            if values.get(key):
+                field(console, label, values[key])
         return
     for key, value in values.items():
         field(console, key, value, compact=command in COMPACT_COMMANDS)

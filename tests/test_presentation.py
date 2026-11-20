@@ -135,6 +135,17 @@ def test_check_shows_complete_plan_including_uninstalled_dependencies():
     assert "list --installed" not in output
 
 
+def test_transaction_prefers_stable_activation_and_prints_the_short_command():
+    backend = "/forge/environments/apt/revisions/apt-long-operation-id/activate.sh"
+    short = "/forge/env/apt/activate.sh"
+    command = 'source "$(jforge apt env --path)"'
+    output = displayed("apt install", {"status": "passed", "activation": backend,
+                       "environment_activation": short, "source_command": command}, width=24)
+    assert short + "\n" in output
+    assert command + "\n" in output
+    assert backend not in output
+
+
 def test_public_list_json_and_show_keep_full_metadata(tmp_path, monkeypatch, capsys, linux_apt):
     package = installed("eigen", version="5.0.1")
     monkeypatch.setattr(spack_backend, "current", lambda home: dict(packages=[package]))

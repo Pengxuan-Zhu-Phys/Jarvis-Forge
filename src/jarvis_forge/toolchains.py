@@ -121,7 +121,7 @@ def _root_package(result, name, version):
 
 
 def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache="never", progress=None,
-            instance=None, tools=None):
+            instance=None, tools=None, deprecated_versions=None):
     from . import apt_profiles, spack_backend
     from .builds import file_lock
 
@@ -132,6 +132,10 @@ def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache
     if cache not in {"auto", "only", "never"}:
         raise ForgeError("Build cache mode must be auto, only or never.")
     version = match[1]
+    allowed = spack_backend._deprecated_permissions(deprecated_versions or {})
+    suite_versions = {"gcc": version, **(tools or {})}
+    if any(suite_versions.get(name) != value for name, value in allowed.items()):
+        raise ForgeError("Deprecated-version permissions must match this tool suite's exact versions.")
     if target is not None:
         identifier(target)
     if stage is not None:
@@ -148,6 +152,9 @@ def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache
             if instance and (record["version"] != version or record["target"] != target
                     or {key: tool["version"] for key, tool in record.get("tools", {}).items()} != (tools or {})):
                 raise ForgeError(f"Toolchain definition changed for {instance}; use a new preset revision.")
+            if allowed and record.get("deprecated_versions") != allowed:
+                record["deprecated_versions"] = allowed
+                write_json(manifest, record)
             return {**record, "status": "reused"}
         if cache != "only":
             missing = [program for program in ("make", "tar", "xz") if not shutil.which(program)]
@@ -162,7 +169,8 @@ def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache
         tool_specs = [f"{name}@={value}" + (f" target={target}" if target else "")
                       for name, value in (tools or {}).items()]
         result = spack_backend.transact(ForgeHome(profile), "install", [request, *tool_specs], jobs=jobs, timeout=timeout,
-                                        cache=cache, progress=progress, build_stage=stage, target=target)
+                                        cache=cache, progress=progress, build_stage=stage, target=target,
+                                        deprecated_versions=allowed)
         gcc = _root_package(result, "gcc", version)
         if gcc["external"] and not instance:
             raise ForgeError("Spack did not install the requested user-local GCC.", code=1,
@@ -171,6 +179,8 @@ def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache
         drivers = {variable: str(prefix / "bin" / binary) for variable, binary in DRIVERS.items()}
         record = {"schema_version": 1, "id": name, "version": version, "target": target, "prefix": str(prefix),
                   "profile": str(profile), "drivers": drivers, "path": result["path"]}
+        if allowed:
+            record["deprecated_versions"] = allowed
         if gcc["external"]:
             selected = gcc.get("node", {}).get("external", {}).get("extra_attributes", {}).get("compilers", {})
             drivers.update({variable: str(Path(selected[key]).absolute())

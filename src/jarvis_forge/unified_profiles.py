@@ -384,7 +384,8 @@ def build(base, name, *, target=None, stage=None, jobs=1, timeout=14400, cache=N
             data["layout"] = 2
             suite = toolchains.install(profile, "gcc@" + versions["gcc"], target=target, stage=stage,
                                        jobs=jobs, timeout=timeout, cache=cache or "never", progress=progress,
-                                       instance="bootstrap", tools={k: v for k, v in versions.items() if k != "gcc"})
+                                       instance="bootstrap", tools={k: v for k, v in versions.items() if k != "gcc"},
+                                       deprecated_versions=versions)
             toolchains.check(profile, "bootstrap")
             toolchains.check_tools(suite)
             apt_profiles.switch(base, name=instance.removeprefix("spack-"), select=False, progress=progress)

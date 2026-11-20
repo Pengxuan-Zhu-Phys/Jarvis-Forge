@@ -118,6 +118,7 @@ def test_profile_build_reuses_apt_and_default_is_host_scoped(fake_spack, monkeyp
                         "cmake@=3.28.6 target=x86_64", "gmake@=4.3 target=x86_64",
                         "autoconf@=2.71 target=x86_64", "automake@=1.16.5 target=x86_64"]
     assert built["status"] == "built" and unified_profiles.selection(forge) is None
+    assert built["toolchain"]["deprecated_versions"] == unified_profiles.presets()["ubuntu-24.04"]["versions"]
     profile = ForgeHome(Path(built["activation"]).parents[2])
     view = profile.root / "env/bin"
     assert {p.name for p in view.iterdir()} >= {"gcc", "g++", "gfortran", "cc", "c++", "cmake", "make", "automake"}
@@ -132,6 +133,26 @@ def test_profile_build_reuses_apt_and_default_is_host_scoped(fake_spack, monkeyp
     assert apt_profiles.active_home(forge) != profile
     assert main([*args, "global", "ubuntu-24.04", "--json"]) == 2
     assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+def test_install_summary_keeps_activation_in_the_selected_profile(fake_spack, monkeypatch, capsys):
+    forge, _ = fake_spack
+    built = unified_profiles.build(forge, "ubuntu-24.04")
+    unified_profiles.set_default(forge, built["id"])
+    profile = apt_profiles.active_home(forge)
+    backend = profile.root / "apt/activate.sh"
+
+    def transact(home, action, specs, *, dry_run=False, **kwargs):
+        assert home == profile
+        return {"dry_run": dry_run, "state_committed": not dry_run,
+                "activation": str(backend), "packages": [], "status": "passed"}
+
+    monkeypatch.setattr(spack_backend, "transact", transact)
+    assert main(["--home", str(forge.root), "apt", "install", "tree", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["environment_activation"] == str(profile.root / "env/apt/activate.sh")
+    assert result["activation"] == str(backend)
+    assert not (forge.root / "env/apt/activate.sh").exists()
 
 
 def test_apt_requires_healthy_selected_profile_before_operations(fake_spack, monkeypatch, capsys, tmp_path):

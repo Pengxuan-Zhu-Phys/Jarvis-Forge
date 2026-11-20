@@ -139,6 +139,7 @@ def snapshot(runtime_only=False, policy=None, overwrite=(), omit_cached_build_de
             {
                 "name": spec.name,
                 "version": str(spec.version),
+                "deprecated": bool(spec.package.versions.get(spec.version, {}).get("deprecated", False)),
                 "hash": spec.dag_hash(),
                 "prefix": str(spec.prefix),
                 "external": bool(spec.external),

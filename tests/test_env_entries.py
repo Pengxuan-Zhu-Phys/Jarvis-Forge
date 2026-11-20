@@ -51,6 +51,59 @@ def test_apt_entry_is_short_and_tracks_the_revision(home, linux_apt, capsys):
     assert str(first) not in short.read_text()
 
 
+@pytest.mark.parametrize("command", ["install", "reinstall", "upgrade", "full-upgrade", "satisfy", "remove"])
+def test_package_changes_publish_the_stable_entry_without_a_shell_hook(home, linux_apt, monkeypatch, capsys, command):
+    from jarvis_forge import apt_cli, spack_backend
+
+    profile = active_home(home)
+    profile.initialize()
+    revisions = []
+
+    def transact(target, action, specs, *, dry_run=False, **kwargs):
+        if dry_run:
+            return {"dry_run": True, "roots": list(specs)}
+        backend = write_backend(target, f"op-{len(revisions) + 1}")
+        revisions.append(backend)
+        return {"status": "passed", "state_committed": True, "activation": str(backend),
+                "packages": [], "roots": list(specs)}
+
+    monkeypatch.setattr(spack_backend, "transact", transact)
+    monkeypatch.setattr(apt_cli, "ensure_active", lambda *args, **kwargs: profile)
+    args = [] if command == "full-upgrade" else ["fixture"]
+    if command == "remove":
+        args.append("--yes")
+    common = ["--home", str(home.root), "apt", command, *args]
+    short = home.root / "env/apt/activate.sh"
+    assert main(common) == 0
+    output = capsys.readouterr().out
+    assert str(short) in output
+    assert str(revisions[0]) not in output
+    assert "apt env --path" in output and 'source "$(' in output
+    assert short.is_file() and str(revisions[0]) in short.read_text()
+
+    assert main([*common, "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["activation"] == str(revisions[1])
+    assert result["environment_activation"] == str(short)
+    assert f"--home {home.root}" in result["source_command"]
+    assert str(revisions[1]) in short.read_text()
+    assert str(revisions[0]) not in short.read_text()
+    assert revisions[0].is_file()
+
+
+def test_apt_env_text_hides_the_backend_revision(home, linux_apt, capsys):
+    profile = active_home(home)
+    profile.initialize()
+    backend = write_backend(profile, "op-long-revision")
+    assert main(["--home", str(home.root), "apt", "env"]) == 0
+    output = capsys.readouterr().out
+    assert str(home.root / "env/apt/activate.sh") in output
+    assert str(backend) not in output
+    assert "apt env --path" in output
+    assert main(["--home", str(home.root), "apt", "env", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["backend_activation"] == str(backend)
+
+
 def test_entry_can_be_sourced_twice_and_then_restored(home):
     backend = write_backend(home, text="export PATH=/pkg:${PATH:-}\nexport FIXTURE_PKG=1\n")
     root = home.root / "root-activate.sh"

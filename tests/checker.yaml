@@ -134,6 +134,7 @@ groups:
   - tests/test_env_registry.py
   - tests/test_env_entries.py
   - tests/test_shell_repair.py
+  - tests/test_pyenv_setup.py
   inputs:
   - src/jarvis_forge/environment*.py
   - src/jarvis_forge/shell_activation.py
@@ -149,6 +150,8 @@ groups:
   - src/jarvis_forge/env_entries.py
   - src/jarvis_forge/env_cli.py
   - src/jarvis_forge/managed_envs.py
+  - tools/jforge-pyenv-setup.sh
+  - tests/test_pyenv_setup.py
   skip_allow: []
 - id: acceptance-history
   match:
