@@ -266,7 +266,7 @@ def command(home, args, envdir=None):
     return result + list(args)
 
 
-def run(home, args, op, label, *, envdir=None, timeout=3600, progress=None):
+def run(home, args, op, label, *, envdir=None, timeout=3600, progress=None, patch_jobs=None):
     """Reuse Forge's streamed, separately archived stdout/stderr command runner."""
     from .package_operations import run_command
 
@@ -281,6 +281,15 @@ def run(home, args, op, label, *, envdir=None, timeout=3600, progress=None):
         "SPACK_GNUPGHOME",
         "PYTHONDONTWRITEBYTECODE",
     ]
+    if args[0] == "install" and args[args.index("--use-buildcache") + 1] != "only":
+        patch_jobs = args[args.index("-j") + 1]
+    if sys.platform == "linux" and patch_jobs is not None:
+        from .bootstrap_patch import bin_dir
+
+        if patch_dir := bin_dir(home, op, env, jobs=patch_jobs, timeout=timeout, progress=progress):
+            env["PATH"] = str(patch_dir) + os.pathsep + env.get("PATH", os.defpath)
+            keys.append("PATH")
+            script = op / "spack-source-context.sh"
     script.write_text(
         "unset SPACK_ENV SPACK_ENV_VIEW SPACK_ROOT SPACK_DISABLE_LOCAL_CONFIG\n"
         + "\n".join("export " + k + "=" + shlex.quote(env[k]) for k in keys)
@@ -1272,9 +1281,12 @@ def transact(
         committed = False
         runtime_retried = False
 
+        # A fresh solver may itself have to build clingo-bootstrap from source.
+        patch_jobs = jobs if cache != "only" and action not in {"check", "remove"} else None
+
         def resolve_plan(policy, flags, *, suffix="", omit_cached_build_deps=False):
             run(home, flags, op, "concretize" + suffix, envdir=envdir,
-                timeout=timeout, progress=progress)
+                timeout=timeout, progress=progress, patch_jobs=patch_jobs)
             dag = _snapshot(home, envdir, op, "dag" + suffix)
             write_json(op / "dag.json", dag)
             _validate_target(dag["packages"], target)

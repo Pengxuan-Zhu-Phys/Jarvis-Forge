@@ -150,7 +150,7 @@ def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache
                 raise ForgeError(f"Toolchain definition changed for {instance}; use a new preset revision.")
             return {**record, "status": "reused"}
         if cache != "only":
-            missing = [program for program in ("make", "patch", "tar", "xz") if not shutil.which(program)]
+            missing = [program for program in ("make", "tar", "xz") if not shutil.which(program)]
             if missing:
                 raise ForgeError("Missing compiler bootstrap tools: " + ", ".join(missing),
                                  hint="Load the site tool module or add a user-local installation to PATH.")

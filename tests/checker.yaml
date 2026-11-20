@@ -97,6 +97,7 @@ groups:
   - tests/test_homebrew_backend.py
   inputs:
   - src/jarvis_forge/spack*.py
+  - src/jarvis_forge/bootstrap_patch.py
   - src/jarvis_forge/profile_fonts.py
   - src/jarvis_forge/apt*.py
   - src/jarvis_forge/package_operations.py

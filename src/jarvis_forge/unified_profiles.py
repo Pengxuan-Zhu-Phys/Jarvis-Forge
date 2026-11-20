@@ -119,7 +119,7 @@ def _prerequisites(base, preset, current, target=None, *, source=True):
         if not current["libc"].startswith("glibc "):
             raise ForgeError("Built-in Ubuntu presets require a glibc host.")
         target = _target(current, target)
-        commands = ("bash", "cc", "c++", "make", "patch", "tar", "xz") if source else ("bash",)
+        commands = ("bash", "cc", "c++", "make", "tar", "xz") if source else ("bash",)
     else:
         if target is not None:
             raise ForgeError("--target is supported for Linux profiles.")

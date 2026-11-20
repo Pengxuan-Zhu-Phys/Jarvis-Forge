@@ -1,16 +1,18 @@
 """Forge/Spack boundary tests; no scientific packages or network are required."""
 
 import json
+import os
 from pathlib import Path
 import shlex
 import sys
 import subprocess
+from types import SimpleNamespace
 from xml.etree import ElementTree
 
 import pytest
 import yaml
 
-from jarvis_forge import spack_backend as b
+from jarvis_forge import bootstrap_patch, spack_backend as b
 from jarvis_forge.apt_profiles import active_home, switch
 from jarvis_forge.cli import main
 from jarvis_forge.storage import ForgeError, ForgeHome, read_json, write_json
@@ -39,6 +41,65 @@ def test_spec_translation(requested, expected):
 def test_spec_options_are_not_commands(requested):
     with pytest.raises(ForgeError):
         b.normalize(requested)
+
+
+def test_linux_source_install_bootstraps_missing_patch_and_reuses_it(tmp_path, monkeypatch):
+    home = ForgeHome(tmp_path / "forge")
+    op = tmp_path / "operation"
+    op.mkdir()
+    host_bin = tmp_path / "host-bin"
+    host_bin.mkdir()
+    for name in ("cc", "make"):
+        (host_bin / name).symlink_to("/bin/sh")
+    monkeypatch.setenv("PATH", str(host_bin))
+    monkeypatch.setattr(b, "sys", SimpleNamespace(platform="linux", executable=sys.executable))
+    monkeypatch.setattr(b, "command", lambda home, args, envdir: args)
+    monkeypatch.setattr(bootstrap_patch, "host", lambda: {
+        "system": "almalinux", "version": "9.9", "machine": "x86_64", "libc": "glibc 2.34",
+    })
+    downloads = []
+    phases = []
+    contexts = []
+
+    def download(home, source, logs, **kwargs):
+        downloads.append(source)
+        return tmp_path / "archive"
+
+    def unpack(archive, target):
+        (target / f"patch-{bootstrap_patch.VERSION}/src").mkdir(parents=True)
+
+    def build(argv, cwd, context, logs, label, timeout, progress, **kwargs):
+        phases.append(label)
+        if label == "bootstrap-patch-build":
+            assert argv == [str(host_bin / "make"), "-j", "4"]
+            binary = cwd / "src/patch"
+            binary.write_text("#!/bin/sh\nexit 0\n")
+            binary.chmod(0o700)
+
+    def run(argv, cwd, context, logs, label, *args, **kwargs):
+        contexts.append(context.read_text())
+        (logs / f"command-{label}.stdout.log").write_text("")
+
+    monkeypatch.setattr(bootstrap_patch, "verified_archive", download)
+    monkeypatch.setattr(bootstrap_patch, "unpack", unpack)
+    monkeypatch.setattr(bootstrap_patch, "run_command", build)
+    monkeypatch.setattr("jarvis_forge.package_operations.run_command", run)
+
+    b.run(home, b._install_args(4, "only"), op, "install-cache")
+    assert downloads == [] and "export PATH=" not in contexts[-1]
+    b.run(home, ["concretize"], op, "concretize", patch_jobs=4)
+    b.run(home, b._install_args(4, "never"), op, "install-source")
+    b.run(home, b._install_args(4, "auto"), op, "install-again")
+    assert downloads == [bootstrap_patch.SOURCE]
+    assert phases == ["bootstrap-patch-configure", "bootstrap-patch-build", "bootstrap-patch-verify"]
+    binary, = (home.root / "spack/bootstrap-tools").glob("*/patch-*/bin/patch")
+    assert os.access(binary, os.X_OK)
+    assert f"export PATH={binary.parent}{os.pathsep}{host_bin}\n" in contexts[-1]
+    assert os.environ["PATH"] == str(host_bin)
+
+    (host_bin / "patch").symlink_to("/bin/sh")
+    b.run(home, b._install_args(4, "never"), op, "install-with-host-patch")
+    assert "export PATH=" not in contexts[-1]
 
 
 def test_fresh_queries_and_dry_run_are_offline(tmp_path, capsys):

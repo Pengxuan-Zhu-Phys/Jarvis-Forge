@@ -95,6 +95,20 @@ def test_profile_check_is_read_only(tmp_path, monkeypatch, capsys):
     assert not path.exists()
 
 
+def test_profile_check_accepts_missing_patch_for_source_build(tmp_path, monkeypatch):
+    home = ForgeHome(tmp_path / "absent")
+    monkeypatch.setattr(unified_profiles, "host", lambda: LINUX)
+    monkeypatch.setattr(unified_profiles, "shutil", SimpleNamespace(
+        which=lambda name: None if name == "patch" else f"/usr/bin/{name}",
+    ))
+    monkeypatch.setattr(unified_profiles, "_python", lambda: {
+        "prefix": "/opt/pyenv/versions/3.13.13", "base_prefix": "/opt/pyenv/versions/3.13.13",
+    })
+    profile, = unified_profiles.check(home, "ubuntu-24.04")["profiles"]
+    assert profile["status"] == "buildable"
+    assert not home.root.exists()
+
+
 def test_profile_build_reuses_apt_and_default_is_host_scoped(fake_spack, monkeypatch, capsys):
     forge, calls = fake_spack
     args = ["--home", str(forge.root), "apt", "profile"]
