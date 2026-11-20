@@ -1,0 +1,14 @@
+{
+  "changes": [],
+  "entries": [
+    {
+      "profile": "plot/tests@acceptance"
+    }
+  ],
+  "frozen": null,
+  "goal": "Complete acceptance profile: release check followed by every test module.",
+  "id": "plot-acceptance",
+  "schema": 1,
+  "shelf": "jarvis",
+  "title": "Acceptance · Full suite"
+}

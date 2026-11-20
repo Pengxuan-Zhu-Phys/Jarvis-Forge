@@ -1,0 +1,18 @@
+schema_version: 1
+kind: playlist-library
+id: plot-local
+title: JarvisPLOT · Local tests
+shelves:
+- id: jarvis
+  title: Jarvis projects
+projects:
+- id: plot
+  title: JarvisPLOT
+  shelf: jarvis
+  root: ../../../Jarvis-PLOT
+  distributions:
+  - JarvisPLOT
+  sources:
+  - id: tests
+    kind: test
+    path: tests/jforge-tests.yaml

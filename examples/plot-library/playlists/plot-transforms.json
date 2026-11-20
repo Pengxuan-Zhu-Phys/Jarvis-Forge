@@ -1,0 +1,14 @@
+{
+  "changes": [],
+  "entries": [
+    {
+      "case": "plot/tests/transforms"
+    }
+  ],
+  "frozen": null,
+  "goal": "Interpolation, density, posterior and profile transforms.",
+  "id": "plot-transforms",
+  "schema": 1,
+  "shelf": "jarvis",
+  "title": "Transforms & Density"
+}

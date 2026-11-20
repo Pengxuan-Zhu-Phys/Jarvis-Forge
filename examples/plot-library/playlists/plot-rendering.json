@@ -1,0 +1,14 @@
+{
+  "changes": [],
+  "entries": [
+    {
+      "case": "plot/tests/rendering"
+    }
+  ],
+  "frozen": null,
+  "goal": "Figure rendering, legends, fonts, styles and layout.",
+  "id": "plot-rendering",
+  "schema": 1,
+  "shelf": "jarvis",
+  "title": "Rendering · Styles & Layout"
+}

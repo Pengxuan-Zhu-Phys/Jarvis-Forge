@@ -1,0 +1,14 @@
+{
+  "changes": [],
+  "entries": [
+    {
+      "case": "plot/tests/cli-config"
+    }
+  ],
+  "frozen": null,
+  "goal": "CLI, schemas, configuration and discovery contracts.",
+  "id": "plot-cli-config",
+  "schema": 1,
+  "shelf": "jarvis",
+  "title": "CLI & Configuration"
+}

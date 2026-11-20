@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hmac
 from importlib.resources import files
 import json
+import mimetypes
 import os
 from pathlib import Path
 import platform
@@ -27,7 +28,8 @@ from ..storage import ForgeError, ForgeHome, read_json, write_json
 
 
 STATIC = {"/": ("index.html", "text/html"), "/app.css": ("app.css", "text/css"),
-          "/app.js": ("app.js", "text/javascript"), "/components.js": ("components.js", "text/javascript")}
+          **{f"/{name}.js": (f"{name}.js", "text/javascript")
+             for name in ("app", "components", "api", "preview-api", "demo-data")}}
 COOKIE = "jforge_dashboard"
 
 
@@ -45,6 +47,19 @@ class Dashboard:
 
     def invalidate(self):
         self.expires = 0
+
+    def artifact_token(self, job, index):
+        # Sandboxed HTML has an opaque origin and cannot send the session cookie
+        # for its resources. A capability is restricted to one job step's output.
+        return hmac.digest(self.token.encode(), f"artifact:{job}:{index}".encode(), "sha256").hex()
+
+    def artifacts(self, selected, job):
+        rows = jobs.artifacts(self.home, selected, job)
+        for row in rows:
+            parts = row["url"].split("/")
+            parts.insert(6, self.artifact_token(job, parts[5]))
+            row["url"] = "/".join(parts)
+        return rows
 
     def catalog(self, selected):
         if self.expires <= time.monotonic():
@@ -82,6 +97,8 @@ class Dashboard:
                     if parts[4] == "log":
                         case = query.get("case", [""])[0]
                         return {"text": jobs.tail(self.home, selected, parts[3], case)}
+                    if parts[4] == "artifacts":
+                        return {"artifacts": self.artifacts(selected, parts[3])}
             elif method == "POST" and path == "/api/sync":
                 self.invalidate()
                 return self.catalog(selected)
@@ -93,7 +110,11 @@ class Dashboard:
                                   environment=body.get("env"), fresh=body.get("fresh", False))
                 return {"job": job}
             elif method == "POST" and parts[:3] == ["", "api", "jobs"] and len(parts) == 5 and parts[4] == "cancel":
-                return {"job": jobs.cancel(self.home, selected, parts[3])}
+                library._fields(body, "Cancel", (), ("only_if_queued",))
+                if "only_if_queued" in body and type(body["only_if_queued"]) is not bool:
+                    raise ForgeError("only_if_queued must be a boolean.")
+                return {"job": jobs.cancel(self.home, selected, parts[3],
+                                          only_if_queued=body.get("only_if_queued", False))}
             elif path == "/api/playlists" and method == "POST":
                 library._fields(body, "Playlist", ("id", "title", "entries"), ("goal", "shelf", "environment"))
                 self._idle(selected)
@@ -119,16 +140,20 @@ class Handler(BaseHTTPRequestHandler):
         # Initial URLs contain a session token.
         return
 
-    def _headers(self, status, *, content_type=None, length=0, extra=()):
+    def _headers(self, status, *, content_type=None, length=0, extra=(), artifact=False):
         self.send_response(status)
         for name, value in (("Cache-Control", "no-store"), ("Referrer-Policy", "no-referrer"),
                             ("X-Content-Type-Options", "nosniff"),
-                            ("Content-Security-Policy", "default-src 'self'; object-src 'none'; "
+                            ("Content-Security-Policy",
+                             "sandbox allow-scripts; default-src 'none'; img-src 'self' data:; "
+                             "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+                             "base-uri 'none'; form-action 'none'" if artifact else
+                             "default-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; "
                              "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"),
                             ("Content-Length", str(length)), *extra):
             self.send_header(name, value)
         if content_type:
-            self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+            self.send_header("Content-Type", content_type)
         self.end_headers()
 
     def _write(self, status, payload, kind="application/json"):
@@ -180,11 +205,16 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 raise ForgeError("Invalid dashboard URL.") from exc
             query = parse_qs(url.query)
+            parts = unquote(url.path).split("/")
+            artifact_request = (method == "GET" and parts[:3] == ["", "api", "jobs"]
+                                and len(parts) >= 8 and parts[4] == "artifacts")
+            artifact_authorized = (artifact_request and hmac.compare_digest(
+                parts[6], self.server.dashboard.artifact_token(parts[3], parts[5])))
             if method == "GET" and url.path == "/" and self._authorized(query.get("token", [""])[0]):
                 self._headers(303, extra=(("Location", "/"), ("Set-Cookie",
                               f"{COOKIE}_{self.server.server_port}={self.server.dashboard.token}; Path=/; HttpOnly; SameSite=Strict")))
                 return
-            if not any(self._authorized(value) for value in (self._cookie(), self.headers.get("X-Jforge-Token", ""))):
+            if not artifact_authorized and not any(self._authorized(value) for value in (self._cookie(), self.headers.get("X-Jforge-Token", ""))):
                 if url.path == "/":
                     content = (b"<!doctype html><html lang='en'><title>Forge Playlists</title>"
                                b"<h1>Open the dashboard link from jforge dashboard start.</h1></html>")
@@ -197,6 +227,17 @@ class Handler(BaseHTTPRequestHandler):
                 name, kind = STATIC[url.path]
                 asset = files(__package__).joinpath("static", name).read_bytes()
                 self._write(200, asset, kind)
+                return
+            if artifact_request:
+                if not artifact_authorized:
+                    raise ForgeError("Invalid artifact capability.", code=403)
+                dashboard = self.server.dashboard
+                artifact = jobs.artifact_path(dashboard.home, dashboard.selected(), parts[3], parts[5], "/".join(parts[7:]))
+                kind = mimetypes.guess_type(artifact.name)[0] or "application/octet-stream"
+                with artifact.open("rb") as stream:
+                    self._headers(200, content_type=kind, length=os.fstat(stream.fileno()).st_size, artifact=True)
+                    import shutil
+                    shutil.copyfileobj(stream, self.wfile)
                 return
             data = self.server.dashboard.dispatch(method, unquote(url.path), query,
                                                   self._body() if method in {"POST", "PUT"} else {})

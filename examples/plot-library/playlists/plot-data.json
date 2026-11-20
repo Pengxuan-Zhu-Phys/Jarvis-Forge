@@ -1,0 +1,14 @@
+{
+  "changes": [],
+  "entries": [
+    {
+      "case": "plot/tests/data"
+    }
+  ],
+  "frozen": null,
+  "goal": "Dataset loading, column planning and data access.",
+  "id": "plot-data",
+  "schema": 1,
+  "shelf": "jarvis",
+  "title": "Data · Loaders & Columns"
+}

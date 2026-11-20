@@ -1,0 +1,14 @@
+{
+  "changes": [],
+  "entries": [
+    {
+      "case": "plot/tests/cache"
+    }
+  ],
+  "frozen": null,
+  "goal": "Cache lifecycle, policy and registry modules.",
+  "id": "plot-cache",
+  "schema": 1,
+  "shelf": "jarvis",
+  "title": "Cache · Policy & Registry"
+}

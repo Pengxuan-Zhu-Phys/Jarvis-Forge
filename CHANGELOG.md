@@ -2,9 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Browse and search the playlist dashboard by project, album, or run. Follow live test results and preview output files from the dashboard, or explore the standalone demo. The source distribution includes a JarvisPLOT example library.
+
 ### Fixed
 
 - Preserve tar archive file timestamps during extraction so GNU patch builds can use the generated files shipped in its release archive.
+- Preserve acceptance and release profiles when playlists queue a complete test profile, and show logs and artifacts from reused results. Prevent duplicate queued or running albums.
 
 ## 1.1.14 — 2026-11-20
 ### Fixed

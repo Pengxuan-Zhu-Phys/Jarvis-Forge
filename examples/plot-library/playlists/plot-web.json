@@ -1,0 +1,14 @@
+{
+  "changes": [],
+  "entries": [
+    {
+      "case": "plot/tests/web"
+    }
+  ],
+  "frozen": null,
+  "goal": "Desktop web exports, layout, interactions, pie and donut.",
+  "id": "plot-web",
+  "schema": 1,
+  "shelf": "jarvis",
+  "title": "Web · Desktop & Pie"
+}

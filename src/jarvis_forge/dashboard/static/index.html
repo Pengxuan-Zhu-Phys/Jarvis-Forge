@@ -4,31 +4,40 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
+  <meta name="application-version" content="1.0.0">
+  <meta name="description" content="A project-by-project acceptance library. Play local test albums, rerun modules, and follow real results or explore the independent Demo mode.">
   <title>Playlists · Jarvis Forge</title>
-  <link rel="stylesheet" href="/app.css">
-  <script type="module" src="/app.js"></script>
+  <link rel="stylesheet" href="/app.css?v=1.0.0">
+  <script type="module" src="/app.js?v=1.0.0"></script>
 </head>
 <body>
   <a class="skip-link" href="#workspace">Skip to content</a>
   <div class="shell">
     <aside class="rail" aria-label="Workspace navigation">
-      <a class="brand" href="#overview">
+      <a class="brand" aria-label="Jarvis Forge Playlists" href="#overview">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
         <span>Jarvis Forge <small>Playlists</small></span>
       </a>
-      <nav id="navigation" aria-label="Views"></nav>
-      <div id="shelves" class="rail-section"></div>
+      <div class="rail-body">
+        <div class="rail-groups" id="rail-groups">
+        <nav id="navigation" aria-label="Library"></nav>
+        <nav id="collections" class="rail-section" aria-label="Collections"></nav>
+        <nav id="shelves" class="rail-section" aria-label="Shelves"></nav>
+        </div>
+      </div>
       <div id="host" class="host"></div>
     </aside>
     <div class="shell-body">
       <header class="topbar">
-        <div id="breadcrumbs" class="breadcrumbs"></div>
+        <nav id="breadcrumbs" class="breadcrumbs" aria-label="Breadcrumb"></nav>
         <div class="toolbar">
           <label class="search"><span class="search-icon" aria-hidden="true">⌕</span>
-            <input id="search" type="search" placeholder="Find a case…" aria-label="Find a case">
+            <input id="search" type="search" placeholder="Search your library…" aria-label="Search workspace">
             <kbd class="search-key" aria-hidden="true">/</kbd>
           </label>
-          <button id="refresh" class="button secondary" type="button" title="Refresh library">Refresh</button>
+          <button id="refresh" class="button secondary" type="button" aria-label="Refresh" title="Refresh library"><span class="refresh-icon" aria-hidden="true">↻</span><span class="refresh-label">Refresh</span></button>
+          <button id="quick-jump" aria-label="Jump to" class="button secondary" type="button" aria-haspopup="dialog" aria-keyshortcuts="Meta+K Control+K" disabled>Jump to <kbd aria-hidden="true">⌘ K</kbd></button>
+          <button id="design-toggle" class="button design-toggle" type="button" role="switch" aria-label="Design alignment grid" aria-checked="false" title="Show alignment columns, 8px baseline, and component boundaries">Design <span class="switch-track" aria-hidden="true"><i></i></span></button>
         </div>
       </header>
       <main id="workspace" tabindex="-1" aria-busy="true"></main>

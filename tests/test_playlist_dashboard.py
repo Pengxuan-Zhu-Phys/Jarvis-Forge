@@ -132,6 +132,7 @@ def test_http_boundary(sample):
         for key, value in headers.items():
             handler.headers[key] = value
         handler.rfile = BytesIO(b"{}")
+        handler.wfile = BytesIO()
         events = []
         handler._write = lambda status, data, *rest: events.append((status, data))
         handler._headers = lambda status, **kw: events.append((status, kw))
@@ -149,3 +150,95 @@ def test_http_boundary(sample):
     assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
     assert call()[0] == 200
     assert call("GET", "/components.js")[0] == 200
+    assert call("GET", "/api.js")[0] == 200
+    assert call("GET", "/preview-api.js")[0] == 200
+    assert call("GET", "/demo-data.js")[0] == 200
+    from jarvis_forge.storage import write_json
+    work = jobs._base(home, app.selected()) / "job-http"
+    write_json(work / "state.json", {"id": "job-http", "cases": [
+        {"id": "demo/calc/math::1,2", "unit": 0, "kind": "command"}]})
+    (work / "unit-0").mkdir()
+    (work / "unit-0/index.html").write_text("<h1>Actual output</h1>")
+    assert call(path="/api/jobs/job-http/artifacts", token=False)[0] == 401
+    capability = app.artifact_token("job-http", "0")
+    status, headers = call(path=f"/api/jobs/job-http/artifacts/0/{capability}/index.html", token=False)
+    assert status == 200 and headers["artifact"] is True and headers["content_type"] == "text/html"
+    assert call(path=f"/api/jobs/job-http/artifacts/0/{capability}/../state.json")[0] == 404
+    assert call(path=f"/api/jobs/job-http/artifacts/1/{capability}/index.html", token=False)[0] == 401
+    assert call(path=f"/api/jobs/job-other/artifacts/0/{capability}/index.html", token=False)[0] == 401
+    assert call(path="/api/jobs/job-http/artifacts/0/wrong/index.html")[0] == 403
+
+
+def test_profile_job_retains_acceptance_and_streams_steps(sample):
+    home, directory, selected = sample
+    project = directory.parent / "sample"
+    text = (project / "tests.yaml").read_text()
+    text = text.replace('argv: [echo, ready]',
+                        'argv: [' + sys.executable + ', -c, "import time; print(123, flush=True); time.sleep(1)"]')
+    (project / "tests.yaml").write_text(text)
+    item = collections.create(home, selected, "acceptance", title="Full acceptance",
+                              entries=[{"profile": "demo/checks@acceptance"}])
+    first = jobs.submit(home, selected, name=item["id"])
+    with pytest.raises(ForgeError, match="already running or queued"):
+        jobs.submit(home, selected, name=item["id"])
+    observed = []
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        state = jobs.get(home, selected, first["id"])
+        observed.append(state)
+        if state["status"] not in jobs.ACTIVE:
+            break
+        time.sleep(0.05)
+    assert state["status"] == "passed", state
+    assert any(row["status"] == "running" and row["cases"][0]["status"] == "passed"
+               and row["cases"][1]["status"] == "running" for row in observed)
+    run = read_json(home.run_path(state["cases"][0]["run_id"]) / "request.json")
+    assert run["profile"] == "acceptance"
+    assert state["acceptance"]["status"] == "not accepted"
+    with pytest.raises(ForgeError, match="has started"):
+        jobs.cancel(home, selected, first["id"], only_if_queued=True)
+
+
+def test_artifacts_are_confined_and_reused_outputs_resolve(sample):
+    from jarvis_forge.storage import write_json
+    home, _, selected = sample
+    directory = jobs._base(home, selected) / "job-output"
+    write_json(directory / "state.json", {"id": "job-output", "cases": [
+        {"id": "demo/checks/echo", "unit": 0, "kind": "check", "run_id": "checker-current",
+         "reused_from": "checker-origin"}]})
+    for name in ("checker-current", "checker-origin"):
+        write_json(home.root / "runs" / name / "request.json", {})
+    root = home.root / "runs/checker-origin/steps/echo"
+    root.mkdir(parents=True)
+    (root / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\ncontent")
+    (root / "index.html").write_text('<img src="figure.png">')
+    (root / "escape.png").symlink_to(home.root / "config.yaml")
+    rows = jobs.artifacts(home, selected, "job-output")
+    assert {row["name"] for row in rows} == {"figure.png", "index.html"}
+    assert jobs.artifact_path(home, selected, "job-output", "0", "figure.png").read_bytes() == b"\x89PNG\r\n\x1a\ncontent"
+    for index, relative in [("0", "../request.json"), ("0", "/etc/passwd"), ("0", "escape.png"), ("9", "figure.png")]:
+        with pytest.raises(ForgeError):
+            jobs.artifact_path(home, selected, "job-output", index, relative)
+
+
+def test_album_queue_executes_in_submission_order(sample):
+    home, _, selected = sample
+    first = jobs.submit(home, selected, cases=["demo/checks/echo"])
+    second = jobs.submit(home, selected, cases=["demo/calc/math::1,2"])
+    first = jobs.wait_job(home, selected, first["id"])
+    second = jobs.wait_job(home, selected, second["id"])
+    assert first["status"] == second["status"] == "passed"
+    assert first["finished_at"] <= second["started_at"]
+
+
+def test_failed_check_retains_real_failure_and_output(sample):
+    home, directory, selected = sample
+    project = directory.parent / "sample"
+    spec = yaml.safe_load((project / "tests.yaml").read_text())
+    spec["checks"][1]["argv"] = [sys.executable, "-c", "print('real failure output'); raise SystemExit(1)"]
+    (project / "tests.yaml").write_text(yaml.safe_dump(spec))
+    state = jobs.submit(home, selected, cases=["demo/checks/echo"])
+    result = jobs.wait_job(home, selected, state["id"])
+    assert result["status"] == "failed"
+    assert result["cases"][-1]["status"] == "failed"
+    assert "real failure output" in jobs.tail(home, selected, state["id"], "demo/checks/echo")

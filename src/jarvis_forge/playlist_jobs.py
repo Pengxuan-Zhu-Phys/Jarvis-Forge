@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import time
+from urllib.parse import quote
 
 from . import cmake, playlist_collections as collections, playlist_commands, playlist_library as library, testing
 from .builds import file_lock
@@ -17,6 +18,8 @@ from .storage import ForgeError, ForgeHome, digest, identifier, new_id, now, rea
 
 
 ACTIVE = {"queued", "running"}
+ARTIFACT_SUFFIXES = {".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp", ".html", ".pdf",
+                     ".js", ".css", ".json", ".xml", ".csv", ".txt", ".log", ".md", ".woff", ".woff2"}
 
 
 def _base(home, selected):
@@ -40,6 +43,14 @@ def list_jobs(home, selected, limit=None):
 
 
 def submit(home, selected, *, name=None, cases=(), jobs=1, environment=None, fresh=False):
+    with file_lock(library._state(home, selected) / "submissions.lock", blocking=True):
+        if name and any(row.get("playlist") == name and row["status"] in ACTIVE
+                        for row in list_jobs(home, selected)):
+            raise ForgeError("This album is already running or queued.", code=409)
+        return _submit(home, selected, name=name, cases=cases, jobs=jobs, environment=environment, fresh=fresh)
+
+
+def _submit(home, selected, *, name=None, cases=(), jobs=1, environment=None, fresh=False):
     home.require_initialized()
     if bool(name) == bool(cases):
         raise ForgeError("Choose one playlist or a selection of cases.")
@@ -62,6 +73,14 @@ def submit(home, selected, *, name=None, cases=(), jobs=1, environment=None, fre
     if not members:
         raise ForgeError("Select at least one case to run.")
     units = _units(inventory, by_id, members, environment or (item or {}).get("environment"))
+    # A live profile entry must retain its gate semantics in jforge test run.
+    profile_ref = name if item and not item.get("stored") else None
+    if item and len(item.get("entries", [])) == 1:
+        profile_ref = item["entries"][0].get("profile")
+    if profile_ref and len(units) == 1:
+        scope, profile = profile_ref.rsplit("@", 1)
+        if scope in {f"{units[0]['project']}/{units[0]['source']['id']}", "library", by_id[members[0]]["shelf"]}:
+            units[0]["profile"] = profile
     job = new_id("job")
     directory = _base(home, selected) / job
     initial = {"id": job, "label": item["title"] if item else "Selected cases", "playlist": name,
@@ -109,10 +128,12 @@ def _units(inventory, by_id, members, environment):
     return units
 
 
-def cancel(home, selected, job):
+def cancel(home, selected, job, *, only_if_queued=False):
     directory = _directory(home, selected, job)
     with file_lock(directory / "state.lock", blocking=True):
         state = read_json(directory / "state.json")
+        if only_if_queued and state["status"] != "queued":
+            raise ForgeError("This album has started. Open its run to stop it.", code=409)
         if state["status"] == "queued":
             _finish(directory, state, "interrupted", "Cancelled in queue.")
         elif state["status"] == "running":
@@ -137,9 +158,11 @@ def tail(home, selected, job, case):
     additional = []
     if row.get("run_id") and row["kind"] != "command":
         step = identifier(case.rsplit("/", 1)[1])
-        step_dir = home.run_path(row["run_id"]) / "steps" / step
+        step_dir = home.run_path(row.get("reused_from") or row["run_id"]) / "steps" / step
         for stream in ("stdout", "stderr"):
             path = step_dir / f"{stream}.log"
+            if not path.is_file():
+                path = step_dir / f"command-1.{stream}.log"
             if path.is_file():
                 additional.append(path)
     texts = []
@@ -158,6 +181,67 @@ def _tail_bytes(stream):
     return stream.read()
 
 
+def _artifact_roots(home, selected, job):
+    directory = _directory(home, selected, job)
+    state = read_json(directory / "state.json")
+    result = []
+    for row in state["cases"]:
+        root = directory / f"unit-{row['unit']}"
+        if row.get("run_id") and row["kind"] != "command":
+            step = identifier(row["id"].rsplit("/", 1)[1])
+            run = identifier(row.get("reused_from") or row["run_id"])
+            root = home.run_path(run) / "steps" / step
+        # Only runner-owned output can be served, never paths in project checkout.
+        if root.resolve().is_relative_to(home.root.resolve()):
+            result.append((row["id"], root))
+    return result
+
+
+def artifact_path(home, selected, job, index, relative):
+    roots = _artifact_roots(home, selected, job)
+    if not index.isdecimal() or int(index) >= len(roots):
+        raise ForgeError("Unknown artifact case.", code=404)
+    root = roots[int(index)][1].resolve()
+    path = root / relative
+    if (not relative or Path(relative).is_absolute() or ".." in Path(relative).parts
+            or path.suffix.lower() not in ARTIFACT_SUFFIXES
+            or not path.resolve().is_relative_to(root) or not path.is_file()):
+        raise ForgeError("Artifact is outside this job or unavailable.", code=404)
+    return path
+
+
+def artifacts(home, selected, job):
+    result = []
+    hidden = {".cache", "pytest-cache", "__pycache__", "registry", "jarvis-home", ".git"}
+    media = {".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp", ".html", ".pdf"}
+    for index, (case, root) in enumerate(_artifact_roots(home, selected, job)):
+        for directory, dirs, names in os.walk(root, followlinks=False):
+            dirs[:] = sorted(name for name in dirs if name not in hidden and not (Path(directory) / name).is_symlink())
+            for name in sorted(names):
+                path = Path(directory) / name
+                if path.suffix.lower() not in media and name not in {"result.json", "junit.xml", "checks.json"}:
+                    continue
+                if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+                    continue
+                try:
+                    if path.suffix.lower() == ".png":
+                        with path.open("rb") as stream:
+                            if stream.read(8) != b"\x89PNG\r\n\x1a\n":
+                                continue
+                    size = path.stat().st_size
+                except OSError:
+                    # Test cleanup can remove a temporary output during a poll.
+                    continue
+                # PNG is the gallery preview; alternate formats stay available by URL.
+                if path.suffix.lower() in {".svg", ".pdf", ".jpeg", ".jpg"} and path.with_suffix(".png").exists():
+                    continue
+                relative = path.relative_to(root).as_posix()
+                result.append({"case": case, "name": relative, "bytes": size,
+                               "preview": path.suffix.lower() in {".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp"},
+                               "url": f"/api/jobs/{quote(job, safe='')}/artifacts/{index}/{quote(relative, safe='/')}"})
+    return result
+
+
 def _finish(directory, state, status, reason=None):
     for item in state["cases"]:
         if item["status"] in ACTIVE:
@@ -173,7 +257,7 @@ def _signal(process, value):
         pass
 
 
-def _invoke(argv, directory, cwd, env, *, test):
+def _invoke(argv, directory, cwd, env, *, test, observe=None):
     log = directory / "output.log"
     output = directory / "test.json" if test else log
     with output.open("wb") as stdout, log.open("ab") as stderr:
@@ -182,6 +266,8 @@ def _invoke(argv, directory, cwd, env, *, test):
         stopped = None
         try:
             while child.poll() is None:
+                if observe:
+                    observe()
                 if (directory.parent / "cancel").exists() and stopped is None:
                     stopped = time.monotonic()
                     _signal(child, signal.SIGINT)
@@ -192,7 +278,48 @@ def _invoke(argv, directory, cwd, env, *, test):
             if child.poll() is None:
                 _signal(child, signal.SIGKILL)
                 child.wait()
+    if observe:
+        observe()
     return child.returncode
+
+
+def _observe_test(home, work, unit, acceptance_id):
+    """Mirror the existing checker records without changing its execution protocol."""
+    pointer = work / "run.json"
+    if not pointer.exists():
+        for path in sorted((home.root / "runs").glob("checker-*/request.json"), reverse=True):
+            request = read_json(path)
+            if request.get("acceptance_id") == acceptance_id:
+                write_json(pointer, {"run_id": request["run_id"]})
+                break
+        else:
+            return
+    run_id = read_json(pointer)["run_id"]
+    root = home.run_path(run_id)
+    if not (root / "result.json").exists():
+        return
+    result = read_json(root / "result.json")
+    rows = {row["id"]: row for row in result.get("steps", [])}
+    with file_lock(work.parent / "state.lock", blocking=True):
+        state = read_json(work.parent / "state.json")
+        for row in state["cases"]:
+            if row["id"] not in unit["cases"]:
+                continue
+            name = row["id"].rsplit("/", 1)[1]
+            step = rows.get(name)
+            row["run_id"] = run_id
+            row["status"] = step["status"] if step else "running" if (root / "steps" / name).exists() else "queued"
+            if step:
+                row.update(seconds=step.get("duration_seconds"), reason=step.get("reason"),
+                           counts=step.get("counts"), reused_from=step.get("reused_from"))
+        state["warnings"] = list(dict.fromkeys([*state.get("warnings", []), *result.get("warnings", [])]))
+        if unit.get("profile") in {"acceptance", "release"}:
+            report = home.root / "checker" / "reports" / f"{acceptance_id}.json"
+            if report.exists():
+                summary = read_json(report)
+                state["acceptance"] = {"status": "accepted" if summary["accepted"] else "not accepted",
+                                       "reasons": [reason for entry in summary["entries"] for reason in entry.get("reasons", [])]}
+        write_json(work.parent / "state.json", state)
 
 
 def _steps(home, directory, unit, fresh, jobs):
@@ -204,8 +331,13 @@ def _steps(home, directory, unit, fresh, jobs):
         if digest(Path(unit["card"])) != unit["sha256"]:
             raise ForgeError(f"Test card changed after submission: {unit['card']}")
         argv = [sys.executable, "-m", "jarvis_forge", "--home", str(home.root), "--json", "test", "run", unit["card"]]
-        for case in ids:
-            argv.extend(("--group", case))
+        if unit.get("profile"):
+            argv.extend(("--profile", unit["profile"]))
+        else:
+            for case in ids:
+                argv.extend(("--group", case))
+        acceptance_id = f"{directory.parent.name}-{directory.name}"
+        argv.extend(("--acceptance-id", acceptance_id))
         if unit["environment"]:
             argv.extend(("--env", unit["environment"]))
         if fresh:
@@ -218,7 +350,8 @@ def _steps(home, directory, unit, fresh, jobs):
         if unit["environment"]:
             from .environment_registry import show
             env = cmake.capture(show(home, unit["environment"], strict=True)["activation"])
-    code = _invoke(argv, directory, unit["root"], env, test=test)
+    code = _invoke(argv, directory, unit["root"], env, test=test,
+                   observe=(lambda: _observe_test(home, directory, unit, acceptance_id)) if test else None)
     if code in (130, -signal.SIGINT) or (directory.parent / "cancel").exists():
         return {name: {"status": "interrupted", "reason": "Cancelled."} for name in ids}
     if test:
@@ -226,9 +359,14 @@ def _steps(home, directory, unit, fresh, jobs):
         if not value.get("runs"):
             error = value.get("error") or {}
             raise ForgeError(error.get("message") or f"Test runner exited {code}.")
+        if unit.get("profile") in {"acceptance", "release"}:
+            from . import testing_run
+            testing_run.summarize(home, acceptance_id, missing_ok=True)
+            _observe_test(home, directory, unit, acceptance_id)
         run = value["runs"][0]
         rows = {item["id"]: {"status": item["status"], "seconds": item.get("duration_seconds"),
-                             "reason": item.get("reason"), "run_id": run.get("run_id")}
+                             "reason": item.get("reason"), "run_id": run.get("run_id"),
+                             "counts": item.get("counts"), "reused_from": item.get("reused_from")}
                 for item in run.get("steps", [])}
     else:
         value = read_json(directory / "result.json")
@@ -280,21 +418,25 @@ def _run(home, directory, state):
                     active_projects.add(unit["project"])
                     del pending[index]
                     running[pool.submit(_run_unit, home, directory, index, unit, request)] = (index, unit)
-                    for case in state["cases"]:
-                        if case["unit"] == index:
-                            case.update(status="running", started_at=now())
-                    write_json(directory / "state.json", state)
+                    with file_lock(directory / "state.lock", blocking=True):
+                        state = read_json(directory / "state.json")
+                        for case in state["cases"]:
+                            if case["unit"] == index:
+                                case.update(status="running", started_at=now())
+                        write_json(directory / "state.json", state)
             if not running:
                 break
             finished, _ = wait(running, return_when=FIRST_COMPLETED)
             for task in finished:
                 index, _ = running.pop(task)
                 result, error = task.result()
-                for case in state["cases"]:
-                    if case["unit"] == index:
-                        case.update(result.get(case["id"].rsplit("/", 1)[1]) or
-                                    {"status": "failed", "reason": error})
-                write_json(directory / "state.json", state)
+                with file_lock(directory / "state.lock", blocking=True):
+                    state = read_json(directory / "state.json")
+                    for case in state["cases"]:
+                        if case["unit"] == index:
+                            case.update(result.get(case["id"].rsplit("/", 1)[1]) or
+                                        {"status": "failed", "reason": error})
+                    write_json(directory / "state.json", state)
     findings = {row["status"] for row in state["cases"]}
     if (directory / "cancel").exists() or "interrupted" in findings:
         status = "interrupted"
