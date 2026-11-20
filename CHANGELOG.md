@@ -1,7 +1,6 @@
 # Changelog
 
-## Unreleased
-
+## 1.1.13 — 2026-11-20
 ### Fixed
 
 - Linux Spack profiles can build on hosts without `patch`. When an installation allows source builds, Forge verifies and builds GNU patch if needed and stores it in the profile for reuse across compatible nodes. `apt profile check` can now report these hosts as buildable.
