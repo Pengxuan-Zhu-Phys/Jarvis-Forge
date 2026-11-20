@@ -138,7 +138,7 @@ def test_resume_uses_original_recipe_and_retries_failed_check(home, projects, tm
     marker.touch()
     second = builds.execute(home, resume=first['run_id'], jobs=2)
     assert second['status'] == 'passed', second
-    assert len(list((Path(second['path']) / 'attempts').iterdir())) == 2
+    assert len([p for p in (Path(second['path']) / 'attempts').iterdir() if p.is_dir()]) == 2
 
 
 def test_build_reuse_tracks_selected_profile_and_installed_dag(home, projects, monkeypatch):
@@ -1198,7 +1198,8 @@ def test_release_workspace_keeps_download_source_build_install_and_activation(ho
     result = json.loads(capsys.readouterr().out)
     prefix = Path(result['outputs'][0]['prefix'])
     instance = prefix.parent.parent
-    assert instance == directory / 'instances/Tiny-1.0'
+    assert instance.parent == directory / 'instances'
+    assert instance.name == 'workspace-tiny-A1'
     assert (instance / 'sources/Tiny/tiny/CMakeLists.txt').is_file()
     assert (instance / 'build/Tiny.install/CMakeCache.txt').is_file()
     assert (instance / 'install/Tiny.install/include/value.h').is_file()
@@ -1221,7 +1222,7 @@ def test_release_workspace_keeps_download_source_build_install_and_activation(ho
     (directory / 'scripts/accept.py').write_text('raise RuntimeError("acceptance failed")\n')
     failed = builds.execute(home, str(directory))
     assert failed['status'] == 'failed'
-    assert (directory / 'instances/Tiny-1.0-2').is_dir()
+    assert (directory / 'instances/workspace-tiny-A2').is_dir()
     assert (directory / 'activate.sh').read_bytes() == original
     assert read_json(directory / '.jforge/current.json') == current
     builds.artifact(home, current['artifact_id'])
@@ -1261,8 +1262,7 @@ echo shell-survived
     assert "Build environment activated." in process.stderr
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-def test_workspace_resume_preserves_directory_and_script_snapshot(home, projects, tmp_path, monkeypatch, legacy):
+def test_workspace_resume_preserves_directory_and_script_snapshot(home, projects, tmp_path, monkeypatch):
     from jarvis_forge.build_workspace import create
     index = workspace_release(tmp_path, projects)
     build_catalog.update(home, index.as_uri())
@@ -1271,25 +1271,17 @@ def test_workspace_resume_preserves_directory_and_script_snapshot(home, projects
     marker = tmp_path / 'allow-success'
     script = directory / 'scripts/accept.py'
     script.write_text('from pathlib import Path\nassert Path(' + repr(str(marker)) + ').exists()\n')
-    def legacy_directory(base, config, instance, *, installs=None):
-        directory = base / instance
-        directory.mkdir(parents=True, exist_ok=True)
-        return directory
-
-    with monkeypatch.context() as patch:
-        if legacy:
-            patch.setattr(builds, "_instance_directory", legacy_directory)
-        first = builds.execute(home, str(directory))
+    first = builds.execute(home, str(directory))
     assert first['status'] == 'failed'
     assert not (directory / 'activate.sh').exists()
-    instance = next((directory / 'instances').iterdir())
+    instance = next(p for p in (directory / 'instances').iterdir() if p.is_dir())
     entry.write_text('invalid edited yaml')
     script.unlink()
     marker.touch()
     resumed = builds.execute(home, resume=first['run_id'])
     assert resumed['status'] == 'passed', resumed
     assert Path(resumed['outputs']['installation']['prefix']).is_relative_to(instance)
-    assert len(list((directory / 'instances').iterdir())) == 1
+    assert len([p for p in (directory / 'instances').iterdir() if p.is_dir()]) == 1
     assert (directory / 'activate.sh').is_file()
     assert home.show(first['run_id'])['status'] == 'passed'
 

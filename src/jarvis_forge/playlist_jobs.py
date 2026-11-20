@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 from . import cmake, playlist_collections as collections, playlist_commands, playlist_library as library, testing
 from .builds import file_lock
+from .paths import named_path
 from .storage import ForgeError, ForgeHome, digest, identifier, new_id, now, read_json, write_json
 
 
@@ -38,12 +39,13 @@ def get(home, selected, job):
 
 
 def list_jobs(home, selected, limit=None):
-    paths = sorted(_base(home, selected).glob("job-*/state.json"), reverse=True)
-    return [read_json(path) for path in (paths if limit is None else paths[:limit])]
+    paths = sorted(_base(home, selected).glob("*/state.json"), reverse=True)
+    rows = sorted((read_json(path) for path in paths), key=lambda row: row["submitted_at"], reverse=True)
+    return rows if limit is None else rows[:limit]
 
 
 def submit(home, selected, *, name=None, cases=(), jobs=1, environment=None, fresh=False):
-    with file_lock(library._state(home, selected) / "submissions.lock", blocking=True):
+    with file_lock(library._state(home, selected, create=True) / "submissions.lock", blocking=True):
         if name and any(row.get("playlist") == name and row["status"] in ACTIVE
                         for row in list_jobs(home, selected)):
             raise ForgeError("This album is already running or queued.", code=409)
@@ -81,7 +83,7 @@ def _submit(home, selected, *, name=None, cases=(), jobs=1, environment=None, fr
         scope, profile = profile_ref.rsplit("@", 1)
         if scope in {f"{units[0]['project']}/{units[0]['source']['id']}", "library", by_id[members[0]]["shelf"]}:
             units[0]["profile"] = profile
-    job = new_id("job")
+    job = new_id("job", root=_base(home, selected))
     directory = _base(home, selected) / job
     initial = {"id": job, "label": item["title"] if item else "Selected cases", "playlist": name,
                "status": "queued", "submitted_at": now(), "jobs": jobs,
@@ -158,7 +160,7 @@ def tail(home, selected, job, case):
     additional = []
     if row.get("run_id") and row["kind"] != "command":
         step = identifier(case.rsplit("/", 1)[1])
-        step_dir = home.run_path(row.get("reused_from") or row["run_id"]) / "steps" / step
+        step_dir = named_path(home.run_path(row.get("reused_from") or row["run_id"]) / "steps", step)
         for stream in ("stdout", "stderr"):
             path = step_dir / f"{stream}.log"
             if not path.is_file():
@@ -190,7 +192,7 @@ def _artifact_roots(home, selected, job):
         if row.get("run_id") and row["kind"] != "command":
             step = identifier(row["id"].rsplit("/", 1)[1])
             run = identifier(row.get("reused_from") or row["run_id"])
-            root = home.run_path(run) / "steps" / step
+            root = named_path(home.run_path(run) / "steps", step)
         # Only runner-owned output can be served, never paths in project checkout.
         if root.resolve().is_relative_to(home.root.resolve()):
             result.append((row["id"], root))
@@ -287,7 +289,7 @@ def _observe_test(home, work, unit, acceptance_id):
     """Mirror the existing checker records without changing its execution protocol."""
     pointer = work / "run.json"
     if not pointer.exists():
-        for path in sorted((home.root / "runs").glob("checker-*/request.json"), reverse=True):
+        for path in sorted((home.root / "runs").glob("*/request.json"), reverse=True):
             request = read_json(path)
             if request.get("acceptance_id") == acceptance_id:
                 write_json(pointer, {"run_id": request["run_id"]})
@@ -308,7 +310,7 @@ def _observe_test(home, work, unit, acceptance_id):
             name = row["id"].rsplit("/", 1)[1]
             step = rows.get(name)
             row["run_id"] = run_id
-            row["status"] = step["status"] if step else "running" if (root / "steps" / name).exists() else "queued"
+            row["status"] = step["status"] if step else "running" if named_path(root / "steps", name).exists() else "queued"
             if step:
                 row.update(seconds=step.get("duration_seconds"), reason=step.get("reason"),
                            counts=step.get("counts"), reused_from=step.get("reused_from"))
@@ -447,7 +449,7 @@ def _run(home, directory, state):
 
 def _drain(base, home):
     with file_lock(base / "runner.lock", blocking=True):
-        for path in sorted((base / "jobs").glob("job-*/state.json")):
+        for path in sorted((base / "jobs").glob("*/state.json"), key=lambda file: read_json(file)["submitted_at"]):
             directory = path.parent
             with file_lock(directory / "state.lock", blocking=True):
                 state = read_json(path)

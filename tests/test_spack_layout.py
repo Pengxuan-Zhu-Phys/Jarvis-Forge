@@ -19,9 +19,9 @@ def test_fresh_profile_uses_real_flat_store_under_shared_home(tmp_path, capsys, 
     profile = ForgeHome(base.root / 'apt/profiles/spack-default'); profile.initialize()
     write_json(profile.root / 'config.json', {**read_json(profile.root / 'config.json'), 'apt_base_home':str(base.root)})
     tree = configure(profile)
-    assert tree == {'root':str(base.root / 'apps/default'), 'padded_length':False,
+    assert tree == {'root':str(profile.root / 'pkg'), 'padded_length':False,
                     'projections':{'all':'{name}'}}
-    assert backend.store_root(profile) == base.root / 'apps/default'
+    assert backend.store_root(profile) == profile.root / 'pkg'
     assert not (base.root / 'apps').is_symlink()
     assert not (base.root / 'apps').exists()  # Spack creates the real store when installing.
     write_json(profile.root / 'apt/spack.json', {'schema_version':1, 'backend':'spack', 'install_tree':tree})
@@ -32,14 +32,14 @@ def test_fresh_profile_uses_real_flat_store_under_shared_home(tmp_path, capsys, 
 
 def test_profiles_and_direct_store_have_distinct_real_roots(tmp_path):
     base = ForgeHome(tmp_path / 'forge'); base.initialize()
-    assert configure(base)['root'] == str(base.root / 'apps/_direct')
+    assert configure(base)['root'] == str(base.root / 'pkg')
     roots = []
     for name in ('default','root','build-123-Tiny.install'):
         home = ForgeHome(base.root / 'apt/profiles' / ('spack-' + name)); home.initialize()
         write_json(home.root / 'config.json', {**read_json(home.root / 'config.json'), 'apt_base_home':str(base.root)})
         roots.append(configure(home)['root'])
     assert len(set(roots)) == 3
-    assert all(Path(root).parent == base.root / 'apps' for root in roots)
+    assert all(Path(root).name == 'pkg' and Path(root).is_relative_to(base.root / 'apt/profiles') for root in roots)
 
 
 def test_existing_layout_is_kept_when_regenerating_config(tmp_path):

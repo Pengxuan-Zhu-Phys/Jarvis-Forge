@@ -11,6 +11,7 @@ import yaml
 
 from . import playlist_commands, testing
 from .builds import file_lock
+from .paths import named_path
 from .storage import ForgeError, digest, identifier, read_json, write_text
 from .suite import UniqueLoader
 
@@ -186,8 +187,8 @@ def use(home, directory):
     return library
 
 
-def _state(home, library):
-    return home.root / "playlists" / library["id"]
+def _state(home, library, *, create=False):
+    return named_path(home.root / "playlists", library["id"], create=create)
 
 
 def _roots(path):
@@ -200,7 +201,7 @@ def register_root(home, library, name, directory):
     path = Path(directory).expanduser().resolve()
     if not path.is_dir():
         raise ForgeError(f"Project checkout directory does not exist: {path}")
-    state = _state(home, library)
+    state = _state(home, library, create=True)
     with file_lock(state / "roots.lock", blocking=True):
         _write(state / "roots.json", {**_roots(state / "roots.json"), name: str(path)})
     return {"id": name, "root": str(path), "root_source": "registered", "available": True}
@@ -291,7 +292,7 @@ def inventory(home, library, *, shelf=None, project=None):
 
 
 def sync(home, library):
-    state = _state(home, library)
+    state = _state(home, library, create=True)
     with file_lock(state / "roots.lock", blocking=True):
         result = inventory(home, library)
         if not result["errors"]:

@@ -25,6 +25,7 @@ from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import Version
 
 from . import __version__, bench_cards, bench_project, builds, cmake
+from .paths import object_path, named_path, logical_name
 from .storage import ForgeError, digest, identifier, new_id, now, read_json, write_json, write_text
 from .suite import UniqueLoader
 
@@ -111,7 +112,7 @@ def run(home, path, *, profile=None, cases=(), tags=(), jobs=1, redo=(), keep=()
         prepared["partial"] = partial
         prepared["rerun_of"] = rerun_of
         prepared["baseline_run"] = baseline
-        run_id = new_id("bench")
+        run_id = new_id("bench", root=home.root / "runs")
         prepared["run_id"] = run_id
         directory = home.root / "runs" / run_id
         directory.mkdir(parents=True)
@@ -406,7 +407,7 @@ def _data_roots(home, project):
 def _data_cards(root, name):
     if root.is_symlink() or not root.is_dir():
         return []
-    paths = [root / name] if name else sorted(root.iterdir())
+    paths = [named_path(root, name)] if name else sorted(root.iterdir())
     return [path for path in paths if path.is_dir() and not path.is_symlink()]
 
 
@@ -421,8 +422,8 @@ def data_list(home, card=None):
             for profile_dir in _data_cards(card_dir, None):
                 for case_dir in _data_cards(profile_dir, None):
                     for step_dir in _data_cards(case_dir, None):
-                        rows.append({"card": card_dir.name, "profile": profile_dir.name, "case": case_dir.name,
-                                     "step": step_dir.name, "bytes": _tree_bytes(step_dir),
+                        rows.append({"card": logical_name(card_dir), "profile": logical_name(profile_dir), "case": logical_name(case_dir),
+                                     "step": logical_name(step_dir), "bytes": _tree_bytes(step_dir),
                                      "path": str(step_dir)})
     lines = [f"{row['card']}  {row['profile']}  {row['case']}  {row['step']}  {_size(row['bytes'])}" for row in rows]
     return {"rows": rows, "text": ("\n".join(lines) + "\n") if lines else "No bench data.\n"}
@@ -538,7 +539,7 @@ def _prepare(home, path, *, profile, cases, tags, redo, keep, verify_full, envir
     spec = bench_exec.load_executor(home, executor)
     fetch = bench_exec.cached_fetch(home, card) if card["fetch"] else {}
     if card.get("project"):
-        data_root = str(bench_project.data_root(card["project"], spec.get("data_root")))
+        data_root = str(bench_project.data_root(card["project"], spec.get("data_root"), create=intent == "run"))
     elif spec.get("data_root"):
         data_root = str(Path(spec["data_root"]).expanduser().resolve())
     else:
@@ -549,7 +550,8 @@ def _prepare(home, path, *, profile, cases, tags, redo, keep, verify_full, envir
                 "software": software, "environment": environment, "redo": list(redo), "keep": list(keep),
                 "verify_full": verify_full, "home": home, "blocked": False, "blocks": [],
                 "machine_class": machine, "data_root": data_root, "executor_spec": spec, "fetch": fetch,
-                "partial": False, "rerun_of": None, "baseline_run": None, "run_id": None}
+                "partial": False, "rerun_of": None, "baseline_run": None, "run_id": None,
+                "create_paths": intent == "run"}
     prepared["units"] = [] if intent == "evidence" else _decide(prepared)
     prepared["blocked"] = any(unit["action"] == "blocked" for unit in prepared["units"])
     return prepared
@@ -811,7 +813,9 @@ def _installed(home, reference, *, parameters, source):
     identity = {"recipe": selected["root"], "parameters": node["parameters"], "sources": sources,
                 "context": context, "environment": environment, "environment_origin": origin, "requires": {}}
     instance = builds.fingerprint(identity)
-    artifact_id = identifier(config["id"] + "-" + instance[:20] + "-installation")
+    artifact_id = builds.artifact_key(home, config["id"], instance, "installation")
+    if artifact_id is None:
+        return None
     manifest = home.root / "builds/artifacts" / artifact_id / "manifest.json"
     if not manifest.is_file():
         return None
@@ -857,7 +861,7 @@ def _decide_step(prepared, case, step, produced, ran):
     replace = (not step["reuse"] or redo) and not step.get("compare")
     forced = any(name in ran for name in step["after"])
     root = _step_dir(prepared, case["name"], step["name"])
-    work_root = root.with_name(root.name + ".new") if replace else root
+    work_root = _variant(root, ".new", create=prepared.get("create_paths", False)) if replace else root
     repeats = []
     changes = []
     missing = []
@@ -1088,7 +1092,7 @@ def _run_unit(home, directory, prepared, unit, produced, env, progress, retry_fa
             unit.update(fresh)
             unit["status"] = "blocked"
             return
-        work_root = root.with_name(root.name + ".new") if fresh["replace"] else root
+        work_root = _variant(root, ".new", create=prepared.get("create_paths", False)) if fresh["replace"] else root
         if fresh["action"] == "keep":
             _apply_keep(prepared, work_root, fresh, directory)
             unit.update(fresh, status="reused")
@@ -1143,7 +1147,7 @@ def _run_repeat(home, directory, prepared, case, step, unit, repeat, work_root, 
     metadata.mkdir()
     log_dir = metadata
     if (directory / "logs").is_dir():
-        log_dir = directory / "logs" / case["name"] / f"{step['name']}.{index}"
+        log_dir = named_path(named_path(directory / "logs", case["name"], create=True), f"{step['name']}.{index}", create=True)
         log_dir.mkdir(parents=True, exist_ok=True)
     command_env = _command_env(env, prepared, step, case, partial, bindings)
     failed = None
@@ -1162,7 +1166,7 @@ def _run_repeat(home, directory, prepared, case, step, unit, repeat, work_root, 
         verify_summary = _summary_line(output)
         if code != 0:
             failed = f"verify failed (exit {code})"
-    task_dir = directory / "tasks" / case["name"] / f"{step['name']}.{index}"
+    task_dir = named_path(named_path(directory / "tasks", case["name"], create=True), f"{step['name']}.{index}", create=True)
     task_dir.mkdir(parents=True, exist_ok=True)
     if failed:
         write_json(task_dir / "state.json", {"schema": TASK_SCHEMA, "status": "failed", "error": failed})
@@ -1267,7 +1271,7 @@ def _compare_case(directory, prepared, case, step, unit, produced, compare):
         status = "passed"
     else:
         status = "reported"
-    target = directory / "cases" / case["name"]
+    target = named_path(directory / "cases", case["name"], create=True)
     target.mkdir(parents=True, exist_ok=True)
     write_json(target / f"{step['name']}.json", {"step": step["name"], "status": status, "items": items})
     unit["status"] = "passed"
@@ -1438,10 +1442,10 @@ def _command_env(base, prepared, step, case, task, bindings):
         "REPEAT_INDEX": str(bindings["repeat"]["index"]),
     })
     if project := prepared["card"].get("project"):
-        checkpoint = bench_project.inside(project["root"], "/".join((
-            project["roots"]["checkpoints"], prepared["card"]["name"], prepared["data_profile"],
-            case["name"], step["name"], f"r{bindings['repeat']['index']:03d}",
-        )))
+        checkpoint = bench_project.inside(project["root"], project["roots"]["checkpoints"])
+        for component in (prepared["card"]["name"], prepared["data_profile"], case["name"], step["name"],
+                          f"r{bindings['repeat']['index']:03d}"):
+            checkpoint = named_path(checkpoint, component, create=True)
         env["BENCH_CHECKPOINT_DIR"] = str(checkpoint)
     extra = bench_cards.expand(step.get("env") or {}, bindings, where=f"{step['name']} env")
     for key, value in extra.items():
@@ -1568,9 +1572,16 @@ def _clean(task, outputs):
         path.unlink()
 
 
+def _variant(root, suffix, *, create=False):
+    if len((root.name + suffix).encode()) <= 24:
+        return root.with_name(root.name + suffix)
+    return object_path(root.parent / "staging", suffix.strip("."),
+                       {"target": root.name, "kind": suffix}, create=create) or root.parent / ".unbuilt"
+
+
 def _publish_partial(partial, final):
     if final.exists():
-        displaced = final.with_name(final.name + ".displaced")
+        displaced = _variant(final, ".displaced", create=True)
         if displaced.exists():
             shutil.rmtree(displaced)
         final.rename(displaced)
@@ -1581,10 +1592,10 @@ def _publish_partial(partial, final):
 
 
 def _commit_new(step_dir):
-    new = step_dir.with_name(step_dir.name + ".new")
+    new = _variant(step_dir, ".new")
     if not new.is_dir():
         return
-    old = step_dir.with_name(step_dir.name + ".old")
+    old = _variant(step_dir, ".old", create=True)
     if old.exists():
         shutil.rmtree(old)
     if step_dir.exists():
@@ -1621,11 +1632,13 @@ def _project_lock(project):
 
 def _step_dir(prepared, case, step):
     root = Path(prepared.get("data_root") or prepared["home"].root / "bench" / "data")
-    return root / prepared["card"]["name"] / prepared["data_profile"] / case / step
+    for name in (prepared["card"]["name"], prepared["data_profile"], case, step):
+        root = named_path(root, name, create=prepared.get("create_paths", False))
+    return root
 
 
 def _record_task(directory, case, step, index, status, data):
-    task_dir = directory / "tasks" / case / f"{step}.{index}"
+    task_dir = named_path(named_path(directory / "tasks", case, create=True), f"{step}.{index}", create=True)
     task_dir.mkdir(parents=True, exist_ok=True)
     write_json(task_dir / "state.json", {"schema": TASK_SCHEMA, "status": status})
     if data:
@@ -1691,7 +1704,7 @@ def _write_reports(directory, prepared):
                   "steps": [{"name": unit["step"], "action": unit["action"], "status": unit.get("status"),
                              "detail": unit.get("detail"), "compare": unit.get("compare_status"),
                              "items": unit.get("items")} for unit in units]}
-        case_dir = directory / "cases" / case["name"]
+        case_dir = named_path(directory / "cases", case["name"], create=True)
         case_dir.mkdir(parents=True, exist_ok=True)
         write_json(case_dir / "case.json", record)
         if prepared["card"].get("report"):
@@ -1786,7 +1799,7 @@ def _check_case_receipt(prepared, case, recorded, redo):
         if count != len(rows):
             raise ForgeError(f"The benchmark repeat count changed: {label}.")
         root = _step_dir(prepared, case["name"], name)
-        staging = root.with_name(root.name + ".new") if not step["reuse"] or name in redo else root
+        staging = _variant(root, ".new", create=prepared.get("create_paths", False)) if not step["reuse"] or name in redo else root
         repeats = []
         for index, row in enumerate(rows):
             slot = root / f"r{index:03d}"
@@ -1879,10 +1892,16 @@ def _state_key(prepared):
                                   if prepared["environment"].get("name") else {})})
 
 
+def _gate_state_path(home, prepared, *, create=False):
+    path = object_path(home.root / "bench/state", prepared["card"]["name"],
+                       {"key": _state_key(prepared)}, create=create)
+    return path / "state.json" if path else None
+
+
 def _update_gate_state(home, prepared, run_id, status):
     if prepared.get("partial"):
         return
-    path = home.root / "bench" / "state" / f"{_state_key(prepared)}.json"
+    path = _gate_state_path(home, prepared, create=True)
     report_path = home.root / "runs" / run_id / "report.json"
     report = read_json(report_path) if report_path.is_file() else None
     with builds.file_lock(home.root / "bench" / "state.lock", blocking=True):
@@ -2172,8 +2191,8 @@ def _find_baseline(prepared, case_name, step_name):
                                            current, subject)
         source = None if items is None else f"baseline {prepared['baseline_run']}"
         return items, reason, source
-    path = home.root / "bench" / "state" / f"{_state_key(prepared)}.json"
-    if not path.is_file():
+    path = _gate_state_path(home, prepared)
+    if path is None or not path.is_file():
         return None, "no baseline", None
     state = read_json(path)
     rows = [item for item in state.get("accepted", {}).get(case_name, [])
@@ -2351,7 +2370,8 @@ def _prune_dirs(card_dir, keep):
             continue
         if keep is None:
             continue
-        parts = path.relative_to(card_dir).parts
+        parts = tuple(logical_name(card_dir.joinpath(*path.relative_to(card_dir).parts[:i + 1]))
+                      for i in range(len(path.relative_to(card_dir).parts)))
         if len(parts) == 1 and parts[0] not in keep["profiles"]:
             doomed.append(path)
         elif len(parts) == 2 and parts[1] not in keep["cases"]:

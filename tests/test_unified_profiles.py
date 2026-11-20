@@ -37,7 +37,7 @@ def fake_spack(tmp_path, monkeypatch, linux_apt):
 
     def switch(base, *, name, select, progress, **kwargs):
         assert not select
-        profile = ForgeHome(base.root / "apt/profiles" / ("spack-" + name))
+        profile = ForgeHome(base.root / "apt/profiles" / kwargs.get("instance", "spack-" + name))
         profile.initialize()
         engine = profile.root / "spack/engine"
         command(engine / "bin/spack", ":")
@@ -73,6 +73,7 @@ def fake_spack(tmp_path, monkeypatch, linux_apt):
         return dict(os.environ), {runtime.name: runtime}
 
     monkeypatch.setattr(apt_profiles, "switch", switch)
+    monkeypatch.setattr(spack_backend, "bootstrap", lambda *args, **kwargs: {})
     monkeypatch.setattr(spack_backend, "transact", transact)
     monkeypatch.setattr("jarvis_forge.package_operations.environment_path", lambda home: home.root / "apt/activate.sh")
     monkeypatch.setattr(toolchains, "_inspect", inspect)
@@ -119,7 +120,7 @@ def test_profile_build_reuses_apt_and_default_is_host_scoped(fake_spack, monkeyp
                         "autoconf@=2.71 target=x86_64", "automake@=1.16.5 target=x86_64"]
     assert built["status"] == "built" and unified_profiles.selection(forge) is None
     assert built["toolchain"]["deprecated_versions"] == unified_profiles.presets()["ubuntu-24.04"]["versions"]
-    profile = ForgeHome(Path(built["activation"]).parents[2])
+    profile = ForgeHome(Path(built["activation"]).parent)
     view = profile.root / "env/bin"
     assert {p.name for p in view.iterdir()} >= {"gcc", "g++", "gfortran", "cc", "c++", "cmake", "make", "automake"}
     assert not (view / "python3").exists()
@@ -150,7 +151,7 @@ def test_install_summary_keeps_activation_in_the_selected_profile(fake_spack, mo
     monkeypatch.setattr(spack_backend, "transact", transact)
     assert main(["--home", str(forge.root), "apt", "install", "tree", "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["environment_activation"] == str(profile.root / "env/apt/activate.sh")
+    assert result["environment_activation"] == str(profile.root / "activate.sh")
     assert result["activation"] == str(backend)
     assert not (forge.root / "env/apt/activate.sh").exists()
 
@@ -196,11 +197,11 @@ def test_spack_profile_inventory_and_toolchain_belong_to_each_instance(fake_spac
     profiles = [unified_profiles.build(forge, preset) for preset in ("ubuntu-22.04", "ubuntu-24.04")]
     stores, compilers = [], []
     for data in profiles:
-        profile = ForgeHome(Path(data["activation"]).parents[2])
+        profile = ForgeHome(Path(data["activation"]).parent)
         assert read_json(profile.root / "apt/profile.json")["id"] == data["id"]
         assert (profile.root / "env/apt/env.json").is_file()
         store = spack_backend.store_root(profile)
-        assert store == profile.root / "apps/packages"
+        assert store == profile.root / "pkg"
         stores.append(store)
         compiler = Path(data["toolchain"]["drivers"]["CC"])
         assert compiler.is_relative_to(profile.root)
@@ -295,7 +296,7 @@ def test_shell_and_project_outputs_remain_scoped(fake_spack, tmp_path, capsys):
             write_json(forge.root / "builds/artifacts" / artifact_id / "manifest.json", manifest)
             env_entries.attach_root_build(forge, {"status": "passed", "outputs": {name: manifest},
                                                  "profile_instance": data["id"],
-                                                 "profile_path": str(Path(data["activation"]).parents[2])})
+                                                 "profile_path": str(Path(data["activation"]).parent)})
             manifests.append(manifest)
     unified_profiles.set_default(forge, first["preset"])
     args = ["--home", str(forge.root), "build"]
@@ -375,7 +376,7 @@ def test_profile_output_switch_and_build_conflict(fake_spack, tmp_path, monkeypa
 
     forge, _ = fake_spack
     active = unified_profiles.build(forge, "ubuntu-24.04")
-    profile = ForgeHome(Path(active["activation"]).parents[2])
+    profile = ForgeHome(Path(active["activation"]).parent)
     unified_profiles.set_default(forge, active["id"])
     prefix = tmp_path / "rivet-install"
     (prefix / "bin").mkdir(parents=True)
@@ -479,7 +480,7 @@ def test_app_switch_refreshes_only_the_profile_loaded_in_this_shell(fake_spack, 
 
     forge, _ = fake_spack
     app = unified_profiles.build(forge, "ubuntu-24.04")
-    profile = ForgeHome(Path(app["activation"]).parents[2])
+    profile = ForgeHome(Path(app["activation"]).parent)
     application = tmp_path / "app.sh"
     application.write_text("export FIXTURE_APP=on\n")
     env_entries.attach_build(forge, profile, build_id="my-app", output="installation",
@@ -536,7 +537,7 @@ def test_workspace_activate_selects_output_for_current_profile(tmp_path, monkeyp
 
     home = ForgeHome(tmp_path / "forge")
     write_json(tmp_path / build_workspace.MARKER, {"home": str(home.root), "schema_version": 1, "build": "build.yaml"})
-    write_json(home.root / "builds/workspaces/fixture.json", {"workspace": str(tmp_path)})
+    write_json(home.root / "builds/workspaces/fixture/workspace.json", {"workspace": str(tmp_path)})
     for instance in ("ubuntu-22.04", "ubuntu-26.04"):
         script = tmp_path / (instance + ".sh")
         cmake.write_environment(script, variables={"ROOTSYS": instance}, profile_instance=instance)

@@ -16,6 +16,7 @@ from . import __version__
 from .build_names import app_name
 from .downloads import fetch
 from .package_operations import operation
+from .paths import object_path
 from .storage import ForgeError, digest, identifier, read_json, write_json
 from .suite import UniqueLoader
 
@@ -38,6 +39,13 @@ def resources(row):
             raise ForgeError("Invalid companion script SHA-256.")
         seen.add(str(Path(path)))
     return values
+
+
+def cached_recipe(home, row, *, library=False, create=False):
+    kind = "library" if library else "build"
+    identity = {"kind": kind, "snapshot": row["sha256"] if library else snapshot_id(row)}
+    directory = object_path(home.root / "builds/recipes", row["id"], identity, create=create)
+    return directory / (kind + ".yaml") if directory else None
 
 
 def snapshot_id(row):
@@ -148,7 +156,7 @@ def _refresh(home, url, platform, temporary, logs):
         template_file = temporary / ("template-" + name + ".yaml")
         template_file.write_text(yaml.safe_dump(template))
         load(template_file)
-        destination = home.root / "builds/recipes" / row["sha256"] / "library.yaml"
+        destination = cached_recipe(home, row, library=True, create=True)
         _cache_asset(asset, destination, row["sha256"], "library")
         library_files[name] = destination
     for row in index["builds"]:
@@ -184,7 +192,7 @@ def _refresh(home, url, platform, temporary, logs):
         for item in companions:
             script = bundle / item["path"]
             script.parent.mkdir(parents=True, exist_ok=True)
-            fetch(item["url"], script, logs / ("script-" + item["sha256"]))
+            fetch(item["url"], script, object_path(logs, "script", item, create=True) / "download")
             if digest(script) != item["sha256"]:
                 raise ForgeError(f"Companion script SHA-256 mismatch: {item['path']}", code=1)
         loaded = load(asset, home=home, library_files=library_files)
@@ -198,7 +206,7 @@ def _refresh(home, url, platform, temporary, logs):
         required = {v["path"]: v["sha256"] for v in loaded["card_sources"] if "script_id" in v}
         if declared != required:
             raise ForgeError(f"Companion files do not match build scripts: {name}")
-        destination = home.root / "builds/recipes" / snapshot_id(row) / "build.yaml"
+        destination = cached_recipe(home, row, create=True)
         _cache_asset(asset, destination, row["sha256"], "build")
         for item in companions:
             target = destination.parent / item["path"]
@@ -265,8 +273,8 @@ def resolve(home, reference, parent=None, *, missing_ok=False, local_workspaces=
     match = _match_id([row["id"] for row in index.get("builds", [])], reference) if named else None
     for row in index.get("builds", []):
         if row["id"] == match:
-            path = home.root / "builds/recipes" / snapshot_id(row) / "build.yaml"
-            if not path.is_file() or digest(path) != row["sha256"]:
+            path = cached_recipe(home, row)
+            if path is None or not path.is_file() or digest(path) != row["sha256"]:
                 raise ForgeError(f"Missing or modified build snapshot: {reference}")
             for item in resources(row):
                 script = path.parent / item["path"]

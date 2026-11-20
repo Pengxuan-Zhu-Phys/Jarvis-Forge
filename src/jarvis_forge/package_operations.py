@@ -16,14 +16,14 @@ import socket
 import subprocess
 import sys
 import time
-import uuid
 from . import __version__
 from .downloads import fetch
+from .paths import object_path
 from .storage import ForgeError, ForgeHome, digest, new_id, now, read_json, write_json
 
 
 def key_for(record):
-    return f"{record['name']}/{record['version']}/{record['install_id']}/manifest.json"
+    return record["manifest_key"]
 
 
 def _inside(home, path):
@@ -83,7 +83,7 @@ def locked(home: ForgeHome):
 
 @contextmanager
 def operation(home, action, request):
-    operation_id = new_id("apt")
+    operation_id = new_id("apt", root=home.root / "operations")
     directory = _inside(home, home.root / "operations" / operation_id)
     directory.mkdir(mode=0o700)
     write_json(
@@ -235,11 +235,20 @@ def run_command(argv, cwd, environment_script, logs, number, timeout, progress=N
         write_json(probe, record)
 
 
+def archive_path(home, source, *, create=False):
+    parent = _inside(home, home.root / "cache/downloads")
+    directory = object_path(parent, "source", {"sha256": source["sha256"]}, create=create)
+    return directory / "archive" if directory else None
+
+
 def verified_archive(home, source, log_path, *, progress=None):
-    archive = _inside(home, home.root / "cache/downloads" / source["sha256"])
+    archive = archive_path(home, source, create=True)
     archive.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if not archive.is_file() or digest(archive) != source["sha256"]:
-        temporary = archive.with_name(archive.name + "." + uuid.uuid4().hex + ".part")
+        import tempfile
+        descriptor, temporary_name = tempfile.mkstemp(prefix="fetch-", suffix=".part", dir=archive.parent)
+        os.close(descriptor)
+        temporary = Path(temporary_name)
         try:
             options = {}
             if source.get("timeout_seconds"):
@@ -254,6 +263,7 @@ def verified_archive(home, source, log_path, *, progress=None):
             os.replace(temporary, archive)
         finally:
             temporary.unlink(missing_ok=True)
+    write_json(archive.parent / "source.json", source)
     return archive
 
 

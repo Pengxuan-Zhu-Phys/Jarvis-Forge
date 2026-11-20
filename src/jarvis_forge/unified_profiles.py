@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from importlib.resources import files
-from itertools import count
 import json
 import os
 from pathlib import Path
@@ -57,13 +56,18 @@ def _host_id(current):
 
 
 def selection_path(base):
-    return _inside(base, base.root / "apt/profile-defaults" / (_host_id(host()) + ".json"))
+    return _inside(base, base.root / "apt/profile-defaults/metadata.json")
 
 
 def selection(base):
     path = selection_path(base)
     if path.is_file():
-        data = read_json(path)
+        index = read_json(path)
+        if index.get("schema_version") != 2 or not isinstance(index.get("hosts"), dict):
+            raise ForgeError(f"Invalid default profile index: {path}")
+        data = index["hosts"].get(_host_id(host()))
+        if data is None:
+            return None
         if data.get("schema_version") != 1 or not isinstance(data.get("id"), str) or data.get("platform") != host()["platform"]:
             raise ForgeError(f"Invalid default profile record: {path}")
         identifier(data["id"])
@@ -72,7 +76,11 @@ def selection(base):
 
 
 def clear_default(base):
-    selection_path(base).unlink(missing_ok=True)
+    path = selection_path(base)
+    if path.is_file():
+        data = read_json(path)
+        data["hosts"].pop(_host_id(host()), None)
+        write_json(path, data)
 
 
 def record(profile):
@@ -144,20 +152,17 @@ def _instances(base, current):
             yield profile, data
 
 
-def _reserve_instance(base, stem, key):
-    from .builds import file_lock
+def _reserve_instance(base, stem, key, inputs=None):
+    from .paths import object_path
 
-    with file_lock(base.root / "apt/profile-builds" / (stem + ".lock"), blocking=True):
-        for index in count(1):
-            name = identifier(stem if index == 1 else f"{stem}-{index}")
-            profile = ForgeHome(_inside(base, base.root / "apt/profiles" / name))
-            inputs = profile.root / "apt/profile-input.json"
-            if inputs.is_file():
-                if read_json(inputs).get("fingerprint") == key:
-                    return profile
-            elif not profile.root.exists():
-                write_json(inputs, {"schema_version": 1, "fingerprint": key, "layout": 2})
-                return profile
+    label = re.sub(r"^ubuntu-(\d+)\.04$", r"ubuntu\1", stem)
+    code = "U" if label.startswith("ubuntu") else "M" if label == "macos" else "A"
+    path = object_path(base.root / "apt/profiles", label, inputs or {"fingerprint": key}, create=True, code=code)
+    profile = ForgeHome(_inside(base, path))
+    file = profile.root / "apt/profile-input.json"
+    if not file.is_file():
+        write_json(file, {"schema_version": 1, "fingerprint": key, "layout": 2, "inputs": inputs})
+    return profile
 
 
 def _commands(data):
@@ -363,12 +368,11 @@ def build(base, name, *, target=None, stage=None, jobs=1, timeout=14400, cache=N
         stage = stage.expanduser().resolve()
     if stage is not None and (not stage.is_dir() or not os.access(stage, os.W_OK | os.X_OK)):
         raise ForgeError(f"Profile build stage is not writable: {stage}")
-    label = identifier(f"{name}-r{preset['revision']}-{_host_id(current)}" + (f"-{target}" if target else ""))
     inputs = {"preset": preset, "host": current, "target": target, "python": python}
     if backend == "spack":
         inputs["layout"] = 2
     key = fingerprint(inputs)
-    profile = _reserve_instance(base, identifier(f"{backend}-{label}-py{python['version']}"), key)
+    profile = _reserve_instance(base, name, key, inputs)
     instance = profile.root.name
     with file_lock(profile.root / "profile-build.lock", blocking=True):
         if data := record(profile):
@@ -388,7 +392,7 @@ def build(base, name, *, target=None, stage=None, jobs=1, timeout=14400, cache=N
                                        deprecated_versions=versions)
             toolchains.check(profile, "bootstrap")
             toolchains.check_tools(suite)
-            apt_profiles.switch(base, name=instance.removeprefix("spack-"), select=False, progress=progress)
+            apt_profiles.switch(base, name=name, instance=instance, select=False, progress=progress)
             selected = spack_backend.settings(profile)["python"]
             if any(Path(selected[field]).resolve() != Path(python[field]).resolve() for field in ("executable", "prefix")):
                 raise ForgeError("Spack selected a different Python. Select it with pyenv before building the profile.")
@@ -421,5 +425,9 @@ def set_default(base, name):
         validate_python(data, os.environ)
         entry = publish_apt(base, profile, environment_path(profile))
         write_json(profile.root / "env/selection.json", {"schema_version": 1, "name": "apt"})
-        write_json(selection_path(base), {"schema_version": 1, "id": data["id"], "platform": data["host"]["platform"]})
+        path = selection_path(base)
+        index = read_json(path) if path.is_file() else {"schema_version": 2, "hosts": {}}
+        index["hosts"][_host_id(host())] = {
+            "schema_version": 1, "id": data["id"], "platform": data["host"]["platform"], "host": data["host"]}
+        write_json(path, index)
     return {**data, "activation": entry["activation"], "status": "selected"}

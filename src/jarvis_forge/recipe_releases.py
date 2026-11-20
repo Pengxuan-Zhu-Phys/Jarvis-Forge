@@ -6,6 +6,7 @@ import re
 import yaml
 
 from .downloads import fetch
+from .paths import object_path
 from .storage import ForgeError, read_json, write_json
 
 INDEX_URL = "https://github.com/Pengxuan-Zhu-Phys/Jarvis-Forge/releases/download/recipes/recipes.json"
@@ -37,7 +38,7 @@ def prepare(home, op):
         or not str(archive.get("url", "")).startswith("https://")
     ):
         raise ForgeError("Invalid or incompatible recipe release manifest.")
-    directory = root(home) / "repositories" / ("jforge-release-" + archive["sha256"])
+    directory = object_path(root(home) / "repositories", "jforge", archive, create=True)
     _unpack(home, archive, directory, op, "recipe-archive-download")
     repo = directory / "spack_repo/jforge"
     if not (repo / "repo.yaml").is_file():

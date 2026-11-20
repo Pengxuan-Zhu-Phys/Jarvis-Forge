@@ -23,6 +23,7 @@ import xml.etree.ElementTree as ET
 
 from . import __version__, builds, checker, cmake, testing, testing_evidence
 from .package_operations import run_command
+from .paths import object_path, named_path
 from .storage import ForgeError, digest, identifier, new_id, now, read_json, write_json
 
 
@@ -411,17 +412,27 @@ def _locks_dir(home):
     return home.root / "checker" / "locks"
 
 
+def _state_object(home, key, *, create=False):
+    return object_path(home.root / "checker/state", "card", {"key": key}, create=create)
+
+
+def _step_lock(home, key, step):
+    return object_path(_locks_dir(home), "check", {"card": key, "step": step}, create=True) / "operation.lock"
+
+
 def read_state(home, key):
-    path = home.root / "checker" / "state" / f"{key}.json"
-    state = read_json(path) if path.exists() else {}
+    directory = _state_object(home, key)
+    path = directory / "state.json" if directory else None
+    state = read_json(path) if path and path.exists() else {}
     state.setdefault("checks", {})
     state.setdefault("groups", {})
     return state
 
 
 def update_state(home, key, change):
-    path = home.root / "checker" / "state" / f"{key}.json"
-    with builds.file_lock(_locks_dir(home) / f"{key}.state.lock", blocking=True):
+    directory = _state_object(home, key, create=True)
+    path = directory / "state.json"
+    with builds.file_lock(directory / "state.lock", blocking=True):
         state = read_state(home, key)
         state["schema_version"] = 2
         change(state)
@@ -551,7 +562,7 @@ def run(home, path, *, profile=None, groups=(), batch=None, acceptance_id=None, 
     target, index, count = prepared["target"], prepared["index"], prepared["count"]
     generated = acceptance_id is None and rerun_failed is None
     if generated and target["kind"] == "catalog":
-        acceptance_id = new_id("acceptance")
+        acceptance_id = new_id("acceptance", root=home.root / "checker/reports")
     locks = Locks()
     previous = None
     if threading.current_thread() is threading.main_thread():
@@ -561,7 +572,7 @@ def run(home, path, *, profile=None, groups=(), batch=None, acceptance_id=None, 
         for plan in prepared["plans"]:
             for item_id in plan["selection"]["seeds"]:
                 step = testing.step_id(item_id, index, count) if item_id in plan["card"]["groups"] else item_id
-                locks.acquire(_locks_dir(home) / f"{plan['key']}.{step}.lock",
+                locks.acquire(_step_lock(home, plan["key"], step),
                               message=f"Test step is busy: {step}")
         for plan in prepared["plans"]:
             run_record = _CardRun(home, prepared, plan, acceptance_id, full, jobs, progress, locks, strict=strict)
@@ -596,7 +607,7 @@ class _CardRun:
         self.card, self.selection, self.key = plan["card"], plan["selection"], plan["key"]
         self.index, self.count = prepared["index"], prepared["count"]
         self.project = Path(self.card["project"])
-        self.run_id = new_id("checker")
+        self.run_id = new_id("checker", root=home.root / "runs")
         # A --rerun-failed run is partial: it never joins an acceptance and never touches reuse state.
         self.previous = plan.get("previous")
         self.acceptance_id = None if self.previous else acceptance_id or self.run_id
@@ -677,7 +688,7 @@ class _CardRun:
         key = (_effective(environment), str(cwd))
         if key not in self.packages:
             value, rows = probe_packages(self.python["path"], environment, cwd)
-            file = self.directory / f"packages-{value[:12]}.json"
+            file = object_path(self.directory / "packages", "inventory", {"digest": value}, create=True) / "packages.json"
             if not file.exists():
                 write_json(file, {"packages_digest": value, "distributions": rows})
             self.packages[key] = value
@@ -702,10 +713,10 @@ class _CardRun:
         for item_id in self.selection["ids"]:
             group = self.card["groups"].get(item_id)
             step = testing.step_id(item_id, self.index, self.count) if group else item_id
-            lock = _locks_dir(self.home) / f"{self.key}.{step}.lock"
+            lock = _step_lock(self.home, self.key, step)
             if item_id not in seeds:
                 self.locks.acquire(lock, blocking=True)
-            step_dir = self.directory / "steps" / step
+            step_dir = named_path(self.directory / "steps", step, create=True)
             step_dir.mkdir(parents=True)
             prerequisites = {need: (statuses[need], tokens[need]) for need in (group or self.card["checks"][item_id]).get("needs", [])}
             record = {"id": step, "status": "running", "started_at": now()}
@@ -1077,13 +1088,15 @@ def report_markdown(report):
 def test_runs(home):
     """Yield (request, result) for every jforge test run, newest first."""
     base = home.root / "runs"
-    for path in sorted(base.glob("checker-*/request.json"), reverse=True):
+    requests = []
+    for path in base.glob("*/request.json"):
         try:
             request = read_json(path)
         except ForgeError:
             continue
-        if request.get("catalog") != "test":
-            continue
+        if request.get("catalog") == "test":
+            requests.append((request, path))
+    for request, path in sorted(requests, key=lambda item: item[0].get("started_at", ""), reverse=True):
         final = path.parent / "result.json"
         result = None
         if final.is_file():

@@ -49,6 +49,7 @@ groups:
   - src/jarvis_forge/downloads.py
   - tests/test_project_builds.py
   - pyproject.toml
+  - src/jarvis_forge/paths.py
   - src/jarvis_forge/storage.py
   - src/jarvis_forge/package_operations.py
   - src/jarvis_forge/suite.py
@@ -78,6 +79,7 @@ groups:
   - tests/test_catalog.py
   - tests/test_test_run.py
   - pyproject.toml
+  - src/jarvis_forge/paths.py
   - src/jarvis_forge/storage.py
   - src/jarvis_forge/package_operations.py
   - src/jarvis_forge/suite.py
@@ -88,6 +90,7 @@ groups:
 - id: apt-backend
   match:
   - tests/test_spack_backend.py
+  - tests/test_paths.py
   - tests/test_spack_layout.py
   - tests/test_apt.py
   - tests/test_apt_progress.py
@@ -109,6 +112,7 @@ groups:
   - tests/test_apt.py
   - tests/test_profiles.py
   - tests/test_package*.py
+  - src/jarvis_forge/paths.py
   - src/jarvis_forge/storage.py
   - src/jarvis_forge/suite.py
   - tests/checker.yaml
@@ -141,6 +145,7 @@ groups:
   - src/jarvis_forge/shell_repair.py
   - tests/test_env*.py
   - tests/test_shell_repair.py
+  - src/jarvis_forge/paths.py
   - src/jarvis_forge/storage.py
   - src/jarvis_forge/package_operations.py
   - src/jarvis_forge/suite.py
@@ -160,6 +165,7 @@ groups:
   - src/jarvis_forge/runner.py
   - src/jarvis_forge/suite.py
   - src/jarvis_forge/comparison.py
+  - src/jarvis_forge/paths.py
   - src/jarvis_forge/storage.py
   - src/jarvis_forge/schemas/suite.schema.json
   - tests/test_workflow.py
@@ -186,6 +192,7 @@ groups:
   - tools/build*assets.py
   - tests/test_recipe_releases.py
   - tests/test_recipe_publisher.py
+  - src/jarvis_forge/paths.py
   - src/jarvis_forge/storage.py
   - src/jarvis_forge/package_operations.py
   - src/jarvis_forge/suite.py
@@ -202,6 +209,7 @@ groups:
   - src/jarvis_forge/presentation.py
   - src/jarvis_forge/__init__.py
   - tests/test_cli.py
+  - src/jarvis_forge/paths.py
   - src/jarvis_forge/storage.py
   - src/jarvis_forge/package_operations.py
   - src/jarvis_forge/suite.py
@@ -222,6 +230,7 @@ groups:
   - src/jarvis_forge/presentation.py
   - src/jarvis_forge/testing.py
   - src/jarvis_forge/checker.py
+  - src/jarvis_forge/paths.py
   - src/jarvis_forge/storage.py
   - tests/test_playlist*.py
   - tests/checker.yaml
@@ -260,6 +269,7 @@ groups:
   - src/jarvis_forge/spack_backend.py
   - tests/test_toolchains.py
   - tests/test_unified_profiles.py
+  - src/jarvis_forge/paths.py
   - src/jarvis_forge/storage.py
   - src/jarvis_forge/package_operations.py
   - src/jarvis_forge/suite.py
@@ -280,6 +290,7 @@ checks:
   - builds/root.yaml
   - src/jarvis_forge/builds.py
   - src/jarvis_forge/schemas/build.schema.json
+  - src/jarvis_forge/paths.py
   - src/jarvis_forge/storage.py
   - src/jarvis_forge/package_operations.py
   - src/jarvis_forge/suite.py

@@ -12,6 +12,7 @@ import tempfile
 import yaml
 
 from .builds import file_lock
+from .paths import named_path
 from .storage import ForgeError, digest, identifier, new_id, read_json, write_json, write_text
 from .suite import UniqueLoader
 
@@ -152,16 +153,16 @@ def identity(project):
     return project["record"].get("id") or str(project["root"])
 
 
-def data_root(project, external=None):
+def data_root(project, external=None, *, create=False):
     if external:
         if not project["record"]:
             raise ForgeError("Initialize the project before using an external data root.", hint="jforge bench init ./")
-        return inside(Path(external).expanduser().resolve(), identity(project))
+        return named_path(Path(external).expanduser().resolve(), identity(project), create=create)
     return inside(project["root"], f"{project['roots']['outputs']}/steps")
 
 
 def active_run(home, project):
-    for result in (home.root / "runs").glob("bench-*/result.json"):
+    for result in (home.root / "runs").glob("*/result.json"):
         item = read_json(result)
         if item.get("project_id") == identity(project) and item.get("status") == "running":
             return item["run_id"]

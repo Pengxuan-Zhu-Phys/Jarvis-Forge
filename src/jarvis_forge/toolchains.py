@@ -9,6 +9,7 @@ import sys
 from tempfile import TemporaryDirectory
 
 from .package_operations import _inside, locked
+from .paths import physical_name, named_path
 from .storage import ForgeError, ForgeHome, digest, identifier, read_json, write_json
 
 DRIVERS = {"CC": "gcc", "CXX": "g++", "FC": "gfortran"}
@@ -22,8 +23,8 @@ def _linux():
         raise ForgeError("Managed GCC toolchains require Linux and Spack.")
 
 
-def _manifest(home, name):
-    return _inside(home, home.root / "toolchains" / identifier(name) / "toolchain.json")
+def _manifest(home, name, *, create=False):
+    return _inside(home, named_path(home.root / "toolchains", identifier(name), create=create) / "toolchain.json")
 
 
 def _run(argv, *, env=None, timeout=60):
@@ -122,7 +123,7 @@ def _root_package(result, name, version):
 
 def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache="never", progress=None,
             instance=None, tools=None, deprecated_versions=None):
-    from . import apt_profiles, spack_backend
+    from . import spack_backend
     from .builds import file_lock
 
     _linux()
@@ -142,8 +143,9 @@ def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache
         stage = stage.expanduser().resolve()
         if not stage.is_dir() or not os.access(stage, os.W_OK | os.X_OK):
             raise ForgeError(f"Toolchain build stage is not writable: {stage}")
-    name = identifier(instance or ("gcc-" + version + ("-" + target if target else "")))
-    manifest = _manifest(home, name)
+    name = identifier(instance) if instance else physical_name(home.root / "toolchains", "gcc",
+            {"version": version, "target": target, "tools": tools or {}}, create=True)
+    manifest = _manifest(home, name, create=True)
     home.initialize()
     manifest.parent.mkdir(parents=True, exist_ok=True)
     with file_lock(manifest.parent / "install.lock"):
@@ -161,10 +163,12 @@ def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache
             if missing:
                 raise ForgeError("Missing compiler bootstrap tools: " + ", ".join(missing),
                                  hint="Load the site tool module or add a user-local installation to PATH.")
-        profile_name = "toolchain-build-" + name
-        prepared = apt_profiles.switch(home, name=profile_name, select=False, extensions=False,
-                                       toolchain_store=True, progress=progress)
-        profile = Path(prepared["apt_home"])
+        # A bootstrap is a private backend scope within this toolchain, not
+        # another recursively nested package profile.
+        profile = manifest.parent
+        bootstrap_home = ForgeHome(profile)
+        bootstrap_home.initialize()
+        spack_backend.bootstrap(bootstrap_home, extensions=False, progress=progress)
         request = f"gcc@={version} languages=c,c++,fortran" + (f" target={target}" if target else "")
         tool_specs = [f"{name}@={value}" + (f" target={target}" if target else "")
                       for name, value in (tools or {}).items()]

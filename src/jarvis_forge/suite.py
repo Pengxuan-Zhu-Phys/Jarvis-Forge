@@ -13,6 +13,7 @@ import sys
 from jsonschema import Draft202012Validator
 import yaml
 
+from .paths import named_path
 from .storage import ForgeError, ForgeHome, digest
 from .environment_registry import show as registered_environment
 
@@ -85,7 +86,7 @@ def expand(text: str, bindings: dict[str, str]) -> str:
     return re.sub(r"\$\{([^}]+)\}", replace, text)
 
 
-def make_plan(suite: dict, run_dir: Path, home: ForgeHome | None = None, environment_name: str | None = None) -> dict:
+def make_plan(suite: dict, run_dir: Path, home: ForgeHome | None = None, environment_name: str | None = None, *, materialize=False) -> dict:
     source = Path(suite["path"]).parent
     config = suite["config"]
     bindings = {"python": sys.executable, "controller_python": sys.executable, "project_python": "python3",
@@ -97,7 +98,7 @@ def make_plan(suite: dict, run_dir: Path, home: ForgeHome | None = None, environ
         if not path.is_file():
             raise ForgeError(f"Input is not a file: {path}")
         inputs[key] = {"source": str(path), "sha256": digest(path),
-                       "snapshot": str(run_dir / "inputs" / key / path.name)}
+                       "snapshot": str(named_path(run_dir / "inputs", key, create=materialize) / path.name)}
         bindings[f"input:{key}"] = inputs[key]["snapshot"]
     environment = config.get("environment", {})
     shell = None
@@ -117,7 +118,7 @@ def make_plan(suite: dict, run_dir: Path, home: ForgeHome | None = None, environ
         raise ForgeError("Bash is required for local command execution.")
     steps = []
     for step in suite["ordered"]:
-        local = {**bindings, "step_dir": str(run_dir / "steps" / step["id"])}
+        local = {**bindings, "step_dir": str(named_path(run_dir / "steps", step["id"], create=materialize))}
         cwd = Path(expand(step.get("cwd", "${run_dir}/workspace"), local)).expanduser()
         if not cwd.is_absolute():
             cwd = source / cwd

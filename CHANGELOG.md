@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Recognize package completion events mixed into concurrent build output, including events joined to configure prompts. Completed packages now leave the in-flight count promptly.
+- Install Jarvis-Forge into the standalone pyenv setup's selected base Python. The stable launcher uses that same interpreter, so `python -m pip install --upgrade Jarvis-Forge` updates the CLI it runs. Rerunning the setup script replaces the former separate client-environment launcher.
+
+### Changed
+
+- Use short semantic instance directories such as `ubuntu24-U1`, `root-A1` and `zlib-A1`. Full versions, host/CPU/Python identities, checksums and timestamps are stored in JSON. Profile activation is published at the instance's `activate.sh`; native toolchain stores, Spack stages, caches, build outputs and repair histories follow the short-path policy. Existing long installations are not migrated.
+- Keep completed package rows in terminal scrollback with package/version, final status and timing. New packages appear separately below them; duplicate completion events are suppressed. Aggregate progress shows completed, running and queued counts, while active rows show phase and total time without inventing compilation percentages.
+
 ## 1.1.16 — 2026-11-20
 ### Added
 

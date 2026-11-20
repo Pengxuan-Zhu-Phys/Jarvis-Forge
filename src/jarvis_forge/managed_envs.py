@@ -90,13 +90,17 @@ def repair_managed(home, *, dry_run=False, install_hook=False):
         except (ForgeError, OSError, ValueError) as exc:
             failed("artifact", manifest.parent.name, exc)
     for pointer in sorted((home.root / "environments").glob("*/current.json")):
-        name = pointer.parent.name
+        try:
+            name = read_json(pointer)["name"]
+        except (ForgeError, KeyError) as exc:
+            failed("named", pointer.parent.name, exc)
+            continue
         if name.lower() != "apt":
             run("named", name, environment_registry.repair, home, name,
                 workspace_sources=workspace_sources, save_unchanged=False)
 
     profiles = home.root / "apt/profiles"
-    for profile in (home.root, *sorted(profiles.glob("spack-*")), *sorted(profiles.glob("homebrew-*"))):
+    for profile in (home.root, *(sorted(path for path in profiles.iterdir() if path.is_dir()) if profiles.is_dir() else ())):
         name = "direct" if profile == home.root else profile.name
         try:
             state = _inside(home, profile / "apt/state.json")

@@ -47,8 +47,9 @@ def library_path(recipe, path, home=None, library_files=None):
         from .build_catalog import libraries
         for entry in libraries(home):
             if entry["id"] == recipe:
-                candidate = home.root / "builds/recipes" / entry["sha256"] / "library.yaml"
-                if candidate.is_file() and digest(candidate) == entry["sha256"]:
+                from .build_catalog import cached_recipe
+                candidate = cached_recipe(home, entry, library=True)
+                if candidate is not None and candidate.is_file() and digest(candidate) == entry["sha256"]:
                     return candidate
                 raise ForgeError(f"Missing or modified library snapshot: {recipe}")
     raise ForgeError(f"Library card not found: {recipe}", hint="jforge build update; or place it in library/ next to your card")

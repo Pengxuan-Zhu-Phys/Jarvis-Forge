@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 
+from .paths import named_path
 from .storage import ForgeError, ForgeHome, digest, identifier, new_id, now, read_json, write_json
 
 
@@ -25,11 +26,11 @@ def _inside(home, path):
     return path
 
 
-def _base(home, name):
+def _base(home, name, *, create=False):
     identifier(name)
     if name.lower() == "apt":
         raise ForgeError("The apt environment is managed by jforge apt; choose another name.")
-    return _inside(home, home.root / "environments" / name)
+    return _inside(home, named_path(home.root / "environments", name, create=create))
 
 
 @contextmanager
@@ -146,7 +147,7 @@ def show(home, name, revision=None, *, strict=False):
 
 def list_environments(home):
     from .apt_profiles import active_home
-    records = [show(home, path.parent.name)
+    records = [show(home, read_json(path)["name"])
                for path in sorted((home.root / "environments").glob("*/current.json"))
                if path.parent.name != "apt"]
     state_path = active_home(home).root / "apt/state.json"
@@ -156,7 +157,7 @@ def list_environments(home):
 
 
 def _publish(home, name, script, origin, description, parent=None):
-    revision = new_id("env")
+    revision = new_id("env", root=_base(home, name, create=True) / "revisions")
     directory = _inside(home, _base(home, name) / "revisions" / revision)
     directory.mkdir(parents=True, mode=0o700)
     files = {"source.sh": script}
@@ -212,13 +213,14 @@ def repair(home, name, *, dry_run=False, workspace_sources=(), save_unchanged=Tr
     def inspect():
         previous = show(home, name, strict=True)
         script = Path(previous["path"]) / "source.sh"
-        directory = _inside(home, base / "repairs" / new_id("repair"))
+        directory = _inside(home, base / "repairs" / "preview")
         operation = Repair(script, directory, dry_run, workspace_sources=workspace_sources)
         content = operation.scan(script)
         report = operation.report(changed=content != operation.originals[script],
                                   name=name, previous_revision=previous["revision"],
                                   activation=previous["activation"])
         if not dry_run and (report["changed"] or save_unchanged):
+            content = operation.allocate(content)
             operation.save(report)
             if report["changed"]:
                 selected = _publish(home, name, content.encode("utf-8"),

@@ -25,7 +25,7 @@ def compare(home: ForgeHome, older_id: str, newer_id: str) -> dict:
     missing = [str(directory / name) for directory in (old_dir, new_dir)
                for name in ("plan.json", "environment.json") if not (directory / name).is_file()]
     if missing:
-        result = {"schema_version": 1, "comparison_id": new_id("cmp"), "created_at": now(),
+        result = {"schema_version": 1, "comparison_id": new_id("cmp", root=home.root / "comparisons"), "created_at": now(),
                   "older_run_id": older_id, "newer_run_id": newer_id,
                   "status": "not_comparable", "missing_records": missing,
                   "steps": [], "check_passed": False}
@@ -77,7 +77,7 @@ def compare(home: ForgeHome, older_id: str, newer_id: str) -> dict:
             and all(s["before"] == s["after"] and not s["command_changed"] and not s["activation_changed"]
                     and all(a["equal"] for a in s["artifacts"]) for s in changes))
     status = "not_comparable" if not comparable else ("equal" if same else "different")
-    result = {"schema_version": 1, "comparison_id": new_id("cmp"), "created_at": now(),
+    result = {"schema_version": 1, "comparison_id": new_id("cmp", root=home.root / "comparisons"), "created_at": now(),
               "older_run_id": older_id, "newer_run_id": newer_id, "status": status,
               "suite_changed": old_plan["suite_sha256"] != new_plan["suite_sha256"],
               "environment_changed": old_env != new_env or any(s["activation_changed"] for s in changes), "steps": changes,

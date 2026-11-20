@@ -156,7 +156,10 @@ else:
     for item in config["fetch"]:
         archive = archives[item["id"]]
         item.update(url=archive.as_uri(), sha256=digest(archive))
-        shutil.copyfile(archive, cache / item["sha256"])
+        from jarvis_forge.package_operations import archive_path
+        cached = archive_path(home, item, create=True)
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(archive, cached)
     physics.write_text(yaml.safe_dump(config, sort_keys=False))
     with pytest.raises(ForgeError, match="No compatible installed software for generator"):
         bench.plan(home, physics)

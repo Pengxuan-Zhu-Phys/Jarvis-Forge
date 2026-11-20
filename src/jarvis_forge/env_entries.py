@@ -12,6 +12,7 @@ import re
 import shlex
 
 from .build_names import app_name
+from .paths import named_path
 from .storage import ForgeError, ForgeHome, identifier, read_json, write_json, write_text
 
 
@@ -45,9 +46,9 @@ def _inside(home, path):
     return path
 
 
-def directory(home, name):
+def directory(home, name, *, create=False):
     identifier(name)
-    return _inside(home, home.root / "env" / name)
+    return _inside(home, named_path(home.root / "env", name, create=create))
 
 
 def _selection_path(home):
@@ -251,8 +252,8 @@ def _write(home, name, *, kind, description, revision, profile, backend, builds,
     choices = {}
     if managed:
         choices = _app_choices(home) if app_choices is None else app_choices
-    folder = directory(home, name)
-    activation = folder / "activate.sh"
+    folder = directory(home, name, create=True)
+    activation = home.root / "activate.sh" if managed and name == "apt" else folder / "activate.sh"
     scripts = [Path(backend)] if backend else []
     if managed:
         scripts.append(home.root / "env/toolchain.sh")

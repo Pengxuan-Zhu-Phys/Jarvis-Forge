@@ -10,7 +10,8 @@ from tempfile import TemporaryDirectory
 from .downloads import unpack
 from .package_operations import _inside, run_command, verified_archive
 from .storage import ForgeError, write_text
-from .unified_profiles import _host_id, host
+from .unified_profiles import host
+from .paths import object_path
 
 
 VERSION = "2.8.1"
@@ -34,8 +35,9 @@ def bin_dir(home, op, env, *, jobs, timeout, progress=None):
     if shutil.which("patch", path=path):
         return None
     current = host()
-    tools = home.root / "spack/bootstrap-tools" / _host_id(current)
-    binary = _inside(home, tools / f"patch-{VERSION}/bin/patch")
+    tools = object_path(_inside(home, home.root / "spack/bootstrap-tools"), "patch",
+                        {"host": current, "version": VERSION, "source": SOURCE}, create=True)
+    binary = _inside(home, tools / "bin/patch")
     if binary.is_file() and os.access(binary, os.X_OK):
         return binary.parent
 

@@ -125,7 +125,7 @@ def snapshot(runtime_only=False, policy=None, overwrite=(), omit_cached_build_de
         else:
             installed = bool(spec.external or spack.store.STORE.db.query_one(spec))
         prefix_matches = False
-        if not spec.external and spack.store.STORE.layout.projections == {"all": "{name}"} and (installed or Path(spec.prefix).exists()):
+        if not spec.external and spack.store.STORE.layout.projections.get("all") == "{name}" and (installed or Path(spec.prefix).exists()):
             # Read and verify .spack/spec.json through Spack itself. Forge does
             # not introduce its own prefix metadata format or overwrite policy.
             from spack.directory_layout import DirectoryLayoutError

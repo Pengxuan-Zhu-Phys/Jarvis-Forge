@@ -11,7 +11,7 @@ Options
   --python <version>       Select a CPython patch version (default: 3.13.15).
   --install-build-deps     Install macOS build dependencies through Homebrew.
                           Linux prepares missing Python libraries locally by default.
-  --upgrade               Upgrade Jarvis-Forge in the selected virtual environment.
+  --upgrade               Upgrade Jarvis-Forge in this pyenv Python installation.
   --shell-config          Register activate.sh in your Bash/Zsh startup files.
   --no-shell-config       Print a source command without editing startup files (default).
   -h, --help              Show this message and exit.
@@ -235,11 +235,9 @@ else
     printf 'Using pyenv at %s (root %s)\n' "$pyenv_bin" "$pyenv_root" >&2
 fi
 
-python_identity() {
+validate_python() {
 "$base_python" -I - "$python_version" <<'PY'
-import hashlib
 import importlib
-import os
 import sys
 
 if sys.implementation.name != "cpython" or ".".join(map(str, sys.version_info[:3])) != sys.argv[1]:
@@ -252,11 +250,10 @@ for name in ("bz2", "ctypes", "curses", "curses.panel", "lzma", "readline", "sql
         errors.append(f"{name}: {error}")
 if errors:
     sys.exit("Python modules unavailable:\n  " + "\n  ".join(errors))
-print(hashlib.sha256(os.fsencode(os.path.realpath(sys.executable))).hexdigest()[:16])
 PY
 }
 
-if [[ ! -x "$base_python" ]] || ! python_id=$(python_identity 2> "$state_dir/logs/python-validation.log"); then
+if [[ ! -x "$base_python" ]] || ! validate_python 2> "$state_dir/logs/python-validation.log"; then
     if [[ "$platform" == Linux ]]; then
         prepare_linux_libraries
     elif "$install_deps"; then
@@ -271,7 +268,7 @@ if [[ ! -x "$base_python" ]] || ! python_id=$(python_identity 2> "$state_dir/log
     fi
     PYENV_ROOT="$pyenv_root" "$pyenv_bin" install "${python_install_args[@]}" "$python_version" >&2 ||
         fail "Could not install $python_version in $pyenv_root. See $state_dir/logs for library build logs."
-    if ! python_id=$(python_identity 2> "$state_dir/logs/python-validation.log"); then
+    if ! validate_python 2> "$state_dir/logs/python-validation.log"; then
         cat "$state_dir/logs/python-validation.log" >&2
         fail "Python validation failed at $base_python. Check $state_dir/logs/python-validation.log."
     fi
@@ -283,30 +280,29 @@ if [[ ! -e "$pyenv_root/version" && ! -L "$pyenv_root/version" ]]; then
     PYENV_ROOT="$pyenv_root" "$pyenv_bin" global "$python_version"
 fi
 
-venv="$state_dir/venvs/$python_version-$python_id"
 mkdir -p "$state_dir/bin"
-if ! "$venv/bin/python" -I -m pip --version >/dev/null 2>&1; then
-    "$base_python" -I -m venv "$venv"
-fi
-pip_args=(install)
+pip_args=(install --no-user)
 if "$upgrade_package"; then
     pip_args+=(--upgrade)
 fi
-"$venv/bin/python" -I -m pip --require-virtualenv "${pip_args[@]}" Jarvis-Forge >&2
+"$base_python" -I -m pip "${pip_args[@]}" Jarvis-Forge >&2
+PYENV_ROOT="$pyenv_root" "$pyenv_bin" rehash
 
 launcher="$state_dir/bin/jforge"
 if [[ -e "$launcher" && ! -L "$launcher" ]]; then
-    fail "Move the existing file at $launcher before retrying."
+    if [[ ! -f "$launcher" ]] || ! grep -Fqx '# Jarvis-Forge bootstrap launcher' "$launcher"; then
+        fail "Move the existing file at $launcher before retrying."
+    fi
 fi
-launcher_target="$venv/bin/jforge-isolated"
-launcher_tmp=$(mktemp "$venv/bin/.jforge.XXXXXX")
-printf '#!/bin/bash\nexport JFORGE_HOME=${JFORGE_HOME:-%q}\nif [ "${1-}" = __jforge_controller_python ]; then\n    shift\n    exec %q -I -B "$@"\nfi\nexport JFORGE_CONTROLLER_LAUNCHER=%q\nexec %q -I -m jarvis_forge "$@"\n' \
-    "$bootstrap_root/jforge" "$venv/bin/python" "$launcher" "$venv/bin/python" > "$launcher_tmp"
+launcher_tmp=$(mktemp "$state_dir/bin/.jforge.XXXXXX")
+# Keep the stable command used by saved Spack adapters, backed by the same
+# pyenv base interpreter that users upgrade with python -m pip.
+printf '#!/bin/bash\n# Jarvis-Forge bootstrap launcher\nexport JFORGE_HOME=${JFORGE_HOME:-%q}\nif [ "${1-}" = __jforge_controller_python ]; then\n    shift\n    exec %q -I -B "$@"\nfi\nexport JFORGE_CONTROLLER_LAUNCHER=%q\nexec %q -I -m jarvis_forge "$@"\n' \
+    "$bootstrap_root/jforge" "$base_python" "$launcher" "$base_python" > "$launcher_tmp"
 chmod u+x "$launcher_tmp"
 "$launcher_tmp" --version
 JFORGE_HOME="$bootstrap_root/jforge" XDG_CONFIG_HOME="$bootstrap_root/config" "$launcher_tmp" init >/dev/null
-mv -f "$launcher_tmp" "$launcher_target"
-ln -sfn "$launcher_target" "$launcher"
+mv -f "$launcher_tmp" "$launcher"
 
 activation_file="$bootstrap_root/activate.sh"
 [[ ! -d "$activation_file" ]] || fail "Move the existing directory at $activation_file before retrying."

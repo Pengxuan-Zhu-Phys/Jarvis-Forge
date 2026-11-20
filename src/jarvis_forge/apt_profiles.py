@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 
+from .paths import named_path
 from .storage import ForgeError, ForgeHome, identifier, read_json, write_json
 from .package_operations import _inside, environment_path, locked, operation
 
@@ -15,6 +16,12 @@ def configured(home):
 
 
 def backend_name(home):
+    metadata = home.root / "apt/profile.json"
+    inputs = home.root / "apt/profile-input.json"
+    value = (read_json(metadata) if metadata.is_file() else
+             read_json(inputs).get("inputs", {}).get("preset", {}) if inputs.is_file() else {})
+    if value.get("backend") in {"homebrew", "spack"}:
+        return value["backend"]
     is_brew_profile = (home.root.name.startswith("homebrew-")
                        and home.root.parent.name == "profiles" and home.root.parent.parent.name == "apt")
     return "homebrew" if is_brew_profile or _is_configured_homebrew(home) else "spack"
@@ -41,7 +48,7 @@ def _selection(base):
 
 
 def _profile(base, profile_id):
-    return ForgeHome(_inside(base, base.root / "apt/profiles" / identifier(profile_id)))
+    return ForgeHome(_inside(base, named_path(base.root / "apt/profiles", identifier(profile_id))))
 
 
 def _native_profile(base):
@@ -54,7 +61,7 @@ def _recorded_profile(base, record):
         return None
     if record.get("location") == "root":
         return base if selected == "direct" and configured(base) else None
-    if selected and selected.startswith(("spack-", "homebrew-")):
+    if selected and selected not in {"legacy", "direct"}:
         target = _profile(base, selected)
         if (target.root / "config.json").is_file() and (
                 record.get("pending") or configured(target) or _is_configured_homebrew(target)):
@@ -85,7 +92,7 @@ def active_home(base):
 
 def archived_homes(base):
     homes = [base] + [
-        _profile(base, path.parent.name)
+        ForgeHome(_inside(base, path.parent))
         for path in sorted((base.root / "apt/profiles").glob("*/config.json"))
     ]
     return [
@@ -93,7 +100,7 @@ def archived_homes(base):
         for home in homes
         if not configured(home) and not _is_configured_homebrew(home)
         and (
-            any((home.root / "packages").glob("*/*/*/manifest.json"))
+            any((home.root / "packages").rglob("manifest.json"))
             or any(
                 (home.root / "apt" / name).exists()
                 for name in ("state.json", "official.json", "sources.json")
@@ -121,7 +128,7 @@ def profiles(base, *, archived=False):
     recorded = _recorded_profile(base, record)
     homes = [base] if configured(base) else []
     for path in sorted((base.root / "apt/profiles").glob("*/config.json")):
-        target = _profile(base, path.parent.name)
+        target = ForgeHome(_inside(base, path.parent))
         if read_json(path).get("toolchain_store") and target != selected:
             continue
         if configured(target) or _is_configured_homebrew(target):
@@ -139,7 +146,7 @@ def profiles(base, *, archived=False):
         for home in homes
     ]
     missing = record.get("id", "")
-    if (missing == "direct" or missing.startswith(("spack-", "homebrew-"))) and (
+    if missing and missing != "legacy" and (
             record.get("platform") in {None, sys.platform} and recorded is None):
         missing_path = base if missing == "direct" else _profile(base, missing)
         row = {"id": missing, "path": str(missing_path.root), "backend": backend_name(missing_path),
@@ -292,7 +299,7 @@ def _save_selection(base, target, profile_id, result):
 def use(base, name):
     """Select an existing profile without bootstrapping or installing packages."""
     identifier(name)
-    ids = [name] if name == "direct" or name.startswith(("spack-", "homebrew-")) else [
+    ids = [name] if name == "direct" or _profile(base, name).root.is_dir() else [
         identifier(kind + "-" + name) for kind in ("spack", "homebrew")]
     candidates = [(profile_id, base if profile_id == "direct" else _profile(base, profile_id)) for profile_id in ids]
     found = [(profile_id, target) for profile_id, target in candidates
@@ -315,7 +322,7 @@ def use(base, name):
 def create_homebrew(base, name):
     from . import homebrew_backend
 
-    profile_id = identifier("homebrew-" + identifier(name.removeprefix("homebrew-")))
+    profile_id = named_path(base.root / "apt/profiles", identifier("homebrew-" + identifier(name.removeprefix("homebrew-"))), create=True).name
     target = _profile(base, profile_id)
     config = homebrew_backend.discover()
     with locked(base), operation(base, "create", {"profile": profile_id, "backend": "homebrew"}) as (_, result):
@@ -328,7 +335,7 @@ def create_homebrew(base, name):
 
 def switch(
     base, origin="spack", *, name="default", direct=False, progress=None, create_only=False, select=True, extensions=None,
-    toolchain_store=False,
+    toolchain_store=False, instance=None,
 ):
     from . import spack_backend as backend
 
@@ -352,7 +359,7 @@ def switch(
         ):
             result["bootstrap"] = prepared
             return _save_selection(base, base, "direct", result)
-    profile_id = identifier("spack-" + identifier(name))
+    profile_id = identifier(instance) if instance else named_path(base.root / "apt/profiles", identifier("spack-" + identifier(name)), create=True).name
     target = _profile(base, profile_id)
     with (
         locked(base),

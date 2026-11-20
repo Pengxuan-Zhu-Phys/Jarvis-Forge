@@ -302,6 +302,15 @@ class Repair:
                 "deferred": sum(item["status"] == "deferred" for item in self.items),
                 "settings": self.items, **extra}
 
+    def allocate(self, content):
+        old = self.directory
+        self.directory = old.parent / new_id("repair", root=old.parent)
+        content = content.replace(str(old) + "/", str(self.directory) + "/")
+        self.copies = {source: (self.directory / target.relative_to(old),
+                        text.replace(str(old) + "/", str(self.directory) + "/")) if text is not None else (target, text)
+                       for source, (target, text) in self.copies.items()}
+        return content
+
     def save(self, report):
         for path, original in self.originals.items():
             if path.read_bytes() != original.encode("utf-8"):
@@ -341,7 +350,7 @@ def repair_file(path, *, dry_run=False, workspace_sources=(), save_unchanged=Tru
     if path.is_symlink() or not path.is_file():
         raise ForgeError(f"Expected a regular activation script: {path}")
     path = path.resolve()
-    directory = path.parent / f".{path.name}.jforge-repairs" / new_id("repair")
+    directory = path.parent / ".jforge-repairs" / "preview"
 
     def verify_target():
         with path.open("rb") as stream:
@@ -357,6 +366,7 @@ def repair_file(path, *, dry_run=False, workspace_sources=(), save_unchanged=Tru
         content = repair.scan(path)
         report = repair.report(changed=content != repair.originals[path])
         if not dry_run and (report["changed"] or save_unchanged):
+            content = repair.allocate(content)
             repair.save(report)
             if report["changed"]:
                 write_text(path, content, mode=stat.S_IMODE(path.stat().st_mode))
@@ -380,7 +390,7 @@ def _artifact_repair_root(home, artifact):
 def _artifact_entry(home, artifact, root):
     from .package_operations import _inside
 
-    return _inside(home, root / digest(Path(artifact["activation"])) / "activate.sh")
+    return _inside(home, root / "runtime" / "activate.sh")
 
 
 def artifact_activation(home, artifact):
@@ -402,19 +412,20 @@ def repair_artifact(home, artifact, *, dry_run=False, workspace_sources=(), save
     original = _inside(home, Path(artifact["activation"]))
     root = _artifact_repair_root(home, artifact)
     entry = _artifact_entry(home, artifact, root)
-    if artifact.get("evidence", {}).get(str(original)) != entry.parent.name:
+    if artifact.get("evidence", {}).get(str(original)) != digest(original):
         raise ForgeError(f"Published activation is missing its recorded digest or has changed: {original}")
 
     def inspect():
         source = entry if entry.is_file() else original
-        operation = Repair(source, entry.parent / new_id("repair"), dry_run, workspace_sources=workspace_sources)
+        operation = Repair(source, entry.parent / "preview", dry_run, workspace_sources=workspace_sources)
         content = operation.scan(source)
         report = operation.report(changed=content != operation.originals[source])
         if not dry_run and (report["changed"] or save_unchanged):
-            if _artifact_entry(home, artifact, root) != entry:
+            if artifact.get("evidence", {}).get(str(original)) != digest(original):
                 raise ForgeError(f"Published activation changed during repair: {original}", code=1)
             if report["changed"]:
                 report["activation"] = str(entry)
+            content = operation.allocate(content)
             operation.save(report)
             if report["changed"]:
                 write_text(entry, content)
@@ -445,7 +456,7 @@ def repair_apt_profile(home, *, dry_run=False, save_unchanged=True):
             raise ForgeError("No Spack package environment has been published.")
         original = _inside(home, Path(state["activation"]))
         revision = original.parent
-        operation_id = new_id("repair")
+        operation_id = "preview"
         directory = _inside(home, revision / "repairs" / operation_id)
         if state.get("activation_repair"):
             current, modifications = repaired_runtime_environment(home, state, materialize=False)
@@ -480,6 +491,8 @@ def repair_apt_profile(home, *, dry_run=False, save_unchanged=True):
                 repaired.append({**row, "value": separator.join(kept)})
         report = operation.report(changed=rows != repaired, name="apt")
         if not dry_run and (report["changed"] or save_unchanged):
+            operation_id = new_id("repair", root=revision / "repairs")
+            directory = _inside(home, revision / "repairs" / operation_id)
             directory.mkdir(parents=True, mode=0o700)
             report["report"] = str(directory / "report.json")
             selected = None

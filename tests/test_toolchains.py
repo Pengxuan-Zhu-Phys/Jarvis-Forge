@@ -43,6 +43,7 @@ def test_install_bind_and_apply_toolchain(tmp_path, monkeypatch, linux_apt):
                               "root": True, "external": False}], "path": str(profile.root)}
 
     monkeypatch.setattr(apt_profiles, "switch", switch)
+    monkeypatch.setattr(spack_backend, "bootstrap", lambda *args, **kwargs: {})
     monkeypatch.setattr(spack_backend, "transact", install)
     monkeypatch.setattr(toolchains, "shutil", SimpleNamespace(which=lambda program: "/usr/bin/" + program))
     runtime = prefix / "lib64/libgcc_s.so.1"
@@ -51,7 +52,7 @@ def test_install_bind_and_apply_toolchain(tmp_path, monkeypatch, linux_apt):
     monkeypatch.setattr(toolchains, "_inspect", lambda record: ({}, {runtime.name: runtime}))
     permission = {"gcc": "14.3.0"}
     assert toolchains.install(home, "gcc@14.3.0", target="x86_64_v3", deprecated_versions=permission)["status"] == "installed"
-    name = "gcc-14.3.0-x86_64_v3"
+    name = toolchains.list_installed(home)[0]["id"]
     assert toolchains.install(home, "gcc@14.3.0", target="x86_64_v3")["status"] == "reused"
     assert calls == [["gcc@=14.3.0 languages=c,c++,fortran target=x86_64_v3"]]
     assert policies == [permission]

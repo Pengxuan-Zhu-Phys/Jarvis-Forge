@@ -24,7 +24,11 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def new_id(prefix: str) -> str:
+def new_id(prefix: str, *, root=None) -> str:
+    if root is not None:
+        from .paths import physical_name
+
+        return physical_name(root, prefix, {"object_id": uuid.uuid4().hex, "created_at": now()}, create=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return f"{prefix}-{stamp}-{uuid.uuid4().hex[:10]}"
 
@@ -167,7 +171,7 @@ class ForgeHome:
             package_name(name)
         base = self.root / "packages"
         records = []
-        for path in sorted(base.glob("*/*/*/manifest.json")):
+        for path in sorted(base.rglob("manifest.json")):
             item = read_json(path)
             required = ("name", "version", "install_id", "prefix")
             if not all(isinstance(item.get(key), str) for key in required):
@@ -198,5 +202,5 @@ class ForgeHome:
             item = self.show(path.parent.name)
             if suite is None or item.get("suite_id") == suite:
                 records.append(item)
-        return records
+        return sorted(records, key=lambda item: (item.get("started_at", ""), item["run_id"]), reverse=True)
 

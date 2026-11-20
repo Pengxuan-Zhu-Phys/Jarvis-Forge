@@ -130,7 +130,7 @@ def test_terminal_bar_uses_reported_package_completions_and_stops(monkeypatch):
         task = progress.live.tasks[progress.packages_task]
         assert task.total == 2 and task.completed == 0
         progress.output("stdout", b"[ ] abcdefg fixture@1.0 staging (0s)\r[ ] qwertyu other@2.0 build (2s)\n")
-        assert task.description == "Packages · 2 in flight"
+        assert task.description == "Packages · 2 running · 0 queued"
         first, second = progress.live.tasks[-2:]
         assert (first.description, second.description) == ("  fixture@1.0 · staging", "  other@2.0 · build")
         assert first.total is None and second.total is None
@@ -143,15 +143,84 @@ def test_terminal_bar_uses_reported_package_completions_and_stops(monkeypatch):
         for chunk in [b"[+] ignored other@1.0 /prefix\n", b"\x1b[32m[+] abc",
                       b"defg fixture@1.0 /prefix\x1b[0m", b"\n"]:
             progress.output("stdout", chunk)
-        assert task.completed == 1 and task.description == "Packages · 1 in flight"
+        assert task.completed == 1 and task.description == "Packages · 1 running · 0 queued"
         assert first not in progress.live.tasks and second in progress.live.tasks
         progress.output("stderr", b"[+] abcdefg fixture@1.0 /prefix\n")
         progress.output("stdout", b"[x] qwertyu other@2.0 failed: /log (3s)\n")
-        assert task.completed == 1 and task.description == "Packages · 0 in flight"
+        assert task.completed == 1 and task.description == "Packages · 0 running · 0 queued · 1 failed"
         assert second not in progress.live.tasks
     finally:
         progress.close()
     assert not progress.live.live.is_started
+
+
+def test_status_events_survive_concurrent_output_on_the_same_line(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    progress = AptProgress(Console(file=io.StringIO(), force_terminal=True, width=90))
+    try:
+        progress("[3/4] Install packages")
+        progress.installation_plan([
+            {"hash": "abcdefg123", "name": "fixture", "installed": False, "external": False},
+            {"hash": "qwertyu456", "name": "other", "installed": False, "external": False},
+        ])
+        progress.output("stdout", b"[ ] abcdefg fixture@1.0 build (2s)\n")
+        task = progress.live.tasks[progress.packages_task]
+        assert task.description == "Packages · 1 running · 1 queued"
+        # A configure prompt has no newline; another package finishes mid-line.
+        progress.output("stdout", b"checking if install accepts -p option... \x1b[32m[+] abc")
+        progress.output("stdout", b"defg fixture@1.0 /prefix (36s)\x1b[0m[ ] qwertyu other@2.0 build (1s)\n")
+        assert task.completed == 1 and task.description == "Packages · 1 running · 0 queued"
+        assert "abcdefg123" not in progress.in_flight
+        assert progress.live.tasks[-1].description == "  other@2.0 · build"
+        # Interleaved unknown status-like output must not change the plan.
+        progress.output("stdout", b"checking header... [+] unknown unrelated@1.0 /elsewhere\n")
+        assert task.completed == 1
+        progress.output("stdout", b"checking for malloc.h... [+] qwertyu other@2.0 /prefix (25s)\n")
+        assert task.completed == 2 and task.description == "Packages · 0 running · 0 queued"
+        assert not progress.in_flight
+    finally:
+        progress.close()
+
+
+@pytest.mark.parametrize("width", [40, 60, 80, 120])
+def test_aligned_package_rows_show_phase_and_total_time_separately(monkeypatch, width):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    progress = AptProgress(Console(file=io.StringIO(), force_terminal=True, width=width))
+    clock = [100.0]
+    progress.live.get_time = lambda: clock[0]
+    try:
+        progress("[1/4] Resolve dependencies")
+        progress("[3/4] Install packages")
+        progress.installation_plan([
+            {"hash": digest, "name": name, "installed": False, "external": False}
+            for digest, name in (("abcdefg123", "fixture"), ("qwertyu456", "other"), ("pending123", "queued"))
+        ])
+        progress.output("stdout", b"[ ] abcdefg fixture@1.0 configure (0s)\n")
+        package = progress.live.tasks[-1]
+        clock[0] = 175.0
+        progress.output("stdout", b"[ ] abcdefg fixture@1.0 configure (75s)\n")
+        assert package.fields["phase_started"] == 100.0
+        clock[0] = 220.0
+        progress.output("stdout", b"[ ] abcdefg fixture@1.0 build (2m0s)checking for header...\n")
+        assert package.fields["phase"] == "build" and package.fields["phase_started"] == 220.0
+        clock[0] = 250.0
+        progress.output("stdout", b"[+] qwertyu other@2.0 /prefix (1s)\n")
+        task = progress.live.tasks[progress.packages_task]
+        assert task.description == "Packages · 1 running · 1 queued"
+        screen = io.StringIO()
+        Console(file=screen, width=width, color_system=None).print(progress.live.get_renderable())
+        display = screen.getvalue()
+        assert "fixture@1.0" in display and "build" in display
+        assert "00:30" in display and "02:30" in display
+        assert "other@2.0" not in display
+        if width >= 80:
+            assert "Step 3/4" in display and "1/3" in display and "33%" in display
+            assert "Phase time" in display and "Total time" in display and "Activity" in display
+        assert "..." not in display and "\x1b[" not in display
+    finally:
+        progress.close()
 
 
 def test_in_flight_rows_clear_on_cache_miss_command_end_and_replan(monkeypatch):
@@ -164,24 +233,41 @@ def test_in_flight_rows_clear_on_cache_miss_command_end_and_replan(monkeypatch):
         progress.installation_plan([fixture])
         task = progress.live.tasks[progress.packages_task]
         progress.output("stdout", b"[ ] abcdefg fixture@1.0 fetching from build cache (0s)\n")
-        assert task.description == "Packages · 1 in flight"
+        assert task.description == "Packages · 1 running · 0 queued"
         progress.output("stdout", b"[ ] abcdefg fixture@1.0 no binary available (2s)\n")
-        assert task.description == "Packages · 0 in flight" and task.completed == 0
+        assert task.description == "Packages · 0 running · 1 queued" and task.completed == 0
         progress.output("stdout", b"[ ] abcdefg fixture@1.0 staging (0s)\n")
         progress.output("stdout", b"[+] abcdefg fixture@1.0 /prefix (2s)")
         progress.output_finished()
-        assert task.description == "Packages · 0 in flight" and task.completed == 1
+        assert task.description == "Packages · 0 running · 0 queued" and task.completed == 1
 
         progress.installation_plan([fixture])
         progress.output("stdout", b"[ ] abcdefg fixture@1.0 build (0s)\n")
         progress.output_finished()
-        assert task.description == "Packages · 0 in flight" and task.completed == 0
+        assert task.description == "Packages · 0 running · 1 queued" and task.completed == 0
 
         progress.output("stdout", b"[ ] abcdefg fixture@1.0 staging (0s)\n")
         progress.installation_plan([])
         assert not task.visible and not progress.in_flight
     finally:
         progress.close()
+
+
+def test_validated_success_clears_queued_work_even_if_a_display_event_was_missing(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    progress = AptProgress(Console(file=io.StringIO(), force_terminal=True, width=90))
+    progress("[3/4] Install packages")
+    progress.installation_plan([
+        {"hash": "abcdefg123", "name": "fixture", "installed": False, "external": False},
+        {"hash": "qwertyu456", "name": "other", "installed": False, "external": False},
+    ])
+    progress.output("stdout", b"[ ] abcdefg fixture@1.0 build (2s)\n")
+    progress.close(success=True)
+    task = progress.live.tasks[progress.packages_task]
+    assert task.completed == task.total == 2
+    assert task.description == "Packages · 0 running · 0 queued"
+    assert not progress.in_flight
 
 
 def test_download_activity_cleans_up_without_stopping_active_spack_progress(monkeypatch):
@@ -321,3 +407,47 @@ def test_apt_update_reports_partial_success_in_json(tmp_path, monkeypatch, capsy
     assert result["package_update"]["status"] == "passed"
     assert result["build_catalog"]["status"] == "failed"
     assert (home.root / result["build_catalog"]["path"] / "index.stderr.log").is_file()
+
+
+def test_completed_package_rows_remain_in_scrollback_when_next_package_starts(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    clock = [10.0]
+    screen = io.StringIO()
+    console = Console(file=screen, force_terminal=True, width=110, record=True)
+    progress = AptProgress(console)
+    progress.live.get_time = lambda: clock[0]
+    printed = []
+    original_print = console.print
+
+    def retain(*objects, **kwargs):
+        if objects and hasattr(objects[0], 'plain') and objects[0].plain.startswith('✓ '):
+            printed.append(objects[0].plain)
+        return original_print(*objects, **kwargs)
+
+    monkeypatch.setattr(console, 'print', retain)
+    try:
+        progress('[3/4] Install packages')
+        progress.installation_plan([
+            {'hash': 'abcdefg111', 'name': 'first', 'version': '1.0', 'external': False, 'installed': False},
+            {'hash': 'hijklmn222', 'name': 'next', 'version': '2.0', 'external': False, 'installed': False},
+        ])
+        progress.output('stdout', b'[ ] abcdefg first@1.0 build (0s)\n')
+        clock[0] = 75.0
+        progress.output('stdout', b'[+] abcdefg first@1.0 /prefix (65s)\n')
+        progress.output('stderr', b'[+] abcdefg first@1.0 /prefix (65s)\n')
+        progress.output('stdout', b'[ ] hijklmn next@2.0 build (0s)\n')
+        assert printed == ['✓ first@1.0 · installed · build 01:05 · total 01:05']
+        assert len(progress.completed_rows) == 1
+        assert progress.completed_rows[0]['elapsed_seconds'] == 65
+        assert set(progress.in_flight) == {'hijklmn222'}
+        clock[0] = 100.0
+        progress.output('stdout', b'[+] hijklmn next@2.0 /prefix (25s)\n')
+        progress.close(success=True)
+        assert len(printed) == 2
+        assert 'next@2.0 · installed' in printed[1]
+        retained = console.export_text()
+        assert all(row in retained for row in printed)
+        assert [row['elapsed_seconds'] for row in progress.completed_rows] == [65, 25]
+    finally:
+        progress.close()

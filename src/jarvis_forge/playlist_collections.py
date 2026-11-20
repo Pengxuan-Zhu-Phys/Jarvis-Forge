@@ -186,7 +186,7 @@ def show(home, selected, name):
 
 
 def _lock(home, selected):
-    return file_lock(library._state(home, selected) / "playlists.lock", blocking=True)
+    return file_lock(library._state(home, selected, create=True) / "playlists.lock", blocking=True)
 
 
 def create(home, selected, name, *, title, entries, goal=None, shelf=None, environment=None):

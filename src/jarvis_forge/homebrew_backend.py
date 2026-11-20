@@ -2,7 +2,6 @@
 
 from contextlib import contextmanager
 import fnmatch
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +13,7 @@ import sys
 from . import cmake
 from .package_operations import _inside, locked, operation
 from .shell_activation import activation
+from .paths import object_path
 from .storage import ForgeError, digest, new_id, read_json, write_json, write_text
 
 
@@ -332,7 +332,7 @@ def initialize(home, base, config):
     settings_file = _inside(home, home.root / "config.json")
     write_json(settings_file, {**read_json(settings_file), "apt_base_home": str(base.root)})
     write_json(file, config)
-    return _publish(home, [], [], new_id("brew"))
+    return _publish(home, [], [], new_id("brew", root=home.root / "environments/apt/revisions"))
 
 
 def _activation_intact(home, state):
@@ -373,11 +373,10 @@ def _writable(config):
 def _prefix_lock(config):
     import fcntl
 
-    key = hashlib.sha256(os.fsencode(config["prefix"])).hexdigest()
     cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache").expanduser()
-    directory = cache / "jarvis-forge/homebrew-locks"
+    directory = object_path(cache / "jarvis-forge/homebrew-locks", "brew", {"prefix": config["prefix"]}, create=True)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with (directory / key).open("a") as lock:
+    with (directory / "operation.lock").open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -466,7 +465,7 @@ def repair(home, *, dry_run=False):
                                 "status": "removed", "reason": "Homebrew keg is no longer selected"}
                                for i, row in enumerate(removed, 1)]}
         if changed and not dry_run:
-            revision = new_id("brew-repair")
+            revision = new_id("brew-repair", root=home.root / "environments/apt/revisions")
             published = _publish(home, roots, packages, revision)
             report["activation"] = published["activation"]
             report["report"] = str(Path(published["activation"]).parent / "report.json")

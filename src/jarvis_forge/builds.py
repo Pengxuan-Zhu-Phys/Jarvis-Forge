@@ -24,6 +24,7 @@ from .downloads import unpack
 from .environment_registry import show as registered_environment
 from .package_operations import run_command, verified_archive
 from .build_names import app_name
+from .paths import object_path, physical_name, named_path
 from .storage import ForgeError, ForgeHome, digest, identifier, new_id, now, read_json, write_json
 from .suite import UniqueLoader, expand
 
@@ -218,7 +219,7 @@ def source_cmake_lock(home, source):
                 break
     if gitdir is not None:
         return gitdir / "jforge-cmake.lock"
-    return home.root / "builds/source-locks" / hashlib.sha256(str(source).encode()).hexdigest() / "cmake.lock"
+    return object_path(home.root / "builds/source-locks", source.name, {"source": str(source)}, create=True) / "cmake.lock"
 
 
 def _apply_source_override(selected_graph, source):
@@ -237,45 +238,20 @@ def _apply_source_override(selected_graph, source):
 
 
 def _instance_directory(base, config, instance, *, installs=None):
-    legacy = base / instance
-    if legacy.exists():
-        return legacy
+    work = object_path(base, config["id"], {"instance": instance, "build": config["id"]}, create=True)
+    work.mkdir(parents=True, exist_ok=True)
+    write_json(work / ".jforge-instance.json", {"schema_version": 1, "instance": instance, "build": config["id"]})
+    return work
 
-    label = config["id"]
-    outputs = config.get("outputs", {})
-    if len(outputs) == 1:
-        output = next(iter(outputs.values()))
-        producer = next(step for step in config["steps"] if step["id"] == output["step"])
-        export = producer["with"]["export"]
-        if "${" not in export["package"] and "${" not in export["version"]:
-            package = re.sub(r"[^a-zA-Z0-9_.-]+", "-", export["package"]).strip(".-")
-            version = re.sub(r"[^a-zA-Z0-9_.-]+", "-", export["version"]).strip(".-")
-            label = "-".join(part for part in (package or label, version) if part)
-    # Bound the path component even for user-supplied package/version labels.
-    label = label[:100].rstrip(".-")
-    if re.fullmatch(r"[0-9a-f]{64}", label):
-        label += "-build"
-    marker = ".jforge-instance.json"
-    with file_lock(base.parent / f".{base.name}.lock"):
-        base.mkdir(exist_ok=True)
-        # Look for an existing identity before filling a gap in the numbering.
-        for work in base.iterdir():
-            if (not re.fullmatch(re.escape(label) + r"(?:-[0-9]+)?", work.name)
-                    or work.is_symlink() or not work.is_dir()):
-                continue
-            record = work / marker
-            if record.is_file() and not record.is_symlink() and read_json(record).get("instance") == instance:
-                return work
 
-        work = base / label
-        number = 1
-        while (work.exists() or work.is_symlink()
-               or (installs is not None and any(installs.glob(f"*/{work.name}")))):
-            number += 1
-            work = base / f"{label}-{number}"
-        work.mkdir()
-        write_json(work / marker, {"schema_version": 1, "instance": instance})
-        return work
+def artifact_key(home, build, instance, output, *, create=False):
+    return physical_name(home.root / "builds/artifacts", build,
+                         {"build": build, "instance": instance, "output": output}, create=create)
+
+
+def _artifact_exists(home, config, instance, name):
+    key = artifact_key(home, config["id"], instance, name)
+    return key is not None and (home.root / "builds/artifacts" / key / "manifest.json").is_file()
 
 
 @contextmanager
@@ -414,18 +390,18 @@ def _find_apt_instance(home, config, identity, apt):
     """Find a complete build whose installed apt DAG matches the current one."""
     folder = home.root / "builds/artifacts"
     build_identity = fingerprint(identity)
-    for path in sorted(folder.glob(config["id"] + "-*/manifest.json")):
+    for path in sorted(folder.glob("*/manifest.json")):
         value = read_json(path)
         if value.get("build_identity") != build_identity or value.get("apt") != apt:
             continue
         instance = value["instance"]
-        if all((folder / (config["id"] + "-" + instance[:20] + "-" + name) / "manifest.json").is_file()
+        if all(_artifact_exists(home, config, instance, name)
                for name in config.get("outputs", {})):
             return value["apt_input"]
     apt_input = apt["signature"]
     while True:
         instance = fingerprint({**identity, "apt_input": apt_input})
-        if not any((folder / (config["id"] + "-" + instance[:20] + "-" + name) / "manifest.json").is_file()
+        if not any(_artifact_exists(home, config, instance, name)
                    for name in config.get("outputs", {})):
             return apt_input
         apt_input = fingerprint(apt_input)
@@ -568,8 +544,8 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
 
     if jobs < 1:
         raise ForgeError("Jobs must be positive.")
-    run_id = identifier(resume) if resume else new_id("build")
-    directory = home.root / "runs" / run_id
+    run_id = identifier(resume) if resume else None
+    directory = home.root / "runs" / run_id if run_id else None
     if resume:
         home.require_initialized()
         request = read_json(directory / "request.json")
@@ -620,6 +596,10 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                 package = producer.get("with", {}).get("export", {}).get("package", "")
                 if excluded_outputs.intersection({app_name(required["id"]), app_name(package)}):
                     raise ForgeError(f"Build graph requires excluded output {required['id']}.")
+    if not resume:
+        run_id = new_id("build", root=home.root / "runs")
+        directory = home.root / "runs" / run_id
+        request["run_id"] = run_id
     directory.mkdir(parents=True, exist_ok=True)
     with file_lock(directory / "run.lock"):
         state_path = directory / "graph.lock.json"
@@ -629,7 +609,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
         if not resume:
             write_json(directory / "request.json", request)
             write_json(directory / "graph.json", selected_graph)
-        attempts = directory / "attempts" / new_id("attempt")
+        attempts = directory / "attempts" / new_id("attempt", root=directory / "attempts")
         attempts.mkdir(parents=True)
         result = {**request, "path": str(directory), "attempt": str(attempts), "status": "running", "nodes": {}}
         write_json(directory / "result.json", result)
@@ -656,7 +636,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
             config = node["config"]
             config_env = config.get("environment", {})
             old = state["nodes"].get(key, {})
-            node_dir = attempts / key[:16]
+            node_dir = object_path(attempts, config["id"], {"node": key}, create=True)
             node_dir.mkdir(exist_ok=True)
             (node_dir / "build.yaml").write_text(node["text"])
             if old.get("environment"):
@@ -781,7 +761,9 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
             with file_lock(work / "instance.lock"):
                 existing_outputs = {}
                 for name in config.get("outputs", {}):
-                    aid = identifier(config["id"] + "-" + instance[:20] + "-" + name)
+                    aid = artifact_key(home, config["id"], instance, name)
+                    if aid is None:
+                        continue
                     manifest = home.root / "builds/artifacts" / aid / "manifest.json"
                     if not manifest.exists():
                         continue
@@ -828,7 +810,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     content = resource["content"].encode("utf-8")
                     if hashlib.sha256(content).hexdigest() != resource["sha256"]:
                         raise ForgeError("Modified companion script snapshot.")
-                    frozen = work / "check-scripts" / resource["sha256"] / Path(resource["path"]).name
+                    frozen = object_path(work / "check-scripts", "check", {"sha256": resource["sha256"]}, create=True) / Path(resource["path"]).name
                     frozen.parent.mkdir(parents=True, exist_ok=True)
                     frozen.write_bytes(content)
                     archived = node_dir / "scripts" / resource["path"]
@@ -841,7 +823,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     if "path" in item:
                         source_dir = Path(item["path"])
                     else:
-                        target = work / "sources" / name
+                        target = named_path(work / "sources", name, create=True)
                         pending_archives[name] = (item, target)
                         source_dir = target / item.get("subdir", "")
                         if not source_dir.resolve().is_relative_to(target.resolve()):
@@ -876,7 +858,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                                 show_progress=progress is not None and not verbose and not as_json,
                             )
                             if workspace:
-                                local_archive = work / "downloads" / (name + "-" + source_spec["sha256"])
+                                local_archive = object_path(work / "downloads", name, source_spec, create=True) / "archive"
                                 local_archive.parent.mkdir(parents=True, exist_ok=True)
                                 shutil.copyfile(archive, local_archive)
                                 archive = local_archive
@@ -890,7 +872,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                             raise ForgeError(f"Source subdirectory missing: {bindings['sources.' + name]}")
                         del pending_archives[name]
                     options = interpolate(step["with"], bindings)
-                    step_dir = node_dir / step_id
+                    step_dir = named_path(node_dir, step_id, create=True)
                     step_dir.mkdir()
                     try:
                         record = _step(home, step, options, work, step_dir, environment, observed,
@@ -924,7 +906,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     if not producer.get("export"):
                         raise ForgeError("Output has no installation export.")
                     metadata = producer["export"]
-                    artifact_id = identifier(config["id"] + "-" + instance[:20] + "-" + name)
+                    artifact_id = artifact_key(home, config["id"], instance, name, create=True)
                     evidence = {**producer.get("evidence", {})}
                     for dep in records.values():
                         evidence.update(dep.get("evidence", {}))
@@ -1136,10 +1118,10 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
             raise ForgeError("binary_dir preset requires configure_preset.")
         build = cmake.preset_binary_dir(source, preset_name)
     else:
-        build = work / "build" / step["id"]
+        build = named_path(work / "build", step["id"], create=True)
     # An in-place artifact is the source tree. CBS writes CBS into that tree.
     prefix = source if options.get("in_place") else (
-        work / "install" / step["id"] if workspace else home.root / "builds/installs" / step["id"] / work.name)
+        named_path(work / "install", step["id"], create=True) if workspace else named_path(home.root / "builds/installs", step["id"], create=True) / work.name)
     lock = file_lock(source_cmake_lock(home, source), blocking=True,
                      message=f"CMake source is busy: {source}") if options.get("lock") == "source" else nullcontext()
     with lock:
@@ -1318,7 +1300,10 @@ def step_path(home, run_id, step_name, *, pending=False):
     for key, node in graph_value["nodes"].items():
         for step in node["ordered"]:
             if step_name in {step["id"], node["config"]["id"] + "." + step["id"]}:
-                candidate = attempt / key[:16] / step["id"]
+                node_directory = object_path(attempt, node["config"]["id"], {"node": key})
+                if node_directory is None:
+                    continue
+                candidate = named_path(node_directory, step["id"])
                 if candidate.is_dir() or pending:
                     matches.append(candidate)
     if len(matches) != 1:

@@ -17,6 +17,7 @@ import time
 from . import __version__
 from .environment import VARIABLES, probe_command
 from .environment_registry import verify as verify_environment
+from .paths import named_path
 from .storage import ForgeError, ForgeHome, digest, new_id, now, read_json, write_json
 from .suite import load_suite, make_plan
 
@@ -56,10 +57,10 @@ def execute(home: ForgeHome, suite_path: Path, progress=None, *, environment_nam
         raise ForgeError("The local runner currently supports POSIX systems; use WSL on Windows.")
     config = home.require_initialized()
     suite = load_suite(suite_path)
-    run_id = new_id("run")
+    run_id = new_id("run", root=home.root / "runs")
     run_dir = home.root / "runs" / run_id
-    plan = make_plan(suite, run_dir, home, environment_name)
-    run_dir.mkdir(parents=True, mode=0o700)
+    plan = make_plan(suite, run_dir, home, environment_name, materialize=True)
+    run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     request = {"schema_version": 1, "run_id": run_id, "suite_id": plan["suite_id"],
                "host_id": config["host_id"], "hostname": socket.gethostname(),
                "forge_version": __version__, "started_at": now(),
@@ -115,7 +116,7 @@ def execute(home: ForgeHome, suite_path: Path, progress=None, *, environment_nam
         statuses = {}
         for step in plan["steps"]:
             step_id = step["id"]
-            step_dir = run_dir / "steps" / step_id
+            step_dir = named_path(run_dir / "steps", step_id, create=True)
             step_dir.mkdir(parents=True, mode=0o700)
             record = {"id": step_id, "started_at": now(), "status": "running", "artifacts": {}}
             records.append(record)
@@ -133,12 +134,12 @@ def execute(home: ForgeHome, suite_path: Path, progress=None, *, environment_nam
         result["status"] = "interrupted"
         if records and records[-1]["status"] == "running":
             records[-1].update(status="interrupted", finished_at=now())
-            write_json(run_dir / "steps" / records[-1]["id"] / "result.json", records[-1])
+            write_json(named_path(run_dir / "steps", records[-1]["id"]) / "result.json", records[-1])
     except (OSError, ForgeError) as exc:
         result.update(status="failed", error=str(exc))
         if records and records[-1]["status"] == "running":
             records[-1].update(status="failed", reason=str(exc), finished_at=now())
-            write_json(run_dir / "steps" / records[-1]["id"] / "result.json", records[-1])
+            write_json(named_path(run_dir / "steps", records[-1]["id"]) / "result.json", records[-1])
     finally:
         result["finished_at"] = now()
         write_json(run_dir / "result.json", result)
@@ -197,7 +198,7 @@ def _execute_step(step, plan, run_dir, step_dir, record, event):
     if record["status"] == "passed":
         try:
             for name in step["artifacts"]:
-                destination = run_dir / "artifacts" / step["id"] / name
+                destination = named_path(run_dir / "artifacts", step["id"], create=True) / name
                 record["artifacts"][name] = _artifact(cwd / name, cwd, destination)
         except (ForgeError, OSError) as exc:
             record.update(status="failed", reason=str(exc))

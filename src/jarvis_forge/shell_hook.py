@@ -65,7 +65,7 @@ def _edit(home, path, shell, transform, *, dry_run):
         if checked.returncode:
             raise ForgeError(f"Cannot repair shell hook in {path}:\n{checked.stderr.strip()}")
         if not dry_run:
-            directory = _inside(home, home.root / "environments/hook-repairs" / new_id("hook"))
+            directory = _inside(home, home.root / "environments/hook-repairs" / new_id("hook", root=home.root / "environments/hook-repairs"))
             if original is not None:
                 backup = directory / "original.sh"
                 write_text(backup, original)

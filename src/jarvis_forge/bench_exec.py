@@ -17,6 +17,7 @@ import time
 import yaml
 
 from .package_operations import verified_archive
+from .paths import object_path
 from .storage import ForgeError, identifier, now, read_json, write_json, write_text
 from .suite import UniqueLoader
 
@@ -108,7 +109,7 @@ def prefetch(home, path):
     for item in card["fetch"]:
         archive = verified_archive(home, {"url": item["url"], "sha256": item["sha256"]}, logs / item["id"])
         if item.get("unpack"):
-            target = home.root / "cache" / "fetch" / f"{item['id']}-{item['sha256']}"
+            target = object_path(home.root / "cache/fetch", item["id"], {"sha256": item["sha256"]}, create=True)
             marker = target / ".jforge-fetch"
             from .builds import file_lock
             from .downloads import unpack
@@ -309,15 +310,14 @@ def _validate_executor(raw, name):
 
 
 def _fetch_path(home, item):
-    archive = home.root / "cache" / "downloads" / item["sha256"]
+    from .package_operations import archive_path
+    archive = archive_path(home, item)
     if item.get("unpack"):
-        target = home.root / "cache" / "fetch" / f"{item['id']}-{item['sha256']}"
-        if (target / ".jforge-fetch").is_file() and archive.is_file():
+        target = object_path(home.root / "cache/fetch", item["id"], {"sha256": item["sha256"]})
+        if target and (target / ".jforge-fetch").is_file() and archive and archive.is_file():
             return target
         return None
-    if archive.is_file():
-        return archive
-    return None
+    return archive if archive and archive.is_file() else None
 
 
 def _collect(prepared, directory, record):

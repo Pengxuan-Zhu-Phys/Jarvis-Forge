@@ -108,9 +108,10 @@ def test_linux_source_install_bootstraps_missing_patch_and_reuses_it(tmp_path, m
     b.run(home, b._install_args(4, "never"), op, "install-source", progress=progress)
     b.run(home, b._install_args(4, "auto"), op, "install-again", progress=progress)
     assert downloads.read_text() == "fetched\n"
-    assert (home.root / "cache/downloads" / checksum).read_bytes() == archive_data
+    from jarvis_forge.package_operations import archive_path
+    assert archive_path(home, {"sha256": checksum}).read_bytes() == archive_data
     assert phases == ["bootstrap-patch-configure", "bootstrap-patch-build", "bootstrap-patch-verify"]
-    binary, = (home.root / "spack/bootstrap-tools").glob("*/patch-*/bin/patch")
+    binary, = (home.root / "spack/bootstrap-tools").glob("*/bin/patch")
     assert os.access(binary, os.X_OK)
     assert f"export PATH={binary.parent}{os.pathsep}{host_bin}\n" in contexts[-1]
     assert os.environ["PATH"] == str(host_bin)
@@ -193,6 +194,19 @@ def managed(tmp_path, monkeypatch):
     engine = b.root(home) / "engine/1.2.2"
     (engine / "bin").mkdir(parents=True)
     (engine / "bin/spack").write_text("# placeholder, execution is intercepted")
+    # Runtime activation executes the pinned entry adapter. The fake engine
+    # supplies its module boundary while preserving each test's script body.
+    modules = engine / "lib/spack/spack"
+    modules.mkdir(parents=True)
+    (modules / "__init__.py").write_text("")
+    (modules / "main.py").write_text("import runpy, sys\ndef main():\n    runpy.run_path(sys.argv[0], run_name='__main__')\n")
+    (modules / "stage.py").write_text("class Stage:\n    def __init__(self, name=None, path=None): pass\n")
+    (modules / "store.py").write_text("def use_store(path, extra_data=None): pass\n")
+    (modules / "bootstrap").mkdir()
+    (modules / "bootstrap/__init__.py").write_text("")
+    (modules / "bootstrap/config.py").write_text("def is_bootstrapping(): return False\n")
+
+
     write_json(
         home.root / "apt/spack.json",
         {

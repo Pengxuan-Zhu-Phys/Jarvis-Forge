@@ -11,6 +11,8 @@ import yaml
 from . import cmake, builds
 from .environment_registry import show as registered_environment
 from .package_operations import run_command
+from .paths import object_path
+from .paths import named_path
 from .storage import ForgeError, digest, identifier, new_id, now, read_json, write_json
 from .suite import UniqueLoader
 
@@ -270,7 +272,7 @@ def run(home, path, *, full=False, selected=(), environment_name=None, jobs=1, p
     for check in reversed(loaded["ordered"]):
         if check["id"] in wanted:
             wanted.update(check.get("needs", []))
-    run_id = new_id("checker")
+    run_id = new_id("checker", root=home.root / "runs")
     directory = home.root / "runs" / run_id
     directory.mkdir(parents=True)
     request = {"kind": "checker", "run_id": run_id, "suite_id": config["id"], "started_at": now(), "full": full}
@@ -282,14 +284,15 @@ def run(home, path, *, full=False, selected=(), environment_name=None, jobs=1, p
                "environment_origin": origin, "observed": observed, "env_script": env_script,
                "environment_name": name, "jobs": jobs, "run_dir": directory}
     key = builds.fingerprint({"id": config["id"], "project": str(project)})
-    state_file = home.root / "checker/state" / (key + ".json")
+    state_object = object_path(home.root / "checker/state", "card", {"key": key}, create=True)
+    state_file = state_object / "state.json"
     result = {**request, "path": str(directory), "status": "running", "steps": []}
     write_json(directory / "result.json", result)
 
     from .build_logging import ProcessLog
     event = ProcessLog(directory / "checker.log", "Jarvis-Forge.Checker", progress)
 
-    with builds.file_lock(home.root / "checker/locks" / (key + ".lock")):
+    with builds.file_lock(state_object / "operation.lock"):
         baseline = read_json(state_file) if state_file.exists() else {"checks": {}}
         fingerprints, statuses = {}, {}
         try:
@@ -297,7 +300,7 @@ def run(home, path, *, full=False, selected=(), environment_name=None, jobs=1, p
                 check_id = check["id"]
                 if check_id not in wanted:
                     continue
-                step_dir = directory / "steps" / check_id
+                step_dir = named_path(directory / "steps", check_id, create=True)
                 step_dir.mkdir(parents=True)
                 record, token, slot = run_check(
                     home, check, context, step_dir, cached=baseline["checks"].get(check_id),

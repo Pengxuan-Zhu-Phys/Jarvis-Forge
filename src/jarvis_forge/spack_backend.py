@@ -12,10 +12,10 @@ import shlex
 import shutil
 import subprocess
 import sys
-import uuid
 
 import yaml
 
+from .paths import object_path, physical_name
 from .storage import ForgeError, ForgeHome, digest, identifier, now, read_json, write_json, write_text
 
 ENGINE_VERSION = "1.2.2"
@@ -113,23 +113,7 @@ def _saved_install_tree(home):
 
 def _new_install_tree(home):
     from .package_operations import _inside
-    from .storage import ForgeHome, identifier
-    config = read_json(home.root / "config.json")
-    base = ForgeHome(Path(config.get("apt_base_home", str(home.root))))
-    if base.root != home.root:
-        if not home.root.is_relative_to(base.root / "apt/profiles"):
-            raise ForgeError("Spack profile is outside its Forge home.")
-        name = identifier(home.root.name.removeprefix("spack-"))
-    else:
-        name = "_direct"
-    store = (_inside(home, home.root / "apps/packages") if config.get("profile_store")
-             else _inside(base, base.root / "apps" / name))
-    if config.get("toolchain_store"):
-        return {"root": str(store), "padded_length": False, "projections": {
-            "gcc": "{name}-{version}-{architecture.target}",
-            "all": "{name}-{version}-{architecture}-{hash:7}",
-        }}
-    return {"root": str(store), "padded_length": False,
+    return {"root": str(_inside(home, home.root / "pkg")), "padded_length": False,
             "projections": {"all": INSTALL_PROJECTION}}
 
 
@@ -252,6 +236,7 @@ def command(home, args, envdir=None):
         sys.executable,
         "-I",
         "-B",
+        str(Path(__file__).with_name("spack_entry.py")),
         str(_executable(home)),
         "--color=never",
         "-C",
@@ -365,6 +350,7 @@ def _config(home, repo, python):
         "config": {
             "install_tree": _saved_install_tree(home) or _new_install_tree(home),
             "build_stage": [str(root(home) / "stage")],
+            "stage_name": "{name}",
             "source_cache": str(root(home) / "sources"),
             "environments_root": str(root(home) / "environments"),
         },
@@ -405,7 +391,7 @@ def _unpack(home, source, directory, op, label):
     if directory.exists():
         return
     archive = verified_archive(home, source, op / label)
-    temporary = directory.with_name(directory.name + "." + uuid.uuid4().hex + ".tmp")
+    temporary = object_path(directory.parent / "unpack", label, {"source": source}, create=True)
     try:
         unpack(archive, temporary)
         entries = list(temporary.iterdir())
@@ -502,8 +488,8 @@ def bootstrap(home, *, progress=None, extensions=None):
         _check_python_location(home, selected)
         base = root(home)
         base.mkdir(parents=True, exist_ok=True)
-        engine = base / "engine" / ENGINE_VERSION
-        repo = base / "repositories" / REPO_COMMIT
+        engine = object_path(base / "engine", "spack", ENGINE, create=True)
+        repo = object_path(base / "repositories", "builtin", REPOSITORY, create=True)
         _unpack(home, ENGINE, engine, op, "engine-download")
         _unpack(home, REPOSITORY, repo, op, "repository-download")
         if previous:
@@ -714,7 +700,7 @@ def _gcc_runtime_target(home):
     host's generic target.
     """
     layout = _saved_install_tree(home) or _new_install_tree(home)
-    if not isinstance(layout, dict) or layout.get("projections") != {"all": INSTALL_PROJECTION}:
+    if not isinstance(layout, dict) or layout.get("projections", {}).get("all") != INSTALL_PROJECTION:
         return None
     installed = Path(layout["root"]) / "gcc-runtime" / ".spack" / "spec.json"
     if installed.is_file():
@@ -760,6 +746,26 @@ def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None)
     return directory
 
 
+def _short_package_names(home, envdir, packages):
+    """Configure literal Spack projections; full package names remain in JSON."""
+    file = envdir / ".jforge-config/config.yaml"
+    if not file.is_file():
+        return
+    config = yaml.safe_load(file.read_text())
+    layout = config.get("config", {}).get("install_tree", {})
+    projections = layout.get("projections", {})
+    if projections.get("all") != "{name}":
+        return
+    changed = False
+    for package in packages:
+        name = package["name"]
+        if not package["external"] and len(name.encode()) > 24 and name not in projections:
+            projections[name] = physical_name(home.root / "pkg", name, {"package": name}, create=True)
+            changed = True
+    if changed:
+        file.write_text(yaml.safe_dump(config, sort_keys=False))
+
+
 def _snapshot(home, envdir, op, label="snapshot", *, cache=None, overwrite=(),
               omit_cached_build_deps=False):
     bridge = Path(__file__).with_name("spack_bridge.py")
@@ -790,7 +796,7 @@ def _name_only_layout(envdir):
     if not file.is_file():
         return None
     layout = yaml.safe_load(file.read_text()).get("config", {}).get("install_tree", {})
-    if not isinstance(layout, dict) or layout.get("projections") != {"all": "{name}"}:
+    if not isinstance(layout, dict) or layout.get("projections", {}).get("all") != "{name}":
         return None
     return layout
 
@@ -924,7 +930,7 @@ def _validate_name_only_plan(plan, envdir):
         if package["external"]:
             continue
         prefix = Path(package["prefix"])
-        if prefix != store / package["name"]:
+        if prefix != store / layout["projections"].get(package["name"], package["name"]):
             raise ForgeError(f"Spack returned an unexpected name-only prefix: {prefix}", code=1)
         if (prefix.exists() or prefix.is_symlink()) and not package["installed"] and not package.get("prefix_matches"):
             raise ForgeError(f"{package['name']} already occupies {prefix} with another build; its metadata and files are preserved.",
@@ -1168,15 +1174,10 @@ def _publish(home, op, envdir, roots, snapshot):
         }
         from .package_operations import _inside
 
-        file = _inside(
-            home,
-            home.root
-            / "packages"
-            / row["name"]
-            / row["version"]
-            / row["hash"]
-            / "manifest.json",
-        )
+        receipt = object_path(_inside(home, home.root / "packages"), row["name"],
+                              {"name": row["name"], "version": row["version"], "hash": row["hash"]}, create=True)
+        file = receipt / "manifest.json"
+        record["manifest_key"] = str(file.relative_to(home.root / "packages"))
         if not file.exists():
             write_json(file, record)
         records.append(record)
@@ -1321,6 +1322,7 @@ def transact(
             run(home, flags, op, "concretize" + suffix, envdir=envdir,
                 timeout=timeout, progress=progress, patch_jobs=patch_jobs)
             dag = _snapshot(home, envdir, op, "dag" + suffix)
+            _short_package_names(home, envdir, dag["packages"])
             write_json(op / "dag.json", dag)
             _validate_deprecated_versions(dag["packages"], allowed)
             _validate_target(dag["packages"], target)
@@ -1603,11 +1605,12 @@ def update(home, *, progress=None):
         url = f"https://github.com/spack/spack-packages/archive/{head}.tar.gz"
         fetch(url, archive, op / "repository-download")
         pin = {"url": url, "sha256": digest(archive)}
-        cached = root(home).parent / "cache/downloads" / pin["sha256"]
+        from .package_operations import archive_path
+        cached = archive_path(home, pin, create=True)
         cached.parent.mkdir(parents=True, exist_ok=True)
         if not cached.exists():
             shutil.copy2(archive, cached)
-        destination = root(home) / "repositories" / head
+        destination = object_path(root(home) / "repositories", "builtin", pin, create=True)
         _unpack(home, pin, destination, op, "repository-verified-download")
         value = settings(home)
         from . import recipe_releases

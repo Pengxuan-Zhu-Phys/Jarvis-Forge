@@ -1,11 +1,11 @@
 """Editable Release workspaces; project files stay outside the shared package store."""
 
-import hashlib
 import os
 from pathlib import Path
 import shlex
 
 from .shell_repair import WORKSPACE_HEADER, activation_lock
+from .paths import object_path
 from .storage import ForgeError, digest, identifier, read_json, write_json, write_text
 
 MARKER = ".jforge/workspace.json"
@@ -15,7 +15,7 @@ def workspace_candidates(home):
     """Read the workspace index and the requests created by older clients."""
     from .package_operations import _inside
 
-    for directory, pattern in (("builds/workspaces", "*.json"), ("runs", "build-*/request.json")):
+    for directory, pattern in (("builds/workspaces", "*/workspace.json"), ("runs", "*/request.json")):
         for record in sorted((home.root / directory).glob(pattern)):
             try:
                 value = read_json(_inside(home, record))
@@ -44,7 +44,7 @@ def locate(recipe):
 
 
 def create(home, source, directory):
-    from .build_catalog import copy_bundle, entries, snapshot_id
+    from .build_catalog import copy_bundle, entries, cached_recipe
     directory = directory.expanduser().resolve()
     if directory.exists() and not directory.is_dir():
         raise ForgeError(f"Workspace path is not a directory: {directory}")
@@ -53,13 +53,13 @@ def create(home, source, directory):
         if path.exists() or path.is_symlink():
             raise ForgeError(f"Workspace destination already contains {path}", hint="Choose a new directory.")
     output = copy_bundle(source, directory / "build.yaml", home=home)
-    release = next((row for row in entries(home) if source.parent.name == snapshot_id(row)), None)
+    release = next((row for row in entries(home) if source == cached_recipe(home, row)), None)
     write_json(directory / MARKER, {"schema_version": 1, "build": "build.yaml",
                "origin": str(source), "sha256": digest(source), "release": release, "home": str(home.root)})
     from .package_operations import _inside
 
-    key = hashlib.sha256(os.fsencode(directory)).hexdigest()
-    registration = _inside(home, home.root / "builds/workspaces" / (key + ".json"))
+    record = object_path(_inside(home, home.root / "builds/workspaces"), "workspace", {"workspace": str(directory)}, create=True)
+    registration = record / "workspace.json"
     write_json(registration, {"workspace": str(directory)})
     return output
 
