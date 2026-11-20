@@ -161,6 +161,8 @@ def unpack(archive: Path, destination: Path) -> None:
                         with package.extractfile(member) as src, path.open("xb") as dst:
                             shutil.copyfileobj(src, dst)
                         path.chmod((member.mode & 0o777) or 0o644)
+                        # Generated build files may depend on the archive's timestamp order.
+                        os.utime(path, (member.mtime, member.mtime))
         root = destination.resolve()
         for path, linkname, kind in links:
             link = PurePosixPath(linkname)
@@ -192,7 +194,7 @@ def unpack(archive: Path, destination: Path) -> None:
         for path, _, _ in links:
             if not path.resolve().is_relative_to(root):
                 raise ForgeError(f"Archive link chain escapes extraction root: {path}", code=1)
-    except (ForgeError, tarfile.TarError, zipfile.BadZipFile, OSError, UnicodeError, RuntimeError) as exc:
+    except (ForgeError, tarfile.TarError, zipfile.BadZipFile, OSError, OverflowError, UnicodeError, RuntimeError) as exc:
         for path in reversed(created_links):
             path.unlink(missing_ok=True)
         if isinstance(exc, ForgeError):

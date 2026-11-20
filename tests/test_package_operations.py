@@ -53,6 +53,20 @@ def test_archive_escape_and_special_files_are_rejected(tmp_path, kind):
     assert not (tmp_path / "outside").exists()
 
 
+def test_tar_unpack_preserves_generated_source_timestamps(tmp_path):
+    source = tmp_path / "autotools.tar"
+    timestamps = {"aclocal.m4": 1_700_000_002, "configure.ac": 1_700_000_000}
+    with tarfile.open(source, "w") as archive:
+        for name, mtime in timestamps.items():
+            member = tarfile.TarInfo(name)
+            member.mtime = mtime
+            archive.addfile(member)
+
+    destination = tmp_path / "unpacked"
+    unpack(source, destination)
+    assert {name: (destination / name).stat().st_mtime for name in timestamps} == timestamps
+
+
 def test_verified_archive_checksum_and_cache_revalidation(tmp_path):
     home = ForgeHome(tmp_path / "forge")
     home.initialize()

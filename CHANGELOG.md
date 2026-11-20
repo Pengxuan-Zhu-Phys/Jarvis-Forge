@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Preserve tar archive file timestamps during extraction so GNU patch builds can use the generated files shipped in its release archive.
+
 ## 1.1.14 — 2026-11-20
 ### Fixed
 
