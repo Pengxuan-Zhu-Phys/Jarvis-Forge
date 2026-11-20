@@ -184,6 +184,27 @@ def test_in_flight_rows_clear_on_cache_miss_command_end_and_replan(monkeypatch):
         progress.close()
 
 
+def test_download_activity_cleans_up_without_stopping_active_spack_progress(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    screen = io.StringIO()
+    progress = AptProgress(Console(file=screen, force_terminal=True, width=110))
+    try:
+        progress("[1/4] Resolve dependencies")
+        main_task, = progress.live.tasks
+        with pytest.raises(ForgeError, match="fixture failed"), progress.activity("Fetch source", download=True) as update:
+            update(1024, None)
+            assert "1.0/? KiB" in screen.getvalue()
+            update(2048, 4096)
+            assert "2.0/4.0 KiB" in screen.getvalue()
+            raise ForgeError("fixture failed")
+        assert progress.live.tasks == [main_task]
+        assert progress.live.live.is_started
+    finally:
+        progress.close()
+    assert not progress.live.live.is_started
+
+
 @pytest.mark.parametrize("kwargs", [{"as_json": True}, {"verbose": True}, {}])
 def test_plain_modes_disable_live_animation(monkeypatch, kwargs):
     monkeypatch.setenv("NO_COLOR", "1")
@@ -191,7 +212,10 @@ def test_plain_modes_disable_live_animation(monkeypatch, kwargs):
     progress = AptProgress(console, **kwargs)
     assert progress.live is None
     progress("[1/4] Resolve dependencies")
+    with progress.activity("Fetch source", download=True) as update:
+        assert update is None
     progress.close()
+    assert "Fetch source\n" in console.file.getvalue()
     assert "\x1b[" not in console.file.getvalue()
 
 

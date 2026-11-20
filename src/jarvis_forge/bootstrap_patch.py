@@ -1,5 +1,6 @@
 """Prepare the native patch executable needed before Spack can build from source."""
 
+from contextlib import nullcontext
 import os
 from pathlib import Path
 import shlex
@@ -19,6 +20,14 @@ SOURCE = {
 }
 
 
+def _activity(progress, description, *, download=False):
+    if activity := getattr(progress, "activity", None):
+        return activity(description, download=download)
+    if progress:
+        progress(description)
+    return nullcontext()
+
+
 def bin_dir(home, op, env, *, jobs, timeout, progress=None):
     """Return a managed bin directory when the host PATH lacks patch."""
     path = env.get("PATH", os.defpath)
@@ -34,10 +43,10 @@ def bin_dir(home, op, env, *, jobs, timeout, progress=None):
     make = shutil.which("make", path=path)
     if not cc or not make:
         raise ForgeError("Building GNU patch requires a host C compiler and make on PATH.")
-    if progress:
-        progress(f"Prepare GNU patch {VERSION} for source builds")
     tools.mkdir(parents=True, exist_ok=True)
-    archive = verified_archive(home, SOURCE, op / "bootstrap-patch-download", progress=progress)
+    name = f"GNU patch {VERSION}"
+    with _activity(progress, f"Fetch {name} source", download=True) as update:
+        archive = verified_archive(home, SOURCE, op / "bootstrap-patch-download", progress=update)
     with TemporaryDirectory(prefix=".patch-", dir=tools) as directory:
         work = Path(directory)
         unpack(archive, work / "source")
@@ -49,12 +58,15 @@ def bin_dir(home, op, env, *, jobs, timeout, progress=None):
         write_text(context, "".join(f"export {key}={shlex.quote(value)}\n" for key, value in variables.items()))
         candidate = source / "src/patch"
         for label, argv in (
-            ("configure", ["./configure", f"--prefix={binary.parent.parent}"]),
-            ("build", [make, "-j", str(jobs)]),
-            ("verify", [str(candidate), "--version"]),
+            ("Configure", ["./configure", f"--prefix={binary.parent.parent}"]),
+            ("Build", [make, "-j", str(jobs)]),
+            ("Verify", [str(candidate), "--version"]),
         ):
-            run_command(argv, source, context, op, f"bootstrap-patch-{label}", timeout, progress,
-                        process_env=env, combined_logs=getattr(progress, "combined_logs", None))
+            with _activity(progress, f"{label} {name}"):
+                run_command(argv, source, context, op, f"bootstrap-patch-{label.lower()}", timeout, progress,
+                            process_env=env, combined_logs=getattr(progress, "combined_logs", None))
         binary.parent.mkdir(parents=True, exist_ok=True)
         os.replace(candidate, binary)
+    if progress:
+        progress(f"{name} ready")
     return binary.parent

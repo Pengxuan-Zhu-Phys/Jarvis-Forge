@@ -1,5 +1,7 @@
 """Forge/Spack boundary tests; no scientific packages or network are required."""
 
+from hashlib import sha256
+import io
 import json
 import os
 from pathlib import Path
@@ -10,9 +12,11 @@ from types import SimpleNamespace
 from xml.etree import ElementTree
 
 import pytest
+from rich.console import Console
 import yaml
 
 from jarvis_forge import bootstrap_patch, spack_backend as b
+from jarvis_forge.apt_progress import AptProgress
 from jarvis_forge.apt_profiles import active_home, switch
 from jarvis_forge.cli import main
 from jarvis_forge.storage import ForgeError, ForgeHome, read_json, write_json
@@ -43,7 +47,8 @@ def test_spec_options_are_not_commands(requested):
         b.normalize(requested)
 
 
-def test_linux_source_install_bootstraps_missing_patch_and_reuses_it(tmp_path, monkeypatch):
+@pytest.mark.parametrize("terminal", [False, True])
+def test_linux_source_install_bootstraps_missing_patch_and_reuses_it(tmp_path, monkeypatch, terminal):
     home = ForgeHome(tmp_path / "forge")
     op = tmp_path / "operation"
     op.mkdir()
@@ -52,20 +57,33 @@ def test_linux_source_install_bootstraps_missing_patch_and_reuses_it(tmp_path, m
     for name in ("cc", "make"):
         (host_bin / name).symlink_to("/bin/sh")
     monkeypatch.setenv("PATH", str(host_bin))
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
     monkeypatch.setattr(b, "sys", SimpleNamespace(platform="linux", executable=sys.executable))
     monkeypatch.setattr(b, "command", lambda home, args, envdir: args)
     monkeypatch.setattr(bootstrap_patch, "host", lambda: {
         "system": "almalinux", "version": "9.9", "machine": "x86_64", "libc": "glibc 2.34",
     })
-    downloads = []
+    archive_data = b"GNU patch archive fixture"
+    checksum = sha256(archive_data).hexdigest()
+    monkeypatch.setattr(bootstrap_patch, "SOURCE", {**bootstrap_patch.SOURCE, "sha256": checksum})
+    downloads = tmp_path / "downloads"
+    curl = host_bin / "curl"
+    curl.write_text(
+        '#!/bin/sh\nif [ "$1" = --dump-header ]; then\n'
+        f'    printf "HTTP/1.1 200 OK\\r\\nContent-Length: {len(archive_data)}\\r\\n\\r\\n" > "$2"\n'
+        'fi\nwhile [ "$1" != --output ]; do shift; done\n'
+        f"printf '%s' {shlex.quote(archive_data.decode())} > \"$2\"\n"
+        f"printf '%s\\n' fetched >> {shlex.quote(str(downloads))}\n"
+    )
+    curl.chmod(0o700)
     phases = []
     contexts = []
-
-    def download(home, source, logs, **kwargs):
-        downloads.append(source)
-        return tmp_path / "archive"
+    screen = io.StringIO()
+    progress = AptProgress(Console(file=screen, force_terminal=terminal, width=110))
 
     def unpack(archive, target):
+        assert archive.read_bytes() == archive_data
         (target / f"patch-{bootstrap_patch.VERSION}/src").mkdir(parents=True)
 
     def build(argv, cwd, context, logs, label, timeout, progress, **kwargs):
@@ -80,17 +98,17 @@ def test_linux_source_install_bootstraps_missing_patch_and_reuses_it(tmp_path, m
         contexts.append(context.read_text())
         (logs / f"command-{label}.stdout.log").write_text("")
 
-    monkeypatch.setattr(bootstrap_patch, "verified_archive", download)
     monkeypatch.setattr(bootstrap_patch, "unpack", unpack)
     monkeypatch.setattr(bootstrap_patch, "run_command", build)
     monkeypatch.setattr("jarvis_forge.package_operations.run_command", run)
 
-    b.run(home, b._install_args(4, "only"), op, "install-cache")
-    assert downloads == [] and "export PATH=" not in contexts[-1]
-    b.run(home, ["concretize"], op, "concretize", patch_jobs=4)
-    b.run(home, b._install_args(4, "never"), op, "install-source")
-    b.run(home, b._install_args(4, "auto"), op, "install-again")
-    assert downloads == [bootstrap_patch.SOURCE]
+    b.run(home, b._install_args(4, "only"), op, "install-cache", progress=progress)
+    assert not downloads.exists() and "export PATH=" not in contexts[-1]
+    b.run(home, ["concretize"], op, "concretize", patch_jobs=4, progress=progress)
+    b.run(home, b._install_args(4, "never"), op, "install-source", progress=progress)
+    b.run(home, b._install_args(4, "auto"), op, "install-again", progress=progress)
+    assert downloads.read_text() == "fetched\n"
+    assert (home.root / "cache/downloads" / checksum).read_bytes() == archive_data
     assert phases == ["bootstrap-patch-configure", "bootstrap-patch-build", "bootstrap-patch-verify"]
     binary, = (home.root / "spack/bootstrap-tools").glob("*/patch-*/bin/patch")
     assert os.access(binary, os.X_OK)
@@ -100,6 +118,15 @@ def test_linux_source_install_bootstraps_missing_patch_and_reuses_it(tmp_path, m
     (host_bin / "patch").symlink_to("/bin/sh")
     b.run(home, b._install_args(4, "never"), op, "install-with-host-patch")
     assert "export PATH=" not in contexts[-1]
+    assert all(message in screen.getvalue() for message in (
+        "Fetch GNU patch", "Configure GNU patch", "Build GNU patch", "Verify GNU patch",
+        f"GNU patch {bootstrap_patch.VERSION} ready",
+    ))
+    if terminal:
+        assert f"{len(archive_data)}/{len(archive_data)} bytes" in screen.getvalue()
+        assert not progress.live.tasks and not progress.live.live.is_started
+    else:
+        assert "\x1b[" not in screen.getvalue()
 
 
 def test_fresh_queries_and_dry_run_are_offline(tmp_path, capsys):

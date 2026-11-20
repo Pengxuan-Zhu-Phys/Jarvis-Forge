@@ -3,19 +3,26 @@
 from __future__ import annotations
 
 import codecs
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
 import sys
 
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import BarColumn, DownloadColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.text import Text
 
 from .presentation import line
 
 
 class _KnownTotalColumn(MofNCompleteColumn):
+    def __init__(self):
+        super().__init__()
+        self.download = DownloadColumn(binary_units=True)
+
     def render(self, task):
+        if task.fields.get("download"):
+            return self.download.render(task)
         return Text() if task.total is None else super().render(task)
 
 
@@ -67,6 +74,28 @@ class AptProgress:
                 self.preparing = True
         else:
             line(self.console, self.indent + message)
+
+    @contextmanager
+    def activity(self, description, *, download=False):
+        if not self.live:
+            self(description)
+            yield None
+            return
+
+        started_here = not self.live.live.is_started
+        task = self.live.add_task(description, total=None, download=download)
+        if started_here:
+            self.live.start()
+
+        def update(completed, total):
+            self.live.update(task, completed=completed, total=total, refresh=True)
+
+        try:
+            yield update if download else None
+        finally:
+            self.live.remove_task(task)
+            if started_here:
+                self.live.stop()
 
     def installation_plan(self, packages, overwrite=()):
         self.pending = {p["hash"] for p in packages
@@ -158,6 +187,9 @@ class AptProgress:
             "install-cache": "Binary installation",
             "install-binaries": "Remaining binary installation",
             "install-source-retry": "Source installation",
+            "bootstrap-patch-configure": "Configure GNU patch",
+            "bootstrap-patch-build": "Build GNU patch",
+            "bootstrap-patch-verify": "Verify GNU patch",
         }.get(str(number), "Spack " + str(number))
         message = f"{title} failed (exit {code})."
         if not self.verbose:

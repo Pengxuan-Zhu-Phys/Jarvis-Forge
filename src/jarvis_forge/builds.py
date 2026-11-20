@@ -472,6 +472,10 @@ class _AptInstallProgress:
         self.record(message, component="APT", echo=False)
         self.display(message)
 
+    def activity(self, description, *, download=False):
+        self.record(description, component="APT", echo=False)
+        return self.display.activity(description, download=download)
+
     def installation_plan(self, packages, overwrite=()):
         self.display.installation_plan(packages, overwrite)
 
