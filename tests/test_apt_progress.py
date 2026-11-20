@@ -410,6 +410,8 @@ def test_apt_update_reports_partial_success_in_json(tmp_path, monkeypatch, capsy
 
 
 def test_completed_package_rows_remain_in_scrollback_when_next_package_starts(monkeypatch):
+    from rich.console import Group
+    from rich.table import Table
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.setenv("TERM", "xterm-256color")
     clock = [10.0]
@@ -421,8 +423,12 @@ def test_completed_package_rows_remain_in_scrollback_when_next_package_starts(mo
     original_print = console.print
 
     def retain(*objects, **kwargs):
-        if objects and hasattr(objects[0], 'plain') and objects[0].plain.startswith('✓ '):
-            printed.append(objects[0].plain)
+        if objects and isinstance(objects[0], (Table, Group)):
+            capture = io.StringIO()
+            Console(file=capture, width=110).print(objects[0])
+            text = capture.getvalue().rstrip()
+            if text.startswith('✓ '):
+                printed.append(text)
         return original_print(*objects, **kwargs)
 
     monkeypatch.setattr(console, 'print', retain)
@@ -437,7 +443,8 @@ def test_completed_package_rows_remain_in_scrollback_when_next_package_starts(mo
         progress.output('stdout', b'[+] abcdefg first@1.0 /prefix (65s)\n')
         progress.output('stderr', b'[+] abcdefg first@1.0 /prefix (65s)\n')
         progress.output('stdout', b'[ ] hijklmn next@2.0 build (0s)\n')
-        assert printed == ['✓ first@1.0 · installed · build 01:05 · total 01:05']
+        assert len(printed) == 1
+        assert printed[0].split() == ['✓', 'first@1.0', 'installed', 'build', '01:05', 'total', '01:05']
         assert len(progress.completed_rows) == 1
         assert progress.completed_rows[0]['elapsed_seconds'] == 65
         assert set(progress.in_flight) == {'hijklmn222'}
@@ -445,7 +452,9 @@ def test_completed_package_rows_remain_in_scrollback_when_next_package_starts(mo
         progress.output('stdout', b'[+] hijklmn next@2.0 /prefix (25s)\n')
         progress.close(success=True)
         assert len(printed) == 2
-        assert 'next@2.0 · installed' in printed[1]
+        assert printed[1].split() == ['✓', 'next@2.0', 'installed', 'build', '00:25', 'total', '00:25']
+        for column in ('installed', 'build', 'total'):
+            assert printed[0].index(column) == printed[1].index(column)
         retained = console.export_text()
         assert all(row in retained for row in printed)
         assert [row['elapsed_seconds'] for row in progress.completed_rows] == [65, 25]

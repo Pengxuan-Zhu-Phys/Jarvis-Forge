@@ -95,7 +95,9 @@ Successful package changes publish the stable entry even without a shell hook, a
 
 Spack package names are cached during import/update. `apt list` shows installed packages in the selected profile, with version, requested/dependency kind and state. Requested packages appear first, followed by dependencies, sorted by name. Use `apt list --available` or `apt search` for the cached package catalog. Complete catalog listings are printed as compact lines. Use `apt show <package>` for installation paths and instance metadata, or `--json` for complete records. `jforge apt instances` lists saved installation instances, and `jforge apt prefix` prints one prefix.
 
-JForge allocates instance directories with semantic names and short suffixes such as `ubuntu24-U1`, `root-A1` and `build-A1`. Full names, versions, host/CPU/Python identities, timestamps and checksums live in atomic JSON indexes and object records. Two-character suffixes are preferred; the decimal part grows only after the semantic name's two-character suffixes are exhausted. Completed packages remain as permanent terminal rows above the running package display, preserving their versions, final status and timing.
+JForge allocates instance directories with semantic names and short suffixes such as `ubuntu24-U1`, `root-A1` and `build-A1`. Full names, versions, host/CPU/Python identities, timestamps and checksums live in atomic JSON indexes and object records. Two-character suffixes are preferred; the decimal part grows only after the semantic name's two-character suffixes are exhausted.
+
+Completed packages remain as permanent terminal rows above the running package display, preserving their versions, final status and timing. Records use aligned package, state, phase and timing columns; narrow terminals place the details beneath each package.
 
 ## User directories and package queries
 

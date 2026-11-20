@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Align completed package records into stable package, state, phase and timing columns. Narrow terminals place details beneath each package, preserving full names and permanent completion records.
+
 ## 1.1.17 — 2026-11-21
 ### Fixed
 

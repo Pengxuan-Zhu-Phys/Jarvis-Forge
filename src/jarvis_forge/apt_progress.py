@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import sys
 
+from rich.console import Group
 from rich.progress import BarColumn, DownloadColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.progress_bar import ProgressBar
 from rich.table import Table
@@ -192,17 +193,43 @@ class AptProgress:
         elapsed = task.elapsed if task else None
         phase = task.fields["phase"] if task else None
         phase_time = task.get_time() - task.fields["phase_started"] if task else None
-        self.completed_rows.append({"hash": digest, "package": package, "status": status,
-                                    "phase": phase, "phase_seconds": phase_time, "elapsed_seconds": elapsed})
-        receipt = Text(self.indent + ("✓ " if status == "installed" else "✗ "),
-                       style="green" if status == "installed" else "red")
-        receipt.append(package, style="default")
-        receipt.append(" · " + status)
-        if phase is not None:
-            receipt.append(f" · {phase} {_duration(phase_time)} · total {_duration(elapsed)}", style="dim")
+        row = {"hash": digest, "package": package, "status": status,
+               "phase": phase, "phase_seconds": phase_time, "elapsed_seconds": elapsed}
+        self.completed_rows.append(row)
         # Console.print integrates with Rich Live: receipts enter terminal
         # scrollback, while only the running rows below keep refreshing.
-        self.console.print(receipt, soft_wrap=True)
+        self.console.print(self._package_receipt(row))
+
+    def _package_receipt(self, row):
+        """Use stable columns even when later packages have longer names."""
+        indent = Text(self.indent).cell_len
+        available = self.console.width - indent
+        style = "green" if row["status"] == "installed" else "red"
+        marker = Text(self.indent + ("✓" if row["status"] == "installed" else "✗"), style=style)
+        package = Text(row["package"])
+        status = Text(row["status"], style=style)
+        phase = Text(row["phase"] or "—", style="dim")
+        phase_time = Text(_duration(row["phase_seconds"]) if row["phase_seconds"] is not None else "—", style="dim")
+        total_value = _duration(row["elapsed_seconds"]) if row["elapsed_seconds"] is not None else "—"
+        total = Text("total " + total_value.rjust(8))
+
+        def grid(widths):
+            table = Table.grid(padding=(0, 1), pad_edge=False, collapse_padding=False)
+            for width, justify in widths:
+                table.add_column(width=width, justify=justify)
+            return table
+
+        if available >= 108:
+            table = grid([(indent + 1, "left"), (40, "left"), (9, "left"),
+                          (26, "left"), (8, "right"), (14, "right")])
+            table.add_row(marker, package, status, phase, phase_time, total)
+            return table
+        main = grid([(indent + 1, "left"), (max(12, min(40, available - 14)), "left"), (9, "left")])
+        main.add_row(marker, package, status)
+        details = grid([(indent + 3, "left"), (max(8, min(26, available - 40)), "left"),
+                        (8, "right"), (14, "right")])
+        details.add_row(Text(), phase, phase_time, total)
+        return Group(main, details)
 
     def output(self, stream, data):
         if self.verbose:
