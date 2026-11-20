@@ -1,7 +1,6 @@
 # Changelog
 
-## Unreleased
-
+## 1.1.14 — 2026-11-20
 ### Fixed
 
 - Fix the first-time GNU patch download in Linux Spack profiles. Show download progress by bytes in interactive terminals, report configuration, compilation, and verification, and keep progress messages on stderr in JSON mode.
