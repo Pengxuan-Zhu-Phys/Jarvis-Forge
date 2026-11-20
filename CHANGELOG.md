@@ -1,7 +1,6 @@
 # Changelog
 
-## Unreleased
-
+## 1.1.15 — 2026-11-20
 ### Added
 
 - Browse and search the playlist dashboard by project, album, or run. Follow live test results and preview output files from the dashboard, or explore the standalone demo. The source distribution includes a JarvisPLOT example library.
