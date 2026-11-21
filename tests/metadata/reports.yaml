@@ -6,6 +6,25 @@ scope:
   component: test-report-backend
   preconditions: Use the existing development Python; HTTP cases need temporary loopback sockets.
 definitions:
+- id: forge.reports.acceptance-metadata-consistency
+  title: Use identical metadata inputs for execution and acceptance status
+  purpose: Keep fresh acceptance valid and invalidate it when test definitions change.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_acceptance_status_binds_the_same_metadata_inputs_as_execution
+  scenario:
+    inputs:
+      suite: A committed local project with indexed test metadata.
+    action: Run acceptance, query status, change committed metadata, and run acceptance again.
+  criteria:
+  - id: fresh-and-stale
+    expected: Fresh status is accepted; changed metadata invalidates old evidence and refreshed execution restores acceptance.
+    verification: automated
+  failure_meaning: Execution and status disagree about the inputs bound to an acceptance report.
+  limitations:
+  - Uses disposable local repositories and no remote worker.
+  review:
+    status: draft
 - id: forge.reports.final-results
   title: Preserve final pytest outcomes and exact case logs
   purpose: Preserve final pytest outcomes and exact case logs.

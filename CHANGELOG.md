@@ -30,6 +30,7 @@
 
 - Honor explicit app versions independently of the current workspace. Include companion-only recipe changes in upgrades, protect local edits, and export the parameter values actually used by the build.
 - Inspect local build recipes without requiring an installed app or a compatible default profile.
+- Bind test metadata to the same acceptance inputs during execution and status queries, keeping fresh reports accepted and changed definitions stale.
 - Roll back initial app publication and failed version reactivation without leaving an enabled installation, and retain resumable failed-build evidence. Check selected Python before app environment mutations and serialize profile selection with removal.
 
 - Stop on binary-cache key import, empty-key and signature failures instead of silently falling back to source. Preserve ordinary missing-archive recovery and the original solver diagnostics.

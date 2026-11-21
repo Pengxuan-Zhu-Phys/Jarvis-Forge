@@ -142,6 +142,45 @@ def test_metadata_validation_is_static_strict_and_contained(tmp_path):
     with pytest.raises(ForgeError,match='leaves'):test_metadata.load(index)
 
 
+def test_acceptance_status_binds_the_same_metadata_inputs_as_execution(tmp_path, home):
+    from test_test_run import commit
+
+    root, card = project(tmp_path, profiles={"acceptance": ["unit"]},
+                         coverage={"paths": ["tests/test_*.py"]})
+    directory = root / "tests/metadata"
+    directory.mkdir()
+    index = directory / "index.yaml"
+    document = directory / "cases.yaml"
+    index.write_text(yaml.safe_dump({"schema_version": 1, "kind": "test-metadata-index",
+                                    "project_id": "demo", "documents": ["cases.yaml"]}))
+    metadata = {"schema_version": 1, "kind": "test-metadata", "project_id": "demo",
+                "scope": {"component": "arithmetic"}, "definitions": [{
+                    "id": "demo.no-output", "title": "No-output test",
+                    "purpose": "Verify a passing test can have no captured output.",
+                    "binding": {"adapter": "pytest", "selector": "tests/test_a.py::test_ok"},
+                    "scenario": {"inputs": {}, "action": "Execute the no-output test."},
+                    "criteria": [{"id": "pass", "expected": "The test passes.",
+                                  "verification": "automated"}],
+                    "failure_meaning": "The no-output execution regressed.",
+                    "limitations": ["Does not verify arithmetic operations."],
+                    "review": {"status": "draft"}}]}
+    document.write_text(yaml.safe_dump(metadata))
+    commit(root, "add metadata")
+    first = testing_run.run(home, card, profile="acceptance")
+    assert first["summary"]["accepted"]
+    assert testing_run.status(home, card)["accepted"]
+
+    metadata["definitions"][0]["purpose"] = "Verify the persisted no-output result."
+    document.write_text(yaml.safe_dump(metadata))
+    commit(root, "change metadata")
+    stale = testing_run.status(home, card)
+    assert not stale["accepted"]
+    assert "Declared test inputs changed." in stale["cards"][0]["reasons"]
+    refreshed = testing_run.run(home, card, profile="acceptance")
+    assert refreshed["runs"][0]["steps"][0]["status"] == "passed"
+    assert testing_run.status(home, card)["accepted"]
+
+
 def test_query_cursor_revision_filters_and_utf8_boundaries(tmp_path):
     rows=[{'instance_id':str(i),'native_id':f'test_{i}','title':'needle' if i==600 else 'other','state':'finished','outcome':'passed'} for i in range(635)]
     first=api.page(rows,'v1',{})

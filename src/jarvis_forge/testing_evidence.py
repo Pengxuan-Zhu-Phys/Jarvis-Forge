@@ -101,11 +101,22 @@ def snapshot(home, card, selection, environment_name, *, prepared=None, source=N
     except OSError as exc:
         problems.append(str(exc))
     inputs = {}
+    try:
+        from .test_metadata import project_metadata
+
+        metadata_inputs = [str(Path(name).relative_to(project))
+                           for name in project_metadata(project)["documents"]]
+    except (ForgeError, OSError) as exc:
+        metadata_inputs = []
+        problems.append(str(exc))
     for name in selection["ids"]:
         group = card["groups"].get(name)
         step = group or card["checks"][name]
         try:
-            manifest = checker.input_manifest(project, step.get("inputs", []))
+            patterns = step.get("inputs", [])
+            if group is not None:
+                patterns = list(dict.fromkeys([*patterns, *metadata_inputs]))
+            manifest = checker.input_manifest(project, patterns)
             if group is not None:
                 manifest["pytest-files"] = [(file, digest(project / file))
                                             for file in testing.group_files(card, group)]
