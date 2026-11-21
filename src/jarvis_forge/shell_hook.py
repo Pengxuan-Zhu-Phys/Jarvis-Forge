@@ -20,7 +20,7 @@ _INSTALL_END = "# <<< jforge pyenv setup <<<"
 _LOADER = r'''case $- in
     *i*)
         if [ "${_JFORGE_HOOK_LOADED-}" != 1 ] &&
-            _jforge_hook=$(command jforge apt shell-init 2>/dev/null); then
+            _jforge_hook=$(command jforge shell-init 2>/dev/null); then
             eval "$_jforge_hook" || :
         fi
         unset _jforge_hook
@@ -129,7 +129,7 @@ def repair_bootstrap(home, path, *, dry_run=False):
     def update(original):
         if original and not original.startswith(BOOTSTRAP_HEADER):
             return None
-        if ("_jforge_bootstrap_hook=$(command jforge apt shell-init); then" in original
+        if ("_jforge_bootstrap_hook=$(command jforge shell-init); then" in original
                 and 'eval "$_jforge_bootstrap_hook"' in original) or _LOADER in original:
             return None
         if not original:

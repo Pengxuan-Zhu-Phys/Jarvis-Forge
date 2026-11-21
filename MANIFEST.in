@@ -2,8 +2,9 @@ include CHANGELOG.md
 recursive-include examples/plot-library *.yaml *.json
 recursive-include tests *.py
 include tests/checker.yaml
+recursive-include tests/metadata *.yaml
 recursive-include tests/acceptance *.yaml
-recursive-include tests/fixtures *.json *.yaml
+recursive-include tests/fixtures *.json *.yaml *.html *.svg
 
 # Git ignores do not control source distributions.
 exclude jfrel
@@ -21,6 +22,7 @@ prune .twine
 global-exclude .DS_Store *.py[cod] .env .env.* .envrc .pypirc .pypirc.* .twinerc .pypi-token* release.env twine.env
 
 prune recipes
+include tools/build_test_report_fixtures.py
 include tools/build_recipe_assets.py
 prune builds
 include tools/build_project_assets.py

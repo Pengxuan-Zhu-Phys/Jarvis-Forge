@@ -191,7 +191,7 @@ def test_apt_environment_can_be_listed_but_not_overwritten(home, script, linux_a
     activation = target.root / "environments/apt/revisions/op/activate.sh"
     activation.parent.mkdir(parents=True)
     activation.write_text("export TEST_APT=1\n")
-    write_json(target.root / "apt/state.json", {"backend":"spack", "spack":{"roots":[], "packages":[]}, "activation": str(activation), "last_operation_id": "op"})
+    write_json(target.root / "packages.json", {"backend":"spack", "spack":{"roots":[], "packages":[]}, "activation": str(activation), "last_operation_id": "op"})
     assert list_environments(home)[0]["name"] == "apt"
     shown = show(home, "apt", strict=True)
     assert shown["backend_activation"] == str(activation)

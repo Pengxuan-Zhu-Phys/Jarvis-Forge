@@ -1,8 +1,25 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 — 2026-11-22
+
+### Breaking changes
+
+- Replace the old apt profile/toolchain and build run/resume interfaces with top-level `profile` and shared apt/build lifecycle verbs. Removed commands exit with usage errors and replacement guidance; no compatibility aliases are provided.
+- Require a fresh Forge home for the semantic platform/profile layout. Existing installation directories are not migrated or deleted automatically. Python remains external and managed by pyenv.
+- Require Jarvis-Forge 1.2.0 or newer for the refreshed build recipe catalog.
+
+### Added
+
+- Implement contract v1 for per-test inventories, persisted pytest phase events, authoritative progress, captured UTF-8 logs and deterministic HTML reports. Parameterized items retain independent identities and metadata snapshots; cancellation and fail-fast preserve unfinished states.
+- Add explicit test discovery, static metadata validation and draft scaffolding, per-case CLI reports and independent report rebuilding. Instrumented observations and registered evidence remain separate from manual review and formal acceptance.
+- Publish Forge-owned JSON Schema, OpenAPI and normative fixtures, and synchronize the complete Playlists v1.0.9 interface into the dashboard package. Authenticated report views allow same-origin embedding and capability-scoped relative resources while isolating test HTML.
 
 ### Changed
+
+- Separate shared platform tool suites from project profiles. Use semantic name-version prefixes, ordered histories and JSON identities; remove allocated suffixes, implicit Linux profile creation and old command compatibility.
+- Unify apt/build lifecycle verbs under top-level profile selection. Add exact history replay, managed-package export constraints, portable app recipe bundles, real native previews and explicit plan confirmation.
+- Manage internal and external app workspaces, automatic unchanged-input resume, version reactivation, protected removal and original-prefix rebuilding with rollback. Preserve profile ownership and receipts on failure and serialize package/app mutations per profile.
+- Reclaim unused native package prefixes and owned unreferenced Homebrew kegs while protecting shared, linked or natively required installations. Default compilation to node temporary storage with explicit stage overrides; keep persistent state under the Forge home.
 
 - Choose native build parallelism from process CPU affinity and cgroup limits. Remove manual job flags from apt, build and profile preparation; use Spack's global jobserver and 16 concurrent packages, and cap CMake/Homebrew package builds at 16 CPUs. Save the actual policy in operation results.
 - Prepare the Spack solver and signature tools during backend creation. Combine concretization, dependency-tree rendering and installation planning in one engine process; log actual engine calls and invalidate shared planning results when candidate inputs change.
@@ -11,7 +28,13 @@
 
 ### Fixed
 
+- Honor explicit app versions independently of the current workspace. Include companion-only recipe changes in upgrades, protect local edits, and export the parameter values actually used by the build.
+- Roll back initial app publication and failed version reactivation without leaving an enabled installation, and retain resumable failed-build evidence. Check selected Python before app environment mutations and serialize profile selection with removal.
+
 - Stop on binary-cache key import, empty-key and signature failures instead of silently falling back to source. Preserve ordinary missing-archive recovery and the original solver diagnostics.
+- Read per-test progress from persisted snapshots and resume event pages by byte cursor. Recover lost indexes and incomplete final appends without duplicating completed cases; detect stale discovery inputs and dependency identities without collecting tests from GET requests.
+- Preserve raw execution facts and cache reuse when rebuilding report presentation. Keep renderer or log-decoding errors separate from test outcomes, retain fixture XFAIL and strict XPASS policy, and leave unsupported command reuse outcomes unknown.
+- Restore persisted progress on completed album cards after page reload, omit false conditional DOM children, and report full definition variant counts independently of filters or pagination. Keep list and detail report-generation status consistent and verify bundled frontend contracts and asset hashes in regression tests.
 
 ## 1.1.17 — 2026-11-21
 ### Fixed

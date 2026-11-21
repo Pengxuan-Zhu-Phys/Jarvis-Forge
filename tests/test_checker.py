@@ -109,6 +109,8 @@ def test_always_run_prerequisite_invalidates_cached_dependents(tmp_path,home):
 
 
 def test_checker_executes_workflow_and_invalidates_changed_recipe(tmp_path,home):
+    from profile_fixtures import project_profile
+    project_profile(home)
     workflow=tmp_path/'flow.yaml'
     def write_flow(argv):
         workflow.write_text(yaml.safe_dump({'schema_version':1,'kind':'build','id':'flow','steps':[{'id':'smoke','uses':'command','with':{'argv':argv}}]}))

@@ -528,13 +528,18 @@ def build_artifacts(console, artifacts, *, installed=False):
         return
     title = "Installed apps" if installed else "Build artifacts"
     line(console, f"{title} ({len(artifacts)})", style="bold")
+    if installed:
+        _table(console,[('App','Version','State','Status','Location'), *[(item.get('name',app_name(item['build_id'])),
+                str(item['version']),'ON' if item.get('enabled') else 'OFF',item['status'],item['prefix']) for item in artifacts]])
+        line(console, "Inspect an app with jforge build show <app>.", style="dim")
+        return
     for item in artifacts:
         line(console)
         line(console, f"  {app_name(item['build_id'])} {item['version']} · {item['output']} · {item['status']}", style="cyan")
         line(console, "    ID  " + item["artifact_id"])
         line(console, "    " + item["prefix"])
     line(console)
-    line(console, "Find the activation script with jforge build env <app|output-id> --path.", style="dim")
+    line(console, "Find an installation with jforge build show <app> --path.", style="dim")
 
 
 def apt_profile_list(console, profiles, *, show_hint=True):
@@ -550,7 +555,7 @@ def apt_profile_list(console, profiles, *, show_hint=True):
         line(console, f"    {profile['path']}", style="dim")
     if show_hint:
         line(console)
-        line(console, "Select a package profile with jforge apt profile <name>.", style="dim")
+        line(console, "Select a package profile with jforge profile use <name>.", style="dim")
 
 
 def build_result(console, values, prog, resume_command, *, handed_off=False):
@@ -710,7 +715,7 @@ def environment_selection(console, command, values):
         line(console, "The apt file no longer sources it. This shell is unchanged.")
     elif values.get("shell") == "unchanged":
         line(console, "Saved for new shells. This shell is unchanged.")
-        line(console, 'Load the hook with: eval "$(command jforge apt shell-init)"', style="dim")
+        line(console, 'Load the hook with: eval "$(command jforge shell-init)"', style="dim")
 
 
 def _card_title(card):
@@ -728,6 +733,30 @@ def test_validate(console, values):
             line(console, f"  Profile {name}{default}: {', '.join(ids)}")
         for warning in card["warnings"]:
             line(console, f"  Warning: {warning}", style="yellow")
+
+
+def test_discovery(console, values):
+    line(console, "Test discovery: " + ("complete" if values['confirmed'] else "failed"), style="bold")
+    counts={adapter:sum(row['adapter']==adapter for row in values['items']) for adapter in ('pytest','command')}
+    line(console, f"  {counts['pytest']} pytest items · {counts['command']} checks · no test bodies executed")
+    field(console, "python", values['python'])
+    field(console, "inventory", values['inventory_path'])
+    for message in values.get('metadata_diagnostics',[]):
+        line(console, "  Metadata: " + message, style="yellow")
+    for error in values.get('errors',[]):
+        for entry in error.get('collection',{}).get('errors',[]):
+            line(console, f"  {error['step_id']}: {entry['message']}", style="red")
+
+
+def test_case_report(console, report):
+    line(console, report['title'], style="bold")
+    line(console, f"  {report.get('outcome') or report['state']} · {report['execution_mode']} · report {report['status']}")
+    for name in ('run_id','instance_id','native_id','metadata_status','purpose','reason','generation_error'):
+        if report.get(name):field(console, name, report[name])
+    if report.get('reused_from'):field(console, "reused_from", report['reused_from'])
+    for criterion in report.get('criteria',[]):
+        line(console, f"  [{criterion['status']}] {criterion['expected']} ({criterion['verification']})")
+    line(console, f"  {len(report.get('artifacts',[]))} registered evidence items")
 
 
 def test_plan(console, values):
@@ -934,8 +963,76 @@ def profile_check(console, values):
         field(console, "default profile", values["default"])
 
 
+def app_operation(console,command,values):
+    status=values.get('status','passed')
+    for run in values.get('runs',[]):
+        target=run.get('workspace') or run.get('suite_id','APP')
+        shown={**run,'outputs':[dict(row,name=name) for name,row in run.get('outputs',{}).items()]}
+        if run['status'] in {'failed','interrupted'}:
+            from .cli import _console
+            build_result(_console(stderr=True),shown,'jforge','jforge build install '+shlex.quote(str(target)))
+        else:build_result(console,shown,'jforge','jforge build install '+shlex.quote(str(target)))
+    if status in {'failed','interrupted'} and values.get('runs'):return
+    line(console,f"{command.capitalize()} · {status}",style='bold')
+    rows=values.get('apps',[])
+    if rows:
+        _table(console,[('App','Version','State','Location'), *[(row.get('name',row.get('app','')),str(row.get('version','')),
+               'ON' if row.get('enabled') else 'OFF' if 'enabled' in row else 'planned',str(row.get('prefix',''))) for row in rows]])
+    elif status=='passed':line(console,'  No app changes.')
+    if values.get('error'):
+        error=values['error'];line(console,error.get('message','') if isinstance(error,dict) else str(error),style='red')
+    if values.get('activation'):field(console,'activation',values['activation'])
+    for run in values.get('runs',[]):
+        if run.get('attempt'):field(console,'log',str(Path(run['attempt'])/'build.log'))
+    for plan in values.get('plans',[]):
+        changes=plan.get('changes',{})
+        for action,packages in changes.items():
+            if packages:line(console,'  '+action+': '+', '.join(row['name']+'@'+str(row.get('version','')) for row in packages))
+
+
 def render(console, command, values):
-    if command == "apt profile check":
+    if command=='profile export':
+        field(console,'profile export',values.get('path',values.get('output','stdout')))
+        return
+    if command in {'build install','build upgrade','build remove','build autoremove'}:
+        app_operation(console,command,values);return
+    if command=='build show' and 'app' in values:
+        row=values['app'];line(console,f"{row['name']} {row['version']} · {'ON' if row.get('enabled') else 'OFF'}",style='bold')
+        field(console,'prefix',row['prefix'])
+        if row.get('workspace'):field(console,'workspace',row['workspace'])
+        return
+    if command=='apt show':
+        package=values['package'];line(console,package['name'],style='bold')
+        for key in ('description','desc','homepage','license'):
+            if package.get(key):field(console,key,package[key])
+        if package.get('latest_version'):field(console,'latest version',package['latest_version'])
+        if package.get('versions'):field(console,'versions',', '.join(package['versions']))
+        package_rows(console,values['installed_instances'])
+        for row in values['installed_instances']:field(console,'prefix',row['prefix'])
+        return
+    if command=='profile':
+        line(console,'Platforms',style='bold')
+        for row in values['platforms']:
+            line(console,f"  {row['id']} · {row['preset']} · {row['status']}")
+        if not values['platforms']:line(console,'  None installed')
+        line(console,'Profiles',style='bold')
+        for row in values['instances']:
+            selected=' · default' if row['id']==values.get('default') else ''
+            line(console,f"  {row['id']} · {row['platform']} · {row['status']}{selected}")
+        if not values['instances']:line(console,'  None configured. Run jforge profile check.')
+        return
+    if command in {'profile create','profile use','profile show'}:
+        line(console,f"{values['id']} · {values.get('platform',values.get('preset',''))} · {values['status']}",style='bold')
+        if command=='profile show':
+            line(console,f"  {values['packages']} packages · {values['apps']} apps · Python {values['python']['version']}")
+            for row in values['history']:
+                line(console,f"  {row.get('history','')} · {row.get('action','')} · {row.get('status','')}")
+        field(console,'activation',values['activation'])
+        return
+    if command=='profile remove':
+        line(console,f"{values['name']} · {'would remove' if values['dry_run'] else 'removed'}")
+        return
+    if command in {'apt profile check','profile check'}:
         profile_check(console, values)
         return
     if command == "apt profile apps":
@@ -959,6 +1056,18 @@ def render(console, command, values):
     if command == "test validate":
         test_validate(console, values)
         return
+    if command == "test discover":
+        test_discovery(console, values)
+        return
+    if command == "test metadata validate":
+        line(console, f"Metadata: valid · {values['definitions']} definitions · {values['reviewed']} reviewed", style="bold")
+        line(console, "  Bindings checked" if values['binding_checked'] else "  Format checked; bindings not checked")
+        for message in values.get('diagnostics',[]):line(console, "  " + message, style="yellow")
+        return
+    if command == "test metadata scaffold":
+        line(console, f"Metadata drafts: {values['definitions']} definitions · review required", style="bold")
+        field(console, "output", values['output'])
+        return
     if command == "test plan":
         test_plan(console, values)
         return
@@ -975,6 +1084,9 @@ def render(console, command, values):
         test_history(console, values)
         return
     if command == "test report":
+        if values.get('kind') == 'test-case':
+            test_case_report(console, values['report'])
+            return
         if values.get("markdown"):
             console.print(values["markdown"], markup=False, highlight=False, end="")
             return
@@ -991,7 +1103,7 @@ def render(console, command, values):
     if command == "build list" and values.get("view") == "installed":
         build_artifacts(console, values["builds"], installed=True)
         return
-    if command in {"build list", "build update"}:
+    if command in {"build list", "build update", "build search"}:
         build_catalog(console, command, values)
         return
     if command == "build validate":
@@ -1001,9 +1113,9 @@ def render(console, command, values):
         return
     if command == "build fetch":
         line(console, "Recipe fetched.", style="bold")
-        field(console, "recipe", values["path"])
-        target = values.get("workspace") or values["path"]
-        line(console, "Build with jforge build run " + shlex.quote(target), style="dim")
+        field(console, "recipe", values.get("path",values.get("workspace")))
+        target = values.get("workspace") or values.get("path", "APP")
+        line(console, "Build with jforge build install " + shlex.quote(target), style="dim")
         return
     if command == "build artifacts":
         build_artifacts(console, values["artifacts"])
@@ -1040,7 +1152,7 @@ def render(console, command, values):
         apt_profile_list(console, values["environments"], show_hint=not presets)
         if presets:
             line(console)
-            line(console, "Run jforge apt profile check to see which presets this host supports.", style="dim")
+            line(console, "Run jforge profile check to see which presets this host supports.", style="dim")
         return
     if command in {"apt profile", "apt switch"} and "profile" in values:
         line(console, "APT environment: " + str(values["profile"]), style="bold")

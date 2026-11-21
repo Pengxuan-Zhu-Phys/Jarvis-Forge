@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass
 from difflib import get_close_matches
 from functools import cached_property
@@ -35,13 +36,15 @@ from .storage import ForgeError, ForgeHome, default_home_file, identifier, read_
 from .suite import load_suite, make_plan
 
 
+help_requested = ContextVar('forge_help_requested', default=False)
+
 app = typer.Typer(add_completion=False, pretty_exceptions_enable=False,
                   context_settings={"help_option_names": ["-h", "--help"]},
                   help="Prepare user environments and run scientific software.\n\n"
-                       "Environment: jforge apt, jforge env, jforge build.\n"
+                       "Environment: jforge profile, jforge apt, jforge build, jforge env.\n"
                        "Acceptance: jforge test, jforge bench, jforge suite, jforge playlist.\n"
                        "Runs: jforge history, jforge show, jforge logs.\n"
-                       "Setup: jforge init, jforge doctor.\n\n"
+                       "Setup: jforge init, jforge doctor, jforge shell-init.\n\n"
                        "Command help: jforge COMMAND -h")
 
 suite_app = typer.Typer(help="Write, check, plan, run and compare acceptance suites.",
@@ -54,6 +57,9 @@ class Settings:
     as_json: bool
     user_home: ForgeHome | None = None
     verbose: bool = False
+    profile_name: str | None = None
+    yes: bool = False
+    dry_run: bool = False
 
     @cached_property
     def home(self) -> ForgeHome:
@@ -84,16 +90,23 @@ def emit(ctx: typer.Context, command: str, *, ok=True, **values):
 def root(ctx: typer.Context,
          home: Optional[str] = typer.Option(None, "--home", help="Use this Forge user directory; init remembers it.", metavar="<path>"),
          as_json: bool = typer.Option(False, "--json", help="Output one JSON object."),
+         profile: Optional[str] = typer.Option(None,"--profile",help="Operate on this project profile without changing the default."),
+         yes: bool = typer.Option(False,"--yes","-y",help="Confirm the displayed changes."),
+         dry_run: bool = typer.Option(False,"--dry-run",help="Compute the plan without changing installed software."),
          version: bool = typer.Option(False, "--version", "-v", help="Show the version and exit.", is_eager=True),
          verbose: bool = typer.Option(False, "--verbose", help="Show commands and raw output for apt and build operations."),
          debug: bool = typer.Option(False, "--debug", "-d", help="Show diagnostic tracebacks.")):
-    ctx.obj = Settings(home, as_json, verbose=verbose or debug)
+    ctx.obj = Settings(home, as_json, verbose=verbose or debug,profile_name=profile,yes=yes,dry_run=dry_run)
     if version:
         if as_json:
             emit(ctx, "version", name="Jarvis-Forge", version=__version__)
         else:
             print(f"Jarvis-Forge {__version__}")
         raise typer.Exit()
+    if profile:
+        from .apt_profiles import PROFILE_OVERRIDE
+        token=PROFILE_OVERRIDE.set(identifier(profile))
+        ctx.call_on_close(lambda:PROFILE_OVERRIDE.reset(token))
     if ctx.invoked_subcommand is None:
         if as_json:
             emit(ctx, "help", commands=sorted(ctx.command.commands))
@@ -119,17 +132,17 @@ def _emit_paths(ctx: typer.Context):
     reported = ctx.obj.home.paths()
     reported["apt_home"] = str(selected.root)
     if selected != ctx.obj.home:
-        reported.update(apt_home=str(selected.root), packages=str(selected.root / "packages"), apt=str(selected.root / "apt"),
-                        apt_environment=str(selected.root / "environments/apt"))
+        reported.update(apt_home=str(selected.root), packages=str(selected.root / "pkg"), apt=str(selected.root / "spack"),
+                        apt_environment=str(selected.root / "spack"))
     from .spack_backend import configured as spack_configured, root as spack_root, store_root
     from . import homebrew_backend
     if spack_configured(selected):
         reported.update(spack=str(spack_root(selected)), spack_store=str(store_root(selected)),
-                        spack_environments=str(spack_root(selected) / "environments"))
+                        spack_environments=str(spack_root(selected)))
     elif homebrew_backend.configured(selected):
         brew = homebrew_backend.settings(selected)
         reported.update(homebrew=brew["prefix"], homebrew_cellar=brew["cellar"],
-                        packages=brew["cellar"], apt_environment=str(selected.root / "environments/apt"))
+                        packages=brew["cellar"], apt_environment=str(selected.root / "runtime"))
     emit(ctx, "doctor", **reported, default_home_file=str(default_home_file()))
 
 
@@ -322,8 +335,12 @@ runs_app.command("logs", rich_help_panel="Runs")(logs)
 setup_app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]})
 setup_app.command("init", rich_help_panel="Setup")(init)
 setup_app.command("doctor", rich_help_panel="Setup")(doctor)
+from .apt_cli import shell_init
+setup_app.command("shell-init",rich_help_panel="Setup")(shell_init)
 
 app.add_typer(apt_app, name="apt", rich_help_panel="Environment")
+from .profile_cli import app as profile_app
+app.add_typer(profile_app,name='profile',rich_help_panel='Environment')
 app.add_typer(env_app, name="env", rich_help_panel="Environment")
 app.add_typer(build_app, name="build", rich_help_panel="Environment")
 app.add_typer(testing_app, name="test", rich_help_panel="Acceptance")
@@ -336,27 +353,55 @@ app.add_typer(setup_app)
 
 
 def _globals(argv: list[str]) -> list[str]:
-    """Allow common options before/after commands, without parsing after '--'."""
-    common, rest = [], []
-    index = 0
-    while index < len(argv):
-        arg = argv[index]
-        if arg == "--":
-            rest.extend(argv[index:])
-            break
-        if arg in {"--json", "--debug", "-d", "--verbose", "--version", "-v", "-V"}:
-            common.append("--version" if arg == "-V" else arg)
-        elif arg == "--home":
-            if index + 1 >= len(argv) or argv[index + 1].startswith("-"):
-                raise ForgeError("--home requires a directory path.")
-            common.extend(argv[index:index + 2])
-            index += 1
-        elif arg.startswith("--home="):
-            common.append(arg)
-        else:
-            rest.append(arg)
-        index += 1
-    return common + rest
+    """Share native-package options without consuming test/bench profile flags."""
+    common,rest=[],[]
+    cursor=0
+    while cursor<len(argv) and argv[cursor].startswith('-'):
+        cursor+=2 if argv[cursor] in {'--home','--profile'} else 1
+    native=cursor<len(argv) and argv[cursor] in {'apt','build','profile'}
+    index=0
+    while index<len(argv):
+        arg=argv[index]
+        if arg=='--':rest.extend(argv[index:]);break
+        if arg in {'--json','--debug','-d','--verbose','--version','-v','-V'} or native and arg in {'--yes','-y','--dry-run'}:
+            common.append('--version' if arg=='-V' else arg)
+        elif arg=='--home' or native and arg=='--profile':
+            if index+1>=len(argv) or argv[index+1].startswith('-'):raise ForgeError(f'{arg} requires a value.')
+            common.extend(argv[index:index+2]);index+=1
+        elif arg.startswith('--home=') or native and arg.startswith('--profile='):common.append(arg)
+        else:rest.append(arg)
+        index+=1
+    return common+rest
+
+
+_REPLACED={
+    ('apt','check'):'apt install --dry-run',('apt','satisfy'):'apt install',('apt','reinstall'):'apt install --rebuild NAME',
+    ('apt','full-upgrade'):'apt upgrade',('apt','instances'):'apt list',('apt','prefix'):'apt show NAME --path',
+    ('apt','env'):'profile show --path',('apt','edit-sources'):'apt sources',('apt','import'):'profile create NAME --platform ubuntu24',
+    ('apt','switch'):'profile use NAME',('apt','profile'):'profile',('apt','toolchain'):'profile show NAME',
+    ('apt','compilers'):'profile show NAME',('apt','shell-init'):'shell-init',('build','plan'):'build install --dry-run',
+    ('build','validate'):'build install --dry-run',('build','run'):'build install',('build','resume'):'build install APP',
+    ('build','artifacts'):'build list',('build','env'):'build show APP --path'}
+
+
+def _reject_replaced(args):
+    index=0
+    while index<len(args) and args[index].startswith('-'):
+        index+=2 if args[index] in {'--home','--profile'} else 1
+    if index+1>=len(args):return
+    pair=tuple(args[index:index+2])
+    if pair in _REPLACED:
+        replacement=_REPLACED[pair]
+        if pair==('apt','profile') and index+2<len(args):
+            action=args[index+2]
+            if action=='check':replacement='profile check'
+            elif action=='build' or '--create' in args:replacement='profile create NAME --platform PRESET'
+            elif action=='apps':replacement='build list / jforge build install APP / jforge build remove APP'
+            elif action=='global' or not action.startswith('-'):replacement='profile use NAME'
+        raise ForgeError('Command replaced: jforge '+' '.join(pair)+'.',hint='Use jforge '+replacement)
+    if pair in {('apt','list'),('build','list')} and '--upgradable' in args:
+        raise ForgeError('--upgradable has been replaced.',hint='jforge '+pair[0]+' upgrade --dry-run')
+    if pair[0] in {'apt','build'} and '--archived' in args:raise ForgeError('Old layouts are unsupported; use a fresh Forge home.')
 
 
 def main(argv: Optional[list[str]] = None, prog: str = "jforge") -> int:
@@ -366,7 +411,13 @@ def main(argv: Optional[list[str]] = None, prog: str = "jforge") -> int:
     as_json = "--json" in options
     debug = "--debug" in options or "-d" in options
     try:
-        result = app(args=_globals(args), prog_name=prog, standalone_mode=False)
+        token = help_requested.set(any(flag in options for flag in ("-h", "--help")))
+        try:
+            resolved=_globals(args)
+            _reject_replaced(resolved)
+            result = app(args=resolved, prog_name=prog, standalone_mode=False)
+        finally:
+            help_requested.reset(token)
         return result if isinstance(result, int) else 0
     except typer.Exit as exc:
         return exc.exit_code

@@ -93,6 +93,8 @@ def _submit(home, selected, *, name=None, cases=(), jobs=1, environment=None, fr
                          for index, unit in enumerate(units) for case in unit["cases"]]}
     write_json(directory / "request.json", {"units": units, "jobs": jobs, "fresh": fresh})
     write_json(directory / "state.json", initial)
+    from .test_report_commands import prepare
+    prepare(home, directory, initial, units)
     try:
         with (directory / "runner.log").open("wb") as log:
             subprocess.Popen([sys.executable, "-m", "jarvis_forge.playlist_jobs", str(directory.parent.parent), str(home.root)],
@@ -214,7 +216,7 @@ def artifact_path(home, selected, job, index, relative):
 
 def artifacts(home, selected, job):
     result = []
-    hidden = {".cache", "pytest-cache", "__pycache__", "registry", "jarvis-home", ".git"}
+    hidden = {"test-report-v1", ".cache", "pytest-cache", "__pycache__", "registry", "jarvis-home", ".git"}
     media = {".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp", ".html", ".pdf"}
     for index, (case, root) in enumerate(_artifact_roots(home, selected, job)):
         for directory, dirs, names in os.walk(root, followlinks=False):
@@ -250,6 +252,8 @@ def _finish(directory, state, status, reason=None):
             item.update(status="interrupted" if status == "interrupted" else "not_run", reason=reason)
     state.update(status=status, finished_at=now(), reason=reason)
     write_json(directory / "state.json", state)
+    from .test_report_commands import finish
+    finish(None, directory, state)
 
 
 def _signal(process, value):
@@ -310,7 +314,7 @@ def _observe_test(home, work, unit, acceptance_id):
             name = row["id"].rsplit("/", 1)[1]
             step = rows.get(name)
             row["run_id"] = run_id
-            row["status"] = step["status"] if step else "running" if named_path(root / "steps", name).exists() else "queued"
+            row["status"] = step["status"] if step else "running" if (named_path(root / "steps", name) / "test-report-v1/execution.json").exists() else "queued"
             if step:
                 row.update(seconds=step.get("duration_seconds"), reason=step.get("reason"),
                            counts=step.get("counts"), reused_from=step.get("reused_from"))
@@ -327,7 +331,7 @@ def _observe_test(home, work, unit, acceptance_id):
 def _steps(home, directory, unit, fresh, jobs):
     source = unit["source"]
     test = source["kind"] == "test"
-    env = None
+    env = {**os.environ, "JFORGE_PLAYLIST_JOB": directory.parent.name} if test else None
     ids = [case.rsplit("/", 1)[1] for case in unit["cases"]]
     if test:
         if digest(Path(unit["card"])) != unit["sha256"]:
@@ -439,6 +443,8 @@ def _run(home, directory, state):
                             case.update(result.get(case["id"].rsplit("/", 1)[1]) or
                                         {"status": "failed", "reason": error})
                     write_json(directory / "state.json", state)
+                from .test_report_commands import finish
+                finish(home, directory, state, index)
     findings = {row["status"] for row in state["cases"]}
     if (directory / "cancel").exists() or "interrupted" in findings:
         status = "interrupted"

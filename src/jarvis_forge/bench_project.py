@@ -12,7 +12,7 @@ import tempfile
 import yaml
 
 from .builds import file_lock
-from .paths import named_path
+from .paths import named_path, temporary_directory
 from .storage import ForgeError, digest, identifier, new_id, read_json, write_json, write_text
 from .suite import UniqueLoader
 
@@ -110,7 +110,7 @@ def initialize(path):
         placeholder = None
         if not manifest.exists():
             # A directory may have a name that cannot itself be a project ID.
-            name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", root.name).lstrip("._-")[:128] or "bench"
+            name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", root.name).lstrip("._-") or "bench"
             write_text(manifest, yaml.safe_dump({"project": {
                 "format": FORMAT, "version": 1, "name": name, "runtime": "jforge-bench",
                 "defaults": {"main_config": "bin/bench.yaml"}, "entrypoints": ["bin/bench.yaml"],
@@ -231,7 +231,7 @@ def fetch(home, name):
         previous = record.get("package") or {}
         if previous.get("name", name) != name:
             raise ForgeError(f"This workspace is already bound to {previous['name']}.")
-        with tempfile.TemporaryDirectory(prefix=".bench-fetch-", dir=root / ".jforge") as stage:
+        with temporary_directory(root/".jforge","fetch-bench") as stage:
             target = Path(stage)
             try:
                 release = _stage(name, target)

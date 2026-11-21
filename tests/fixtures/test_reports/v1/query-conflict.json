@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "api_version": 1,
+  "error": {
+    "type": "ForgeError",
+    "message": "Inventory or query changed; read the first page again.",
+    "hint": null
+  }
+}

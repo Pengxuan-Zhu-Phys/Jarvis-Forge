@@ -101,7 +101,7 @@ Path("CBS_result.json").write_text(json.dumps(result))
     assert (work / "outputs/reports" / run_id / "report.json").is_file()
     assert (work / "logs" / run_id / "atlas-bh/analyze.0/command-1.log").is_file()
     assert "cbs-fixed-sample" in command("data", "list")
-    stale = work / "outputs/steps/cbs-fixed-sample/smoke/atlas-bh/analyze/r001.partial"
+    stale = work / "outputs/steps/cbs-fixed-sample/smoke/atlas-bh/analyze/0002-repeat.partial"
     stale.mkdir()
     command("data", "prune", "--yes")
     assert not stale.exists()
@@ -170,7 +170,7 @@ else:
     from jarvis_forge import apt_profiles
     monkeypatch.setattr(apt_profiles, "backend_name", lambda home: "spack")
     monkeypatch.setattr(apt_profiles, "active_home", lambda home: profile)
-    write_json(profile.root / "apt/state.json", {"spack": {"packages": [row]}})
+    write_json(profile.root / "packages.json", {"spack": {"packages": [row]}})
     assert "reported" in command("run")
     run = bench.card_status(home, physics)
     assert run["accepted"]

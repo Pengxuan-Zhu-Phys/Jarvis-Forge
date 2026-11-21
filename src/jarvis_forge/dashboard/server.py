@@ -22,14 +22,24 @@ from threading import Lock
 import time
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from .. import test_report_api, test_discovery, test_reports
 from .. import playlist_collections as collections, playlist_jobs as jobs, playlist_library as library
 from ..builds import file_lock
-from ..storage import ForgeError, ForgeHome, read_json, write_json
+from ..storage import ForgeError, ForgeHome, identifier, read_json, write_json
 
 
-STATIC = {"/": ("index.html", "text/html"), "/app.css": ("app.css", "text/css"),
-          **{f"/{name}.js": (f"{name}.js", "text/javascript")
-             for name in ("app", "components", "api", "preview-api", "demo-data")}}
+def static_assets():
+    root = files(__package__).joinpath("static")
+    manifest = json.loads(root.joinpath("asset-manifest.json").read_text())
+    assets = manifest.get("files", [])
+    names = [row["path"] if isinstance(row, dict) else row for row in assets]
+    return {"/": ("index.html", "text/html"), **{
+        "/"+name.lstrip("/"): (name, mimetypes.guess_type(name)[0] or "application/octet-stream")
+        for name in names if name != "asset-manifest.json"}}
+
+
+STATIC = None
+
 COOKIE = "jforge_dashboard"
 
 
@@ -80,12 +90,23 @@ class Dashboard:
                 "playlists": playlists, "jobs": recent,
                 "messages": inventory["errors"] + errors + inventory["warnings"]}
 
+    def report_token(self, job, instance):
+        return hmac.digest(self.token.encode(), f"report:{job}:{instance}".encode(), "sha256").hex()
+
     def dispatch(self, method, path, query, body):
         if path == "/api/service" and method == "GET":
             return {"pid": os.getpid()}
         with self.lock:
             selected = self.selected()
             parts = path.split("/")
+            report_data = test_report_api.dispatch(self.home, selected, method, path, query, body)
+            if report_data is not None:
+                if isinstance(report_data.get("report"), dict) and report_data["report"].get("html_href"):
+                    base = report_data["report"]["html_href"].removesuffix("report.html")
+                    report_data["report"]["html_href"] = base+"report-view/"+self.report_token(parts[3],parts[5])+"/report.html"
+                    if report_data["report"].get("reused_from"):
+                        report_data["report"]["original_html_href"] = base+"report-view/"+self.report_token(parts[3],parts[5])+"/original/report.html"
+                return report_data
             if method == "GET":
                 if path == "/api/catalog":
                     return self.catalog(selected)
@@ -140,7 +161,7 @@ class Handler(BaseHTTPRequestHandler):
         # Initial URLs contain a session token.
         return
 
-    def _headers(self, status, *, content_type=None, length=0, extra=(), artifact=False):
+    def _headers(self, status, *, content_type=None, length=0, extra=(), artifact=False, report=False):
         self.send_response(status)
         for name, value in (("Cache-Control", "no-store"), ("Referrer-Policy", "no-referrer"),
                             ("X-Content-Type-Options", "nosniff"),
@@ -148,6 +169,8 @@ class Handler(BaseHTTPRequestHandler):
                              "sandbox allow-scripts; default-src 'none'; img-src 'self' data:; "
                              "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
                              "base-uri 'none'; form-action 'none'" if artifact else
+                             "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; "
+                             "frame-ancestors 'self'; base-uri 'none'; form-action 'none'" if report else
                              "default-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; "
                              "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"),
                             ("Content-Length", str(length)), *extra):
@@ -164,7 +187,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _error(self, exc):
         self._write(exc.code if 400 <= exc.code < 600 else 400,
-                    {"ok": False, "error": {"type": type(exc).__name__, "message": str(exc), "hint": exc.hint}})
+                    {"ok": False, "api_version": 1, "error": {"type": type(exc).__name__, "message": str(exc), "hint": exc.hint}})
 
     def _cookie(self):
         cookie = SimpleCookie()
@@ -208,13 +231,17 @@ class Handler(BaseHTTPRequestHandler):
             parts = unquote(url.path).split("/")
             artifact_request = (method == "GET" and parts[:3] == ["", "api", "jobs"]
                                 and len(parts) >= 8 and parts[4] == "artifacts")
+            report_request = (method == "GET" and parts[:3] == ["", "api", "jobs"] and len(parts) >= 9
+                              and parts[4] == "test-cases" and parts[6] == "report-view")
+            report_authorized = (report_request and hmac.compare_digest(
+                parts[7], self.server.dashboard.report_token(parts[3], parts[5])))
             artifact_authorized = (artifact_request and hmac.compare_digest(
                 parts[6], self.server.dashboard.artifact_token(parts[3], parts[5])))
             if method == "GET" and url.path == "/" and self._authorized(query.get("token", [""])[0]):
                 self._headers(303, extra=(("Location", "/"), ("Set-Cookie",
                               f"{COOKIE}_{self.server.server_port}={self.server.dashboard.token}; Path=/; HttpOnly; SameSite=Strict")))
                 return
-            if not artifact_authorized and not any(self._authorized(value) for value in (self._cookie(), self.headers.get("X-Jforge-Token", ""))):
+            if not artifact_authorized and not report_authorized and not any(self._authorized(value) for value in (self._cookie(), self.headers.get("X-Jforge-Token", ""))):
                 if url.path == "/":
                     content = (b"<!doctype html><html lang='en'><title>Forge Playlists</title>"
                                b"<h1>Open the dashboard link from jforge dashboard start.</h1></html>")
@@ -223,10 +250,56 @@ class Handler(BaseHTTPRequestHandler):
                 raise ForgeError("Dashboard session required.", code=401)
             if method != "GET" and self.headers.get("Origin") not in {None, f"http://{host}"}:
                 raise ForgeError("Invalid Origin.", code=403)
+            global STATIC
+            if STATIC is None: STATIC = static_assets()
             if method == "GET" and url.path in STATIC:
                 name, kind = STATIC[url.path]
                 asset = files(__package__).joinpath("static", name).read_bytes()
                 self._write(200, asset, kind)
+                return
+            if method == "GET" and parts[:3] == ["", "api", "jobs"] and len(parts) == 7 and parts[4] == "test-cases" and parts[6] == "report.html":
+                row, directory = test_report_api.find(self.server.dashboard.home, self.server.dashboard.selected(), parts[3], parts[5])
+                target = "/".join(parts[:6])+"/report-view/"+self.server.dashboard.report_token(parts[3], parts[5])+"/report.html"
+                self._headers(303, extra=(("Location", target),))
+                return
+            if report_request:
+                if not report_authorized: raise ForgeError("Invalid report capability.", code=403)
+                dashboard = self.server.dashboard
+                row, directory = test_report_api.find(dashboard.home, dashboard.selected(), parts[3], parts[5])
+                relative = "/".join(parts[8:])
+                if relative.startswith("original/"):
+                    origin = row.get("reused_from")
+                    if not origin: raise ForgeError("No reused evidence reference.", code=404)
+                    root = test_reports.directory(dashboard.home, identifier(origin["run_id"]), identifier(origin["step_id"]))
+                    try: row, directory = test_reports.get_case(root, origin["instance_id"])
+                    except ForgeError as exc: raise ForgeError("Original report evidence is unavailable.", code=410) from exc
+                    relative = relative.removeprefix("original/")
+                if relative == "report.html":
+                    path = directory / "report.html"
+                    if not path.is_file(): raise ForgeError("Report evidence is unavailable.", code=410)
+                    if read_json(directory / "report.json").get("status") == "failed":
+                        raise ForgeError("Report generation failed; rebuild from its raw facts.", code=503)
+                    data = path.read_bytes()
+                    self._headers(200, content_type="text/html; charset=utf-8", length=len(data), report=True)
+                else:
+                    registered = {"artifacts/"+item["id"]+"/"+name for item in row.get("artifacts", []) for name in item.get("files", [])}
+                    path = directory / relative
+                    if relative not in registered or not path.resolve().is_relative_to(directory.resolve()) or not path.is_file():
+                        raise ForgeError("Evidence is outside this test or unavailable.", code=404)
+                    data = path.read_bytes()
+                    kind = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+                    self._headers(200, content_type=kind, length=len(data), artifact=True)
+                self.wfile.write(data)
+                return
+            if method == "GET" and parts[:3] == ["", "api", "jobs"] and len(parts) == 7 and parts[4] == "steps" and parts[6] == "report.html":
+                dashboard = self.server.dashboard
+                job, entries = test_report_api.roots(dashboard.home, dashboard.selected(), parts[3])
+                if not parts[5].isdecimal() or int(parts[5]) >= len(entries): raise ForgeError("Unknown execution step.", code=404)
+                root = entries[int(parts[5])][1]
+                if root is None or not (root / "step-report.html").is_file(): raise ForgeError("Step report unavailable.", code=404)
+                data = (root / "step-report.html").read_bytes()
+                self._headers(200, content_type="text/html; charset=utf-8", length=len(data), report=True)
+                self.wfile.write(data)
                 return
             if artifact_request:
                 if not artifact_authorized:

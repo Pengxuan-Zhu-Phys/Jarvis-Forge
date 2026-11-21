@@ -17,7 +17,7 @@ import time
 import yaml
 
 from .package_operations import verified_archive
-from .paths import object_path
+from .paths import record_path, metadata
 from .storage import ForgeError, identifier, now, read_json, write_json, write_text
 from .suite import UniqueLoader
 
@@ -109,7 +109,7 @@ def prefetch(home, path):
     for item in card["fetch"]:
         archive = verified_archive(home, {"url": item["url"], "sha256": item["sha256"]}, logs / item["id"])
         if item.get("unpack"):
-            target = object_path(home.root / "cache/fetch", item["id"], {"sha256": item["sha256"]}, create=True)
+            target = record_path(home.root / "cache/fetch", "fetch-"+item["id"], {"sha256": item["sha256"]}, create=True)
             marker = target / ".jforge-fetch"
             from .builds import file_lock
             from .downloads import unpack
@@ -119,6 +119,7 @@ def prefetch(home, path):
                     if target.exists():
                         shutil.rmtree(target)
                     unpack(archive, target)
+                    metadata(target,'record','fetch-'+item['id'],identity={'sha256':item['sha256']})
                     marker.write_text(item["sha256"] + "\n")
             stored = target
         else:
@@ -313,7 +314,7 @@ def _fetch_path(home, item):
     from .package_operations import archive_path
     archive = archive_path(home, item)
     if item.get("unpack"):
-        target = object_path(home.root / "cache/fetch", item["id"], {"sha256": item["sha256"]})
+        target = record_path(home.root / "cache/fetch", "fetch-"+item["id"], {"sha256": item["sha256"]})
         if target and (target / ".jforge-fetch").is_file() and archive and archive.is_file():
             return target
         return None
@@ -378,7 +379,7 @@ def _collect(prepared, directory, record):
             if unit["replace"]:
                 bench._commit_new(bench._step_dir(prepared, unit["case"], unit["step"]))
                 for repeat in unit["repeats"]:
-                    slot = bench._step_dir(prepared, unit["case"], unit["step"]) / f"r{repeat['index']:03d}"
+                    slot = bench._step_dir(prepared, unit["case"], unit["step"]) / f"{repeat['index']+1:04d}-repeat"
                     repeat["directory"] = str(slot)
                     repeat["done"] = bench._read_done(slot)
             unit["status"] = "passed"
@@ -580,7 +581,7 @@ def _slot(prepared, unit, index):
     root = bench._step_dir(prepared, unit["case"], unit["step"])
     if unit["replace"] and unit.get("status") != "passed":
         root = root.with_name(root.name + ".new")
-    return root / f"r{index:03d}"
+    return root / f"{index+1:04d}-repeat"
 
 
 def _step(prepared, name):

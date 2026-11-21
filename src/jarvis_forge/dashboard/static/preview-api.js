@@ -1,11 +1,17 @@
+import {scenarioFromSearch, scenarioCatalog} from './demo-scenarios.js';
+import {demoTestFetch} from './demo-test-api.js';
 /* Browser-local demo data for the design workspace. No connection to Forge. */
 const storageKey = "forge-playlist-design-baseline-v1";
 import {demoProjects, demoCases as cases, demoAlbums, demoJobs} from "./demo-data.js";
-const initial = {playlists: demoAlbums, jobs: demoJobs};
+const selectedScenario = scenarioFromSearch(location.search);
+const scenarioData = selectedScenario && scenarioCatalog(selectedScenario);
+const projectData = scenarioData?.projects || demoProjects;
+const caseData = scenarioData?.cases || cases;
+const initial = scenarioData || {playlists: demoAlbums, jobs: demoJobs};
 let state = structuredClone(initial);
 try {
   const snapshot = JSON.parse(localStorage.getItem(storageKey) || "null");
-  if (Array.isArray(snapshot?.playlists) && Array.isArray(snapshot?.jobs)) {
+  if (!selectedScenario && Array.isArray(snapshot?.playlists) && Array.isArray(snapshot?.jobs)) {
     // Preserve saved selections and run history while adding new demo project albums.
     state.playlists = initial.playlists.map(seed => ({...seed, ...snapshot.playlists.find(row => row.id === seed.id)}));
     state.playlists.push(...snapshot.playlists.filter(row => !initial.playlists.some(seed => seed.id === row.id)));
@@ -14,6 +20,7 @@ try {
 } catch { /* A blocked storage policy still permits an in-memory preview. */ }
 
 function remember() {
+  if (selectedScenario) return;
   try { localStorage.setItem(storageKey, JSON.stringify(state)); }
   catch { /* Preview state can stay in memory. */ }
 }
@@ -25,7 +32,7 @@ function response(value, code = 200) {
 }
 const ok = value => response({ok: true, ...value});
 const failure = (message, status = 400) => response({ok: false, error: {message}}, status);
-const caseIds = new Set(cases.map(row => row.id));
+const caseIds = new Set(caseData.map(row => row.id));
 
 const queueRank = job => job.queueOrder ?? (Date.parse(job.submitted_at) || 0);
 let nextQueueOrder = Math.max(0, ...state.jobs.map(queueRank)) + 1;
@@ -36,6 +43,7 @@ function beginJob(job, started) {
   job.cases.forEach((row, index) => { row.status = index === 0 ? "running" : "queued"; delete row.seconds; });
 }
 function advanceJobs() {
+  if (selectedScenario) return;
   const now = Date.now();
   // Older previews allowed concurrent jobs. Keep the oldest current run and queue the rest.
   const concurrent = state.jobs.filter(job => job.status === "running").sort(inQueueOrder);
@@ -69,9 +77,9 @@ function catalog() {
   return {
     library: {id: "design-preview", title: "Research Workshop"}, host: {system: "Demo", machine: "Browser"},
     shelves: [{id: "projects", title: "Projects"}, {id: "examples", title: "Examples"}],
-    projects: demoProjects,
-    playlists: state.playlists, jobs: state.jobs, messages: [],
-    cases: cases.map(row => {
+    projects: projectData,
+    playlists: state.playlists, jobs: state.jobs, messages: selectedScenario ? [`Independent Demo scenario · ${selectedScenario.title}. ${selectedScenario.description} No local tests executed.`] : [],
+    cases: caseData.map(row => {
       const latest = state.jobs.find(job => job.cases.some(item => item.id === row.id));
       const result = latest?.cases.find(item => item.id === row.id);
       return {...row, last: result ? {...result, job: latest.id} : null};
@@ -85,6 +93,11 @@ export async function previewFetch(path, {method = "GET", body} = {}) {
   const id = rawId && decodeURIComponent(rawId);
   const payload = body ? JSON.parse(body) : {};
   advanceJobs();
+  if (selectedScenario && resource === "jobs" && method === "POST" && !id) return failure("This is a controlled scenario snapshot. Return to ordinary Demo to submit runs.", 409);
+  if (["capabilities", "test-discoveries"].includes(resource) || (resource === "jobs" && ["progress", "test-cases", "events"].includes(action))) {
+    const testResponse = await demoTestFetch(url, {method, body}, state);
+    if (testResponse) return testResponse;
+  }
 
   if (resource === "catalog" || resource === "sync") {
     remember();
@@ -101,7 +114,7 @@ export async function previewFetch(path, {method = "GET", body} = {}) {
       const job = {id: "demo-" + crypto.randomUUID(), label: playlist?.title || "Selected cases",
         playlist: playlist?.id || null, simulated: true, queueOrder: nextQueueOrder++,
         submitted_at: new Date(submitted).toISOString(), status: "queued",
-        cases: ids.map(key => ({...cases.find(row => row.id === key), status: "queued"}))};
+        cases: ids.map(key => ({...caseData.find(row => row.id === key), status: "queued"}))};
       state.jobs.unshift(job);
       advanceJobs();
       remember();

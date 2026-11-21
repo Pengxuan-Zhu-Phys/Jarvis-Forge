@@ -162,10 +162,21 @@ def history(ctx: typer.Context,
 @app.command()
 def report(ctx: typer.Context,
            run_or_acceptance: str = typer.Argument(..., help="Run ID or acceptance ID.", metavar="<run_id_or_acceptance_id>"),
-           output_format: str = typer.Option("text", "--format", help="Output text, json or markdown.", metavar="<text|json|markdown>")):
+           output_format: str = typer.Option("text", "--format", help="Output text, json, markdown, or per-case html.", metavar="<text|json|markdown|html>"),
+           case: Optional[str] = typer.Option(None, "--case", help="Read this new-contract instance ID.", metavar="<instance_id>"),
+           rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild --case HTML from its persisted facts; preserve earlier presentation.")):
     """Print the report of one run or one acceptance; run no tests."""
     from .cli import emit
     from . import testing_run
+    if output_format == "json":ctx.obj.as_json = True
+    if case:
+        from .test_reports import run_case
+        if output_format not in {"text", "json", "html"}: raise ForgeError("--case takes --format json or html.")
+        value = run_case(ctx.obj.home, run_or_acceptance, case, "html" if output_format == "html" else "json", rebuild=rebuild)
+        if output_format == "html" and not ctx.obj.as_json: typer.echo(value, nl=False)
+        else: emit(ctx, "test report", kind="test-case", report=value)
+        return
+    if rebuild: raise ForgeError("--rebuild requires --case <instance_id>.")
     if output_format not in {"text", "json", "markdown"}:
         raise ForgeError("--format takes text, json or markdown.")
     value = testing_run.report(ctx.obj.home, run_or_acceptance)
@@ -174,3 +185,44 @@ def report(ctx: typer.Context,
         return
     emit(ctx, "test report", kind=value["kind"], report=value["report"],
          **({"markdown": value["markdown"]} if output_format == "text" and not ctx.obj.as_json else {}))
+
+
+metadata_app = typer.Typer(help="Validate descriptions without importing tests; scaffold drafts for review.",
+                           context_settings={"help_option_names": ["-h", "--help"]})
+app.add_typer(metadata_app, name="metadata")
+
+
+@metadata_app.command("validate")
+def metadata_validate(ctx: typer.Context,
+                      index: Path = typer.Argument(..., help="Metadata index YAML.", metavar="<index>"),
+                      strict: bool = typer.Option(False, "--strict", help="Require unique complete bindings against --inventory from explicit discover."),
+                      inventory: Optional[Path] = typer.Option(None, "--inventory", help="Inventory JSON returned by discover; never starts pytest.", metavar="<file>")):
+    """Check metadata format, IDs, containment and optional discovered bindings."""
+    from . import test_metadata
+    from .storage import read_json
+    from .cli import emit
+    emit(ctx, "test metadata validate", **test_metadata.validate(index, strict=strict, inventory=read_json(inventory) if inventory else None))
+
+
+@metadata_app.command("scaffold")
+def metadata_scaffold(ctx: typer.Context,
+                      target: Path = typer.Argument(..., help="Project directory or Python test file.", metavar="<target>"),
+                      output: Path = typer.Option(..., "--output", help="New directory for AST-only review drafts; never overwritten.", metavar="<dir>")):
+    """Write review drafts without importing tests or inventing reviewed criteria."""
+    from . import test_metadata
+    from .cli import emit
+    emit(ctx, "test metadata scaffold", **test_metadata.scaffold(target, output))
+
+
+@app.command("discover")
+def discover(ctx: typer.Context,
+             target: Optional[Path] = typer.Argument(None, help="Project directory or test card; imports tests explicitly.", metavar="[target]"),
+             profile: Optional[str] = typer.Option(None, "--profile", help="Select the same profile as test run.", metavar="<name>"),
+             group: list[str] = typer.Option([], "--group", help="Select groups/checks and their prerequisites.", metavar="<id>"),
+             env: Optional[str] = typer.Option(None, "--env", help="Use this existing registered environment.", metavar="<name>")):
+    """Collect actual selected items with their selected interpreter; run no test bodies."""
+    from .test_discovery import discover_card
+    from .cli import emit
+    result = discover_card(ctx.obj.home, testing.project_card(target), profile=profile, groups=group, environment_name=env)
+    emit(ctx, "test discover", ok=not result["errors"], **result)
+    if result["errors"]: raise typer.Exit(1)

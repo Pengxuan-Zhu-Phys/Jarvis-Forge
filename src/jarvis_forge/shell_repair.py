@@ -448,7 +448,7 @@ def repair_apt_profile(home, *, dry_run=False, save_unchanged=True):
     from .package_operations import _inside, locked
     from .spack_backend import repaired_runtime_environment
 
-    state_path = _inside(home, home.root / "apt/state.json")
+    state_path = _inside(home, home.root / "packages.json")
 
     def inspect():
         state = read_json(state_path)

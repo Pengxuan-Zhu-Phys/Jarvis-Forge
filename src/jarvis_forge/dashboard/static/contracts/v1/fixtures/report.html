@@ -1,0 +1,53 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Contract report preserves the supplied evidence</title><style>body{font:16px/1.65 system-ui,sans-serif;color:#203340;background:#f5f8fa;margin:0 auto;padding:32px;max-width:1000px}section{background:white;border:1px solid #d5e0e6;border-radius:12px;padding:24px;margin:20px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.7 ui-monospace,monospace}h1{line-height:1.25}h2{font-size:20px}a{color:#14795d}.state{background:#def4e9;padding:8px 16px;border-radius:6px;display:inline-block}</style><main><h1>Contract report preserves the supplied evidence</h1><p class="state">ready · passed</p><section><h2>Identity &amp; provenance</h2><pre>{
+  &quot;project_id&quot;: &quot;contract-fixture&quot;,
+  &quot;definition_id&quot;: &quot;contract.presentation&quot;,
+  &quot;case_id&quot;: &quot;case-141b14eca6da296569198445ea81de0d&quot;,
+  &quot;instance_id&quot;: &quot;instance-cac2574cd2af17bb26ed7d0e1102e89d&quot;,
+  &quot;native_id&quot;: &quot;tests/fixture.py::test_contract[passed]&quot;,
+  &quot;variant_key&quot;: &quot;passed&quot;,
+  &quot;parameters&quot;: {
+    &quot;pytest_id&quot;: &quot;passed&quot;
+  },
+  &quot;run_id&quot;: &quot;fixture-A1&quot;,
+  &quot;step_id&quot;: &quot;unit&quot;,
+  &quot;target_id&quot;: &quot;local&quot;,
+  &quot;attempt&quot;: 1,
+  &quot;seconds&quot;: 0.012,
+  &quot;reused_from&quot;: null,
+  &quot;source&quot;: {
+    &quot;repository&quot;: &quot;fixture/project&quot;,
+    &quot;commit&quot;: &quot;fixture-commit&quot;
+  },
+  &quot;environment_digest&quot;: null,
+  &quot;metadata_digest&quot;: &quot;b17f2a8a13f0d5e18f1eb7f3a9e943a755f8033f8f671aad0db0c2f67385a165&quot;,
+  &quot;adapter&quot;: &quot;pytest&quot;,
+  &quot;template_version&quot;: &quot;forge-test-report-v1&quot;,
+  &quot;render_revision&quot;: null
+}</pre></section><section><h2>Purpose &amp; coverage</h2><pre>{
+  &quot;purpose&quot;: &quot;Check that the fixture identity, lifecycle and declared observation remain independently inspectable.&quot;,
+  &quot;component&quot;: &quot;report.consumer&quot;,
+  &quot;owner&quot;: &quot;fixture maintainers&quot;,
+  &quot;limitations&quot;: [
+    &quot;Does not prove a project acceptance run.&quot;
+  ],
+  &quot;review&quot;: {
+    &quot;status&quot;: &quot;draft&quot;
+  },
+  &quot;references&quot;: []
+}</pre></section><section><h2>Scenario</h2><pre>{
+  &quot;preconditions&quot;: &quot;Controlled development fixture; no local test execution is represented.&quot;,
+  &quot;inputs&quot;: {
+    &quot;case&quot;: &quot;fixture&quot;
+  },
+  &quot;action&quot;: &quot;Read the supplied outcome and compare it with the criteria and evidence scope.&quot;
+}</pre></section><section><h2>Expected criteria & observations</h2><ul><li><strong>The outcome and report generation state remain separate.</strong><p>automated · unobserved</p><pre>No independent observation recorded. Test outcome does not complete manual review.</pre></li><li><strong>A reviewer inspects the supplied presentation.</strong><p>manual · unobserved</p><pre>No independent observation recorded. Test outcome does not complete manual review.</pre></li></ul></section><section><h2>Actual result &amp; failure meaning</h2><pre>{
+  &quot;state&quot;: &quot;finished&quot;,
+  &quot;outcome&quot;: &quot;passed&quot;,
+  &quot;reason&quot;: null,
+  &quot;phases&quot;: [],
+  &quot;failure_meaning&quot;: &quot;A consumer may have confused result, lifecycle or observation.&quot;
+}</pre></section><section><h2>Evidence</h2><ul><li><a href="artifacts/plot.svg">Relative SVG fixture</a> · case</li></ul><pre>{
+  &quot;expected&quot;: [],
+  &quot;missing&quot;: [],
+  &quot;shared_step_artifacts&quot;: []
+}</pre></section><section><h2>stdout</h2><pre>No additional output.</pre></section><section><h2>stderr</h2><pre>No additional output.</pre></section><section><h2>logging</h2><pre>No additional output.</pre></section><section><h2>traceback</h2><pre>No additional output.</pre></section><p>HTML download does not bundle linked evidence. Execution outcome, criterion observations and formal acceptance remain separate.</p></main></html>

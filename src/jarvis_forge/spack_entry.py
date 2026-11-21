@@ -9,7 +9,7 @@ import sys
 def short_stages(stage):
     # These modules use only the standard library and run under the same
     # controller Python as Spack. Do not change Spack specs or package inputs.
-    from jarvis_forge.paths import physical_name
+    from jarvis_forge.paths import semantic_name, metadata, sequence
     from jarvis_forge.storage import new_id
 
     allocated = set()
@@ -17,9 +17,22 @@ def short_stages(stage):
     signature = inspect.signature(original_init)
 
     def compute(spec):
+        from jarvis_forge.paths import directory_lock
+        from jarvis_forge.storage import ForgeError,read_json
+        import shutil
         root = Path(stage.get_stage_root())
-        name = physical_name(root, spec.name or "source",
-                             {"spec": str(spec), "dag_hash": spec.dag_hash() if spec.concrete else None}, create=True)
+        version=str(spec.version) if spec.versions.concrete else 'dev'
+        name=semantic_name(spec.name or 'source',version)
+        identity={'spec':str(spec),'dag_hash':spec.dag_hash() if spec.concrete else None}
+        path=root/name
+        with directory_lock(root,'.stages.lock'):
+            if path.is_symlink():raise ForgeError(f'Managed stage must not be a symbolic link: {path}')
+            marker=path/'metadata.json'
+            if path.exists():
+                if not marker.is_file() or read_json(marker).get('kind')!='stage':
+                    raise ForgeError(f'Unregistered build stage is preserved: {path}')
+                if read_json(marker).get('identity')!=identity:shutil.rmtree(path)
+            metadata(path,'stage',spec.name or 'source',version=version,identity=identity)
         allocated.add(name)
         return name
 
@@ -31,8 +44,9 @@ def short_stages(stage):
             name = bound.arguments.get("name")
             if name not in allocated:
                 root = Path(stage.get_stage_root())
-                name = (physical_name(root, "resource", {"stage": name}, create=True) if name
-                        else new_id("stage", root=root))
+                name = sequence(root,'resource' if name else 'stage')
+                metadata(root/name,'stage','resource' if bound.arguments.get('name') else 'stage',
+                         identity={'native_name':bound.arguments.get('name')})
                 allocated.add(name)
                 bound.arguments["name"] = name
         return original_init(*bound.args, **bound.kwargs)
@@ -47,7 +61,7 @@ def short_bootstrap_store(store, bootstrap):
 
     def scoped_store(path, extra_data=None):
         if bootstrap.is_bootstrapping():
-            extra_data = {**(extra_data or {}), "padded_length": False, "projections": {"all": "{name}"}}
+            extra_data = {**(extra_data or {}), "padded_length": False, "projections": {"all": "{name}-{version}"}}
         return use_store(path, extra_data=extra_data)
 
     store.use_store = scoped_store
@@ -106,6 +120,9 @@ def main():
     import spack.store
     import spack.bootstrap.config
 
+    import spack.util.gpg
+    from jarvis_forge.socket_runtime import configure_spack
+    configure_spack(spack.util.gpg)
     short_stages(spack.stage)
     short_bootstrap_store(spack.store, spack.bootstrap.config)
     if os.environ.get("_JFORGE_CACHE_TRUST_LOG"):

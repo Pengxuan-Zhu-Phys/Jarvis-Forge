@@ -26,11 +26,10 @@ def now() -> str:
 
 def new_id(prefix: str, *, root=None) -> str:
     if root is not None:
-        from .paths import physical_name
-
-        return physical_name(root, prefix, {"object_id": uuid.uuid4().hex, "created_at": now()}, create=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    return f"{prefix}-{stamp}-{uuid.uuid4().hex[:10]}"
+        from .paths import sequence
+        return sequence(root, prefix)
+    # A JSON-only project identity, never a physical directory name.
+    return uuid.uuid4().hex
 
 
 def digest(path: Path) -> str:
@@ -79,13 +78,13 @@ def write_text(path: Path, content: str, *, mode: int = 0o600) -> None:
 
 
 def identifier(value: str) -> str:
-    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", value):
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", value):
         raise ForgeError(f"Invalid identifier: {value!r}.")
     return value
 
 
 def package_name(value: str) -> str:
-    if not re.fullmatch(r"[a-z0-9][a-z0-9+._-]{0,127}", value):
+    if not re.fullmatch(r"[a-z0-9][a-z0-9+._-]*", value):
         raise ForgeError(f"Invalid package name: {value!r}.")
     return value
 
@@ -132,8 +131,11 @@ class ForgeHome:
         return preference
 
     def paths(self) -> dict:
-        names = ("packages", "environments", "suites", "operations",
-                 "runs", "comparisons", "services", "apt", "cache", "work", "locks")
+        if self.root.parent.name in {'platforms', 'profiles'}:
+            names = ('spack', 'pkg', 'operations', 'history', 'cache', 'locks', 'src', 'build', 'apps')
+        else:
+            names = ('environments', 'suites', 'operations', 'runs', 'comparisons', 'services',
+                     'profiles', 'platforms', 'spack', 'cache', 'work', 'locks')
         return {"home": str(self.root), **{n: str(self.root / n) for n in names}}
 
     def initialize(self) -> dict:
@@ -149,7 +151,7 @@ class ForgeHome:
             try:
                 with config.open("x", encoding="utf-8") as stream:
                     os.chmod(config, 0o600)
-                    json.dump({"schema_version": 1, "host_id": uuid.uuid4().hex,
+                    json.dump({"schema_version": 1, "layout_version": 3, "host_id": uuid.uuid4().hex,
                                "created_at": now()}, stream, indent=2)
                     stream.write("\n")
             except FileExistsError:
@@ -164,22 +166,21 @@ class ForgeHome:
         config = read_json(path)
         if config.get("schema_version") != 1 or not isinstance(config.get("host_id"), str):
             raise ForgeError(f"Invalid Forge home configuration: {path}")
+        if config.get('layout_version') != 3:
+            raise ForgeError(f'Unsupported Forge layout: {self.root}',hint='Create a fresh Forge home: jforge init --home /path/to/new-forge')
         return config
 
     def packages(self, name: str | None = None) -> list[dict]:
         if name is not None:
             package_name(name)
-        base = self.root / "packages"
-        records = []
-        for path in sorted(base.rglob("manifest.json")):
-            item = read_json(path)
-            required = ("name", "version", "install_id", "prefix")
-            if not all(isinstance(item.get(key), str) for key in required):
-                raise ForgeError(f"Incomplete package manifest: {path}")
-            if name is None or item["name"] == name:
-                records.append({**item, "manifest_path": str(path),
-                                "prefix_exists": Path(item["prefix"]).is_dir()})
-        return records
+        state=self.root/'packages.json'
+        active=read_json(state).get('spack',read_json(state).get('homebrew',{})).get('packages',[]) if state.is_file() else []
+        records={row['hash'] if 'hash' in row else row['install_id']:row for row in active}
+        for file in (self.root/'pkg').glob('*/metadata.json'):
+            row=read_json(file)
+            if row.get('kind')=='package' and row.get('hash') not in records:
+                records[row['hash']]={**row,'active':False,'prefix_exists':file.parent.is_dir()}
+        return [row for row in records.values() if name is None or row['name']==name]
 
     def run_path(self, run_id: str) -> Path:
         identifier(run_id)

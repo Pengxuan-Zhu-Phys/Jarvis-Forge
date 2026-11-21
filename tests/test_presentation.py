@@ -63,7 +63,7 @@ def test_env_list_names_the_command_for_each_section():
                       "backend": "spack"}],
     })
     assert "jforge env switch <name>" in output
-    assert "jforge apt profile <name>" in output
+    assert "jforge profile use <name>" in output
     assert "jforge env metadata <name>" in output
     assert "Active user-local packages + ROOT" in output
     assert output.index("apt") < output.index("spack-default")
@@ -138,7 +138,7 @@ def test_check_shows_complete_plan_including_uninstalled_dependencies():
 def test_transaction_prefers_stable_activation_and_prints_the_short_command():
     backend = "/forge/environments/apt/revisions/apt-long-operation-id/activate.sh"
     short = "/forge/env/apt/activate.sh"
-    command = 'source "$(jforge apt env --path)"'
+    command = 'source "$(jforge profile show --path)"'
     output = displayed("apt install", {"status": "passed", "activation": backend,
                        "environment_activation": short, "source_command": command}, width=24)
     assert short + "\n" in output
@@ -149,13 +149,19 @@ def test_transaction_prefers_stable_activation_and_prints_the_short_command():
 def test_public_list_json_and_show_keep_full_metadata(tmp_path, monkeypatch, capsys, linux_apt):
     package = installed("eigen", version="5.0.1")
     monkeypatch.setattr(spack_backend, "current", lambda home: dict(packages=[package]))
-    monkeypatch.setattr(spack_backend, "details", lambda home, name: dict(name=name))
+    from profile_fixtures import project_profile
+    from jarvis_forge.storage import ForgeHome
+    scope=project_profile(ForgeHome(tmp_path/"absent"))
+    monkeypatch.setattr(ForgeHome,"packages",lambda home:[package])
+    monkeypatch.setattr(spack_backend, "read_details", lambda home, name: dict(name=name))
     common = ["--home", str(tmp_path / "absent"), "apt"]
-    assert main([*common, "list", "--installed"]) == 0
+    assert main([*common, "list"]) == 0
     assert "Prefix:" not in capsys.readouterr().out
-    assert main([*common, "list", "--installed", "--json"]) == 0
+    assert main([*common, "list", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["packages"] == [package]
     assert main([*common, "show", "eigen"]) == 0
     details = capsys.readouterr().out
-    assert package["prefix"] in details and package["install_id"] in details
-    assert not (tmp_path / "absent").exists()
+    assert package["prefix"] in details
+    assert main([*common,"show","eigen","--json"])==0
+    assert json.loads(capsys.readouterr().out)["installed_instances"][0]["install_id"]==package["install_id"]
+    assert not list((scope.root / "operations").iterdir())

@@ -235,7 +235,7 @@ def test_prefetch_is_required_and_its_digest_is_an_input(home, tmp_path):
     assert again["fetched"][0]["path"] == first["fetched"][0]["path"]
     result = bench.run(home, card)
     assert result["status"] == "reported"
-    slot = home.root / "bench" / "data" / "fetched" / "smoke" / "demo" / "read" / "r000"
+    slot = home.root / "bench" / "data" / "fetched" / "smoke" / "demo" / "read" / "0001-repeat"
     assert (slot / "out.txt").read_text() == "hello-fetch\n"
     done = read_json(slot / ".jforge" / "done.json")
     assert done["inputs"]["fetch"]["sample"] == digest
@@ -292,7 +292,7 @@ def test_slurm_submits_one_array_and_keeps_the_site_settings(home, tmp_path, slu
     assert all("--mem=1G" in text and "--time=01:00:00" in text and "echo site-preamble" in text for text in scripts)
     assert all("bench exec-task" in text for text in scripts)
     for index in range(3):
-        assert (data / "demo" / "smoke" / "demo" / "work" / f"r{index:03d}" / "out.txt").read_text() == "ok"
+        assert (data / "demo" / "smoke" / "demo" / "work" / f"{index+1:04d}-repeat" / "out.txt").read_text() == "ok"
     assert not (home.root / "bench" / "data" / "demo").exists()
 
 

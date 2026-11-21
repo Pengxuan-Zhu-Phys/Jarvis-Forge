@@ -1,14 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="application-version" content="1.0.0">
+  <meta name="application-version" content="1.0.9">
   <meta name="description" content="A project-by-project acceptance library. Play local test albums, rerun modules, and follow real results or explore the independent Demo mode.">
   <title>Playlists · Jarvis Forge</title>
-  <link rel="stylesheet" href="/app.css?v=1.0.0">
-  <script type="module" src="/app.js?v=1.0.0"></script>
+  <script src="/theme.js?v=1.0.9"></script>
+  <link rel="stylesheet" href="/app.css?v=1.0.9">
+  <script type="module" src="/app.js?v=1.0.9"></script>
 </head>
 <body>
   <a class="skip-link" href="#workspace">Skip to content</a>
@@ -36,8 +37,15 @@
             <kbd class="search-key" aria-hidden="true">/</kbd>
           </label>
           <button id="refresh" class="button secondary" type="button" aria-label="Refresh" title="Refresh library"><span class="refresh-icon" aria-hidden="true">↻</span><span class="refresh-label">Refresh</span></button>
-          <button id="quick-jump" aria-label="Jump to" class="button secondary" type="button" aria-haspopup="dialog" aria-keyshortcuts="Meta+K Control+K" disabled>Jump to <kbd aria-hidden="true">⌘ K</kbd></button>
-          <button id="design-toggle" class="button design-toggle" type="button" role="switch" aria-label="Design alignment grid" aria-checked="false" title="Show alignment columns, 8px baseline, and component boundaries">Design <span class="switch-track" aria-hidden="true"><i></i></span></button>
+          <button id="quick-jump" aria-label="Jump to" class="button secondary" type="button" aria-haspopup="dialog" aria-keyshortcuts="Meta+K Control+K" title="Jump to (⌘K / Ctrl+K)" disabled><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 8a3 3 0 1 0-3-3v14a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V5a3 3 0 1 0-3 3Z"/></svg></button>
+          <button id="design-toggle" class="button design-toggle" type="button" role="switch" aria-label="Design alignment grid" aria-checked="false" title="Show alignment columns, 8px baseline, and component boundaries"><svg class="nav-icon design-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+          <button id="cover-theme-toggle" class="button secondary" type="button" aria-label="Album cover themes" aria-haspopup="dialog" title="Album cover themes">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1"/><path d="m3 16 5-5 4 4 3-3 6 6"/></svg>
+          </button>
+          <button id="theme-toggle" class="button secondary theme-toggle" type="button" aria-label="Switch to light theme" title="Switch to light theme">
+            <svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg>
+            <svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20.5 13A8.5 8.5 0 0 1 11 3.5 8.5 8.5 0 1 0 20.5 13Z"/></svg>
+          </button>
         </div>
       </header>
       <main id="workspace" tabindex="-1" aria-busy="true"></main>

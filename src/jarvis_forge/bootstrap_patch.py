@@ -5,17 +5,18 @@ import os
 from pathlib import Path
 import shlex
 import shutil
-from tempfile import TemporaryDirectory
+
 
 from .downloads import unpack
 from .package_operations import _inside, run_command, verified_archive
 from .storage import ForgeError, write_text
 from .unified_profiles import host
-from .paths import object_path
+from .paths import object_path, temporary_directory
 
 
 VERSION = "2.8.1"
 SOURCE = {
+    "name":"patch", "version":VERSION,
     "url": f"https://ftp.gnu.org/gnu/patch/patch-{VERSION}.tar.xz",
     "sha256": "3240c7959c5347c8ed347e3c4201c0337bf4240d5cf09d68889e58eeaba30e17",
 }
@@ -49,7 +50,7 @@ def bin_dir(home, op, env, *, jobs, timeout, progress=None):
     name = f"GNU patch {VERSION}"
     with _activity(progress, f"Fetch {name} source", download=True) as update:
         archive = verified_archive(home, SOURCE, op / "bootstrap-patch-download", progress=update)
-    with TemporaryDirectory(prefix=".patch-", dir=tools) as directory:
+    with temporary_directory(tools,"build") as directory:
         work = Path(directory)
         unpack(archive, work / "source")
         source = work / "source" / f"patch-{VERSION}"

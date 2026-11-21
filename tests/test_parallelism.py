@@ -42,8 +42,8 @@ def test_cpu_fallback_and_backend_caps(monkeypatch):
                                    "homebrew_make_jobs": 16}
 
 
-@pytest.mark.parametrize("args", [["apt", "install", "gsl"], ["build", "run", "sample"],
-                                  ["build", "resume", "sample"], ["apt", "profile", "build", "ubuntu-24.04"]])
+@pytest.mark.parametrize("args", [["apt", "install", "gsl"], ["build", "install", "sample"],
+                                  ["build", "upgrade", "sample"], ["profile", "create", "project", "--platform", "ubuntu24"]])
 @pytest.mark.parametrize("option", ["--jobs", "-j"])
 def test_native_cli_rejects_manual_parallelism_without_creating_data(tmp_path, capsys, args, option):
     home = tmp_path / "absent"

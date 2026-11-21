@@ -1,0 +1,474 @@
+schema_version: 1
+kind: test-metadata
+project_id: jarvis-forge
+scope:
+  source: tests/test_test_reports.py
+  component: test-report-backend
+  preconditions: Use the existing development Python; HTTP cases need temporary loopback sockets.
+definitions:
+- id: forge.reports.final-results
+  title: Preserve final pytest outcomes and exact case logs
+  purpose: Preserve final pytest outcomes and exact case logs.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_real_pytest_phases_logs_and_no_output_html
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Run passing, failing, skipped, parameterized and fixture-error items through the real adapter.
+  criteria:
+  - id: contract
+    expected: Nine collected items produce nine distinct final events; setup and teardown errors override
+      call success, and passing no-output cases have readable HTML.
+    verification: automated
+  failure_meaning: A phase was counted twice or evidence leaked between cases.
+  limitations:
+  - Uses a small local suite, not a remote worker.
+  review:
+    status: draft
+- id: forge.reports.collection-error
+  title: Keep collection errors separate from an empty successful inventory
+  purpose: Keep collection errors separate from an empty successful inventory.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_collection_failure_has_no_fabricated_total_and_has_step_report
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Import a test module that raises before collection finishes.
+  criteria:
+  - id: contract
+    expected: The run fails, the denominator remains unknown and the step HTML includes the collection
+      error.
+    verification: automated
+  failure_meaning: The UI could display a false zero-test success.
+  limitations:
+  - Covers an import error, not every collection hook exception.
+  review:
+    status: draft
+- id: forge.reports.fail-fast
+  title: Retain unfinished items after fail-fast
+  purpose: Retain unfinished items after fail-fast.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_fail_fast_leaves_known_items_not_run
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Run three items with a first assertion failure and --maxfail=1.
+  criteria:
+  - id: contract
+    expected: Exactly one item finishes; the other two remain not_run in a confirmed three-item inventory.
+    verification: automated
+  failure_meaning: Early termination may have been converted into false completion.
+  limitations:
+  - Uses serial pytest fail-fast.
+  review:
+    status: draft
+- id: forge.reports.explicit-discovery
+  title: Separate collection from test execution
+  purpose: Separate collection from test execution.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_discovery_runs_no_bodies_and_is_not_implicit
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Discover a module whose test body would create a marker file.
+  criteria:
+  - id: contract
+    expected: One item is returned using the selected Python; no body marker or execution run record is
+      created.
+    verification: automated
+  failure_meaning: Discovery unexpectedly executed test bodies.
+  limitations:
+  - Collection may intentionally execute imports and conftest hooks.
+  review:
+    status: draft
+- id: forge.reports.metadata-validation
+  title: Reject ambiguous, stale or incomplete metadata bindings
+  purpose: Reject ambiguous, stale or incomplete metadata bindings.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_metadata_validation_is_static_strict_and_contained
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Validate inherited metadata and mutate definitions, variant criteria, inventory identity and
+      document paths.
+  criteria:
+  - id: contract
+    expected: Valid discovered variants bind; stale inventories, duplicate definitions or criteria, placeholder
+      variants and escaping document paths are rejected.
+    verification: automated
+  failure_meaning: Descriptions may refer to the wrong test or escape the metadata root.
+  limitations:
+  - Text faithfulness still requires human review.
+  review:
+    status: draft
+- id: forge.reports.query-and-utf8
+  title: Keep list cursors and byte log cursors truthful
+  purpose: Keep list cursors and byte log cursors truthful.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_query_cursor_revision_filters_and_utf8_boundaries
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Page a synthetic inventory and reconstruct a large multilingual log with small byte pages.
+  criteria:
+  - id: contract
+    expected: Queries filter correctly, stale inventory cursors fail, and concatenated UTF-8 pages exactly
+      match the original bytes. Variant counts reflect the complete definition within its step and target,
+      even after filtering.
+    verification: automated
+  failure_meaning: A consumer may skip cases or corrupt diagnostic text.
+  limitations:
+  - Uses a local UTF-8 file rather than streamed process output.
+  review:
+    status: draft
+- id: forge.reports.renderer-failure
+  title: Separate presentation errors from execution facts
+  purpose: Separate presentation errors from execution facts.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_missing_metadata_and_renderer_failure_do_not_rewrite_outcomes
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Force the deterministic HTML renderer to raise for a passed item without metadata.
+  criteria:
+  - id: contract
+    expected: Raw outcome remains passed, metadata stays missing and the report generation status becomes
+      failed.
+    verification: automated
+  failure_meaning: Presentation failure overwrote a trustworthy framework result.
+  limitations:
+  - Injects a renderer exception, not full disk exhaustion.
+  review:
+    status: draft
+- id: forge.reports.http-isolation
+  title: Serve contract responses and evidence within authenticated capabilities
+  purpose: Serve contract responses and evidence within authenticated capabilities.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_http_reports_isolate_relative_assets_and_serve_complete_frontend
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Run a bundle-producing test, then request API responses, reports, relative assets and forbidden
+      paths on a temporary loopback server.
+  criteria:
+  - id: contract
+    expected: Responses satisfy the shared schemas; authorized relative assets load, traversal and cross-case
+      reads fail, and report or artifact CSP does not grant dashboard origin authority.
+    verification: automated
+  failure_meaning: Report content could access unrelated local files or return an incompatible API payload.
+  limitations:
+  - Checks HTTP headers and resources; browser layout and focus belong to the frontend project.
+  review:
+    status: draft
+- id: forge.reports.reuse-provenance
+  title: Keep reuse linked to immutable original evidence
+  purpose: Keep reuse linked to immutable original evidence.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_reuse_retains_original_identity_and_metadata_changes_force_execution
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Execute a case, reuse it, then corrupt its original raw outcome before another run.
+  criteria:
+  - id: contract
+    expected: Reuse preserves case identity and original logs with a new instance ID; corrupting raw facts
+      forces actual execution.
+    verification: automated
+  failure_meaning: Cached success may survive changed execution evidence.
+  limitations:
+  - Uses one cached pytest group.
+  review:
+    status: draft
+- id: forge.reports.cancellation
+  title: Preserve actual progress when execution is interrupted
+  purpose: Preserve actual progress when execution is interrupted.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_running_progress_and_cancel_preserve_known_unfinished_items
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Start a slow case in a separate process, wait for current-item progress and send SIGINT to
+      its process group.
+  criteria:
+  - id: contract
+    expected: The command exits 130; neither the active nor pending item gains a fabricated outcome, and
+      both retain explanatory reports.
+    verification: automated
+  failure_meaning: Cancellation may incorrectly complete or pass unfinished work.
+  limitations:
+  - Checks local process-group cancellation, not Slurm scheduling.
+  review:
+    status: draft
+- id: forge.reports.versioned-fixtures
+  title: Keep normative fixtures and API references internally consistent
+  purpose: Keep normative fixtures and API references internally consistent.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_versioned_fixtures_match_forge_schema
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Validate every manifest-listed fixture and resolve local OpenAPI references.
+  criteria:
+  - id: contract
+    expected: All fixture payloads validate against their declared definitions and every local API reference
+      resolves. The packaged frontend pins the exact producer schemas and normative fixtures, and every
+      manifest-listed static asset matches its SHA-256.
+    verification: automated
+  failure_meaning: Frontend consumers may receive a broken or divergent contract.
+  limitations:
+  - Schema validity alone does not prove browser interaction.
+  review:
+    status: draft
+- id: forge.reports.report-rebuild
+  title: Rebuild presentation without invalidating execution reuse
+  purpose: Rebuild presentation without invalidating execution reuse.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_report_rebuild_keeps_raw_facts_and_archives_presentation
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Rebuild a completed case through the store and API, then run the unchanged card again.
+  criteria:
+  - id: contract
+    expected: Presentation revisions are archived, raw result bytes remain identical and the unchanged
+      group remains reusable.
+    verification: automated
+  failure_meaning: Report maintenance modified execution facts or cache identity.
+  limitations:
+  - Does not test concurrent template upgrades.
+  review:
+    status: draft
+- id: forge.reports.observations
+  title: Distinguish instrumented observations, metadata snapshots and manual review
+  purpose: Distinguish instrumented observations, metadata snapshots and manual review.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_actual_parameters_and_frozen_metadata_observations
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Run a parameterized case that records one automated criterion, then change its metadata purpose.
+  criteria:
+  - id: contract
+    expected: The actual parameter is recorded; the automated observation is explicit, manual review stays
+      pending and old report metadata remains frozen after a fresh run.
+    verification: automated
+  failure_meaning: Expected values or new metadata may have been substituted for historical observations.
+  limitations:
+  - Uses JSON-serializable integer parameters.
+  review:
+    status: draft
+- id: forge.reports.progress-recovery
+  title: Recover counts after interrupted event publication
+  purpose: Recover counts after interrupted event publication.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_progress_recovery_replays_complete_events_and_discards_partial_tail
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Delete derived indexes, append an incomplete event tail and reconstruct progress from inventory
+      and complete events.
+  criteria:
+  - id: contract
+    expected: Recovered counts retain one completed and one pending item; event sequence continues monotonically
+      and steady-state polling avoids history scans.
+    verification: automated
+  failure_meaning: Recovered progress may duplicate completion or treat a partial write as a real event.
+  limitations:
+  - Uses simulated local file interruption, not NAS fault injection.
+  review:
+    status: draft
+- id: forge.reports.snapshot-polling
+  title: Avoid reading every result for routine progress polling
+  purpose: Avoid reading every result for routine progress polling.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_job_progress_uses_snapshots_and_case_lookup_reads_one_result
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Finish two real items, then make full snapshot reads fail while querying progress and one
+      case.
+  criteria:
+  - id: contract
+    expected: Progress returns two completed items and case lookup succeeds without loading all result
+      documents.
+    verification: automated
+  failure_meaning: Polling cost may grow with the full per-case evidence set.
+  limitations:
+  - Asserts read behavior rather than a hardware timing threshold.
+  review:
+    status: draft
+- id: forge.reports.log-render-recovery
+  title: Recover report generation after invalid log decoding
+  purpose: Recover report generation after invalid log decoding.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_report_log_decode_failure_is_separate_and_rebuild_keeps_facts
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Store invalid UTF-8 log bytes for a passed case, repair the log and rebuild its report.
+  criteria:
+  - id: contract
+    expected: Generation initially fails, then becomes ready after repair while raw result bytes remain
+      unchanged.
+    verification: automated
+  failure_meaning: A malformed log changed the test outcome or blocked later report recovery.
+  limitations:
+  - Does not recover a damaged raw result JSON file.
+  review:
+    status: draft
+- id: forge.reports.xfail-policy
+  title: Honor fixture XFAIL and strict XPASS semantics
+  purpose: Honor fixture XFAIL and strict XPASS semantics.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_setup_xfail_and_strict_xpass_preserve_framework_outcome
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Run a fixture that calls pytest.xfail and a strict-xfail test whose body succeeds.
+  criteria:
+  - id: contract
+    expected: Leaf outcomes are xfailed and xpassed, while pytest still makes the overall run fail under
+      strict XPASS policy.
+    verification: automated
+  failure_meaning: Adapter normalization changed pytest policy.
+  limitations:
+  - Covers the selected pytest version on the local interpreter.
+  review:
+    status: draft
+- id: forge.reports.discovery-freshness
+  title: Invalidate cached inventory when inputs or installed packages change
+  purpose: Invalidate cached inventory when inputs or installed packages change.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_discovery_cache_detects_inputs_and_packages_without_reimport
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Discover against a controlled distribution metadata root, then edit package metadata and add
+      a selected test file.
+  criteria:
+  - id: contract
+    expected: The saved inventory starts fresh and becomes stale after changes without calling discover
+      from GET.
+    verification: automated
+  failure_meaning: Cached counts could be presented as current after dependency or selector-input changes.
+  limitations:
+  - Distribution probing is controlled; this is not a package-manager integration test.
+  review:
+    status: draft
+- id: forge.reports.legacy-command-reuse
+  title: Avoid fabricating results for command protocols without original evidence
+  purpose: Avoid fabricating results for command protocols without original evidence.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_legacy_command_reuse_never_invents_passed_outcome
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Finalize a command source that reports a legacy reused flag without an original instance reference.
+  criteria:
+  - id: contract
+    expected: The leaf is marked reused with an unknown outcome and contributes zero passed outcomes.
+    verification: automated
+  failure_meaning: An unsupported reuse flag was converted into invented success.
+  limitations:
+  - Legacy protocol evidence cannot reconstruct the original instance.
+  review:
+    status: draft
+- id: forge.reports.event-pagination
+  title: Resume merged event streams without duplicate or repeated full reads
+  purpose: Resume merged event streams without duplicate or repeated full reads.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_event_pages_resume_by_byte_cursor_and_recover_lost_merge_index
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Page more than one thousand source events, lose the merge index and append an incomplete tail.
+  criteria:
+  - id: contract
+    expected: Pages contain every sequence once; index recovery retains all complete records and subsequent
+      polls start at nonzero byte cursors.
+    verification: automated
+  failure_meaning: Reconnect may duplicate events or repeatedly scan the whole stream.
+  limitations:
+  - Uses one source stream and local files.
+  review:
+    status: draft
+- id: forge.reports.invalid-log-bytes
+  title: Expose invalid encoded evidence instead of truncating it
+  purpose: Expose invalid encoded evidence instead of truncating it.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_invalid_log_bytes_are_not_silently_dropped
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Request a log containing valid text followed by an invalid UTF-8 byte.
+  criteria:
+  - id: contract
+    expected: The API raises an evidence error with status 500 instead of silently dropping the byte.
+    verification: automated
+  failure_meaning: Corrupted diagnostics may be misrepresented as complete text.
+  limitations:
+  - Covers a deliberately invalid byte sequence.
+  review:
+    status: draft
+- id: forge.reports.cli-output
+  title: Keep discovery and report CLI formats predictable
+  purpose: Keep discovery and report CLI formats predictable.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_new_cli_commands_keep_human_output_and_json_separate
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Invoke discovery, scaffold and per-case report commands in text, JSON and HTML modes.
+  criteria:
+  - id: contract
+    expected: Text uses concise summaries, JSON parses as one object with the passed outcome, and HTML
+      begins with the document declaration.
+    verification: automated
+  failure_meaning: Machine consumers may receive text decoration or users may receive raw dictionaries.
+  limitations:
+  - Exercises local commands with an existing Python.
+  review:
+    status: draft
+- id: forge.reports.discovery-worker
+  title: Publish explicit queued discovery through the shared API
+  purpose: Publish explicit queued discovery through the shared API.
+  binding:
+    adapter: pytest
+    selector: tests/test_test_reports.py::test_discovery_submission_and_worker_publish_queryable_inventory
+  scenario:
+    inputs:
+      suite: isolated local report-contract fixtures
+    action: Submit a registered library step with process spawning intercepted, then execute its worker
+      locally and query its inventory.
+  criteria:
+  - id: contract
+    expected: Submission is queued; the worker completes and exposes one confirmed leaf with the fully
+      qualified step ID and no execution instance.
+    verification: automated
+  failure_meaning: The asynchronous API may lose selection context or invent an executed instance.
+  limitations:
+  - Invokes the worker directly; persistent service lifecycle is covered separately.
+  review:
+    status: draft

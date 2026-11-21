@@ -6,7 +6,7 @@ import json
 import re
 import shutil
 import sys
-from tempfile import NamedTemporaryFile, TemporaryDirectory
+from tempfile import NamedTemporaryFile
 
 import yaml
 from packaging.specifiers import SpecifierSet, InvalidSpecifier
@@ -16,7 +16,7 @@ from . import __version__
 from .build_names import app_name
 from .downloads import fetch
 from .package_operations import operation
-from .paths import object_path
+from .paths import object_path, temporary_directory
 from .storage import ForgeError, digest, identifier, read_json, write_json
 from .suite import UniqueLoader
 
@@ -44,7 +44,7 @@ def resources(row):
 def cached_recipe(home, row, *, library=False, create=False):
     kind = "library" if library else "build"
     identity = {"kind": kind, "snapshot": row["sha256"] if library else snapshot_id(row)}
-    directory = object_path(home.root / "builds/recipes", row["id"], identity, create=create)
+    directory = object_path(home.root / "builds/recipes", row["id"], identity, create=create, version=row["revision"])
     return directory / (kind + ".yaml") if directory else None
 
 
@@ -63,7 +63,7 @@ def copy_bundle(source, output, *, home=None):
     output = output.expanduser().resolve()
     copies = [(output, source.read_bytes())]
     for item in loaded["card_sources"]:
-        if "script_id" in item:
+        if {"path","content","sha256"}.issubset(item):
             destination = output.parent / item["path"]
             if not destination.resolve().is_relative_to(output.parent):
                 raise ForgeError("Companion destination escapes the output directory.")
@@ -118,7 +118,7 @@ def _platforms(value, name):
 def update(home, url=INDEX_URL, *, platform=sys.platform):
     home.require_initialized()
     with operation(home, "build-catalog-update", {"source": url, "platform": platform}) as (logs, result):
-        with TemporaryDirectory(prefix="staging-", dir=logs) as directory:
+        with temporary_directory(logs,"stage-recipes") as directory:
             result.update(_refresh(home, url, platform, Path(directory), logs))
         return result
 
@@ -192,7 +192,7 @@ def _refresh(home, url, platform, temporary, logs):
         for item in companions:
             script = bundle / item["path"]
             script.parent.mkdir(parents=True, exist_ok=True)
-            fetch(item["url"], script, object_path(logs, "script", item, create=True) / "download")
+            fetch(item["url"], script, object_path(logs, Path(item["path"]).stem, item, create=True, version=row["revision"]) / "download")
             if digest(script) != item["sha256"]:
                 raise ForgeError(f"Companion script SHA-256 mismatch: {item['path']}", code=1)
         loaded = load(asset, home=home, library_files=library_files)
@@ -269,6 +269,16 @@ def resolve(home, reference, parent=None, *, missing_ok=False, local_workspaces=
         for directory in dict.fromkeys((Path.cwd(), Path.cwd() / app_name(reference), candidate)):
             if card := workspace_recipe(directory, reference):
                 return card
+    if named and local_workspaces:
+        from .apt_profiles import active_home
+        from .unified_profiles import record
+        scope=active_home(home)
+        if data:=record(scope):
+            candidates=[app for app in data.get('apps',[]) if app.get('enabled') and app_name(app['name'])==app_name(reference)]
+            for app in candidates:
+                if app.get('workspace') and (Path(app['workspace'])/'build.yaml').is_file():return Path(app['workspace'])/'build.yaml'
+            for file in sorted((scope.root/'src').glob(app_name(reference)+'-*/build.yaml')):
+                if workspace_recipe(file.parent,reference):return file
     index = _index(home)
     match = _match_id([row["id"] for row in index.get("builds", [])], reference) if named else None
     for row in index.get("builds", []):

@@ -1,0 +1,1088 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:jarvis-forge:test-report:v1",
+  "$defs": {
+    "case": {
+      "type": "object",
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "native_id": {
+          "type": "string"
+        },
+        "adapter": {
+          "type": "string"
+        },
+        "variant_key": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "metadata_status": {
+          "type": "string"
+        },
+        "step_id": {
+          "type": "string"
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "definition_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parameters": {},
+        "group": {
+          "type": "object"
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "running",
+            "finished",
+            "interrupted",
+            "not_run"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "passed",
+            "failed",
+            "error",
+            "skipped",
+            "xfailed",
+            "xpassed",
+            null
+          ]
+        },
+        "execution_mode": {
+          "enum": [
+            "executed",
+            "reused"
+          ]
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempts": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "criteria": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/criterion"
+          }
+        },
+        "phases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/phase"
+          }
+        },
+        "seconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "metadata_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "report_status": {
+          "enum": [
+            "provisional",
+            "ready",
+            "failed"
+          ]
+        },
+        "source": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "reused_from": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "variant_count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "case_id",
+        "instance_id",
+        "definition_id",
+        "native_id",
+        "title",
+        "adapter",
+        "variant_key",
+        "parameters",
+        "group",
+        "metadata_status",
+        "state",
+        "outcome",
+        "execution_mode"
+      ],
+      "additionalProperties": true
+    },
+    "criterion": {
+      "type": "object",
+      "properties": {
+        "criterion_id": {
+          "type": "string"
+        },
+        "expected": {
+          "type": "string"
+        },
+        "verification": {
+          "enum": [
+            "automated",
+            "manual"
+          ]
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "passed",
+            "failed",
+            "unobserved",
+            "not_applicable"
+          ]
+        },
+        "observed": {},
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "review_status": {
+          "enum": [
+            "pending",
+            "passed",
+            "rejected"
+          ]
+        }
+      },
+      "required": [
+        "criterion_id",
+        "expected",
+        "verification",
+        "status",
+        "observed",
+        "evidence_refs"
+      ],
+      "additionalProperties": true
+    },
+    "phase": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "enum": [
+            "setup",
+            "call",
+            "teardown"
+          ]
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wasxfail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "captures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "stream": {
+                "type": "string"
+              },
+              "scope": {
+                "const": "step"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "stream",
+              "scope",
+              "text"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "phase",
+        "outcome",
+        "seconds"
+      ],
+      "additionalProperties": true
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "unit": {
+          "type": "string"
+        },
+        "adapter": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "total_confirmed": {
+          "type": "boolean"
+        },
+        "completed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "running": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pending": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "interrupted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "not_run": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reused": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outcomes": {
+          "type": "object",
+          "properties": {
+            "passed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "error": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "skipped": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "xfailed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "xpassed": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "passed",
+            "failed",
+            "error",
+            "skipped",
+            "xfailed",
+            "xpassed"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "unit",
+        "total",
+        "completed",
+        "running",
+        "pending",
+        "interrupted",
+        "not_run",
+        "outcomes",
+        "reused",
+        "total_confirmed"
+      ],
+      "additionalProperties": true
+    },
+    "adapter": {
+      "type": "object",
+      "properties": {
+        "adapter": {
+          "type": "string"
+        },
+        "enumeration": {
+          "enum": [
+            "exact",
+            "cached",
+            "none"
+          ]
+        },
+        "progress": {
+          "enum": [
+            "case_events",
+            "step_events",
+            "final_only"
+          ]
+        },
+        "logs": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "case_captured",
+              "case_live",
+              "step_only",
+              "none"
+            ]
+          }
+        },
+        "cancellation": {
+          "enum": [
+            "supported",
+            "unsupported"
+          ]
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "case_bound",
+              "step_bound"
+            ]
+          }
+        }
+      },
+      "required": [
+        "adapter",
+        "enumeration",
+        "progress",
+        "logs",
+        "cancellation",
+        "artifacts"
+      ],
+      "additionalProperties": true
+    },
+    "discovery": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "interrupted"
+          ]
+        },
+        "href": {
+          "type": "string"
+        },
+        "inventory_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selection": {},
+        "freshness": {
+          "enum": [
+            "fresh",
+            "stale",
+            "unknown"
+          ]
+        },
+        "environment": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "test_cases_href": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata_diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "href"
+      ],
+      "additionalProperties": true
+    },
+    "event": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "time": {
+          "type": "string"
+        },
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "step_id": {
+          "type": "string"
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "event_type": {
+          "enum": [
+            "collection_started",
+            "collection_finished",
+            "case_started",
+            "phase_finished",
+            "case_finished",
+            "artifact_registered",
+            "session_finished"
+          ]
+        },
+        "payload": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema_version",
+        "seq",
+        "time",
+        "job_id",
+        "run_id",
+        "step_id",
+        "target_id",
+        "instance_id",
+        "attempt",
+        "event_type",
+        "payload"
+      ],
+      "additionalProperties": true
+    },
+    "report": {
+      "type": "object",
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "native_id": {
+          "type": "string"
+        },
+        "adapter": {
+          "type": "string"
+        },
+        "variant_key": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "metadata_status": {
+          "type": "string"
+        },
+        "step_id": {
+          "type": "string"
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "definition_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parameters": {},
+        "group": {
+          "type": "object"
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "running",
+            "finished",
+            "interrupted",
+            "not_run"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "passed",
+            "failed",
+            "error",
+            "skipped",
+            "xfailed",
+            "xpassed",
+            null
+          ]
+        },
+        "execution_mode": {
+          "enum": [
+            "executed",
+            "reused"
+          ]
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempts": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "criteria": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/criterion"
+          }
+        },
+        "phases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/phase"
+          }
+        },
+        "seconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "metadata_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "report_status": {
+          "enum": [
+            "provisional",
+            "ready",
+            "failed"
+          ]
+        },
+        "source": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "reused_from": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "status": {
+          "enum": [
+            "provisional",
+            "ready",
+            "failed"
+          ]
+        },
+        "json_href": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "html_href": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generation_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "template_version": {
+          "type": "string"
+        },
+        "variant_count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "case_id",
+        "instance_id",
+        "definition_id",
+        "native_id",
+        "title",
+        "adapter",
+        "variant_key",
+        "parameters",
+        "group",
+        "metadata_status",
+        "state",
+        "outcome",
+        "execution_mode",
+        "schema_version",
+        "status",
+        "criteria",
+        "metadata_digest",
+        "template_version",
+        "generation_error"
+      ],
+      "additionalProperties": true
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "api_version": {
+          "const": 1
+        },
+        "features": {
+          "type": "object",
+          "properties": {
+            "test_cases": {
+              "const": true
+            }
+          },
+          "required": [
+            "test_cases"
+          ],
+          "additionalProperties": true
+        },
+        "adapters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/adapter"
+          }
+        },
+        "inventories": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "ok",
+        "api_version",
+        "features",
+        "adapters"
+      ],
+      "additionalProperties": true
+    },
+    "list": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "api_version": {
+          "const": 1
+        },
+        "inventory_revision": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/case"
+          }
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "total_confirmed": {
+          "type": "boolean"
+        },
+        "facets": {
+          "type": "object",
+          "properties": {
+            "component": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tag": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "metadata": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "component",
+            "tag",
+            "metadata"
+          ],
+          "additionalProperties": false
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "ok",
+        "api_version",
+        "inventory_revision",
+        "items",
+        "next_cursor"
+      ],
+      "additionalProperties": true
+    },
+    "detail": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "api_version": {
+          "const": 1
+        },
+        "test_case": {
+          "$ref": "#/$defs/case"
+        }
+      },
+      "required": [
+        "ok",
+        "api_version",
+        "test_case"
+      ],
+      "additionalProperties": true
+    },
+    "progress": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "api_version": {
+          "const": 1
+        },
+        "job_id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summaries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/summary"
+          }
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "current_test": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/case"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ok",
+        "api_version",
+        "job_id",
+        "revision",
+        "updated_at",
+        "summaries",
+        "steps"
+      ],
+      "additionalProperties": true
+    },
+    "events": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "api_version": {
+          "const": 1
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/event"
+          }
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "api_version",
+        "items",
+        "next_cursor"
+      ],
+      "additionalProperties": true
+    },
+    "log": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "api_version": {
+          "const": 1
+        },
+        "text": {
+          "type": "string"
+        },
+        "next_offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "eof": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "scope": {
+          "enum": [
+            "case",
+            "step"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "ok",
+        "api_version",
+        "text",
+        "next_offset",
+        "eof",
+        "truncated",
+        "available",
+        "scope"
+      ],
+      "additionalProperties": true
+    },
+    "report_response": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "api_version": {
+          "const": 1
+        },
+        "report": {
+          "$ref": "#/$defs/report"
+        }
+      },
+      "required": [
+        "ok",
+        "api_version",
+        "report"
+      ],
+      "additionalProperties": true
+    },
+    "discovery_response": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "api_version": {
+          "const": 1
+        },
+        "discovery": {
+          "$ref": "#/$defs/discovery"
+        }
+      },
+      "required": [
+        "ok",
+        "api_version",
+        "discovery"
+      ],
+      "additionalProperties": true
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": false
+        },
+        "api_version": {
+          "const": 1
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "hint": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "code": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "ok",
+        "api_version",
+        "error"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

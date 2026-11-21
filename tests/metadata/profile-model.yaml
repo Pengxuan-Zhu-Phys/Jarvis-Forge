@@ -1,0 +1,1998 @@
+schema_version: 1
+kind: test-metadata
+project_id: jarvis-forge
+scope:
+  component: platform-profile-model
+  preconditions: Local development interpreter and CMake; no remote hosts.
+definitions:
+- id: forge.profiles.software-names-preserve-name-and-version-without-length-limit
+  title: Software names preserve name and version without length limit
+  purpose: Software names preserve name and version without length limit.
+  binding:
+    adapter: pytest
+    selector: tests/test_paths.py::test_software_names_preserve_name_and_version_without_length_limit
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise software names preserve name and version without length limit.
+  criteria:
+  - id: contract
+    expected: Software names preserve name and version without length limit.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.named-reads-do-not-allocate-or-write-indexes
+  title: Named reads do not allocate or write indexes
+  purpose: Named reads do not allocate or write indexes.
+  binding:
+    adapter: pytest
+    selector: tests/test_paths.py::test_named_reads_do_not_allocate_or_write_indexes
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise named reads do not allocate or write indexes.
+  criteria:
+  - id: contract
+    expected: Named reads do not allocate or write indexes.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.ordered-records-and-run-ids-are-concurrent-and-durable
+  title: Ordered records and run ids are concurrent and durable
+  purpose: Ordered records and run ids are concurrent and durable.
+  binding:
+    adapter: pytest
+    selector: tests/test_paths.py::test_ordered_records_and_run_ids_are_concurrent_and_durable
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise ordered records and run ids are concurrent and durable.
+  criteria:
+  - id: contract
+    expected: Ordered records and run ids are concurrent and durable.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.records-reuse-full-identity-without-hash-directory
+  title: Records reuse full identity without hash directory
+  purpose: Records reuse full identity without hash directory.
+  binding:
+    adapter: pytest
+    selector: tests/test_paths.py::test_records_reuse_full_identity_without_hash_directory
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise records reuse full identity without hash directory.
+  criteria:
+  - id: contract
+    expected: Records reuse full identity without hash directory.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.allocated-legacy-indexes-are-rejected-not-migrated
+  title: Allocated legacy indexes are rejected not migrated
+  purpose: Allocated legacy indexes are rejected not migrated.
+  binding:
+    adapter: pytest
+    selector: tests/test_paths.py::test_allocated_legacy_indexes_are_rejected_not_migrated
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise allocated legacy indexes are rejected not migrated.
+  criteria:
+  - id: contract
+    expected: Allocated legacy indexes are rejected not migrated.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.all-controlled-generation-sites-use-semantic-or-ordered-names
+  title: All controlled generation sites use semantic or ordered names
+  purpose: Guard the controller's physical naming boundary, including future edits.
+  binding:
+    adapter: pytest
+    selector: tests/test_paths.py::test_all_controlled_generation_sites_use_semantic_or_ordered_names
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise all controlled generation sites use semantic or ordered names.
+  criteria:
+  - id: contract
+    expected: Guard the controller's physical naming boundary, including future edits.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.native-stage-names-clear-only-changed-owned-stages
+  title: Native stage names clear only changed owned stages
+  purpose: Native stage names clear only changed owned stages.
+  binding:
+    adapter: pytest
+    selector: tests/test_paths.py::test_native_stage_names_clear_only_changed_owned_stages
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise native stage names clear only changed owned stages.
+  criteria:
+  - id: contract
+    expected: Native stage names clear only changed owned stages.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.profiles-share-platform-but-have-independent-state-and-scripts
+  title: Profiles share platform but have independent state and scripts
+  purpose: Profiles share platform but have independent state and scripts.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_model.py::test_profiles_share_platform_but_have_independent_state_and_scripts
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise profiles share platform but have independent state and scripts.
+  criteria:
+  - id: contract
+    expected: Profiles share platform but have independent state and scripts.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.namespace-collision-and-duplicate-profile-are-rejected
+  title: Namespace collision and duplicate profile are rejected
+  purpose: Namespace collision and duplicate profile are rejected.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_model.py::test_namespace_collision_and_duplicate_profile_are_rejected
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise namespace collision and duplicate profile are rejected.
+  criteria:
+  - id: contract
+    expected: Namespace collision and duplicate profile are rejected.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.host-compatibility-uses-arch-glibc-and-target-not-hostname
+  title: Host compatibility uses arch glibc and target not hostname
+  purpose: Host compatibility uses arch glibc and target not hostname.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_model.py::test_host_compatibility_uses_arch_glibc_and_target_not_hostname
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise host compatibility uses arch glibc and target not hostname.
+  criteria:
+  - id: contract
+    expected: Host compatibility uses arch glibc and target not hostname.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.broken-backend-never-falls-back-and-default-is-preserved
+  title: Broken backend never falls back and default is preserved
+  purpose: Broken backend never falls back and default is preserved.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_model.py::test_broken_backend_never_falls_back_and_default_is_preserved
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise broken backend never falls back and default is preserved.
+  criteria:
+  - id: contract
+    expected: Broken backend never falls back and default is preserved.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.old-layout-is-refused-without-modification
+  title: Old layout is refused without modification
+  purpose: Old layout is refused without modification.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_model.py::test_old_layout_is_refused_without_modification
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise old layout is refused without modification.
+  criteria:
+  - id: contract
+    expected: Old layout is refused without modification.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.check-and-list-are-read-only-without-automatic-gcc-bootstrap
+  title: Check and list are read only without automatic gcc bootstrap
+  purpose: Check and list are read only without automatic gcc bootstrap.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_model.py::test_check_and_list_are_read_only_without_automatic_gcc_bootstrap
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise check and list are read only without automatic gcc bootstrap.
+  criteria:
+  - id: contract
+    expected: Check and list are read only without automatic gcc bootstrap.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.version-upgrade-keeps-old-then-autoremove-physically-deletes-it
+  title: Version upgrade keeps old then autoremove physically deletes it
+  purpose: Version upgrade keeps old then autoremove physically deletes it.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_transactions.py::test_version_upgrade_keeps_old_then_autoremove_physically_deletes_it
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise version upgrade keeps old then autoremove physically deletes
+      it.
+  criteria:
+  - id: contract
+    expected: Version upgrade keeps old then autoremove physically deletes it.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.same-version-variant-failure-restores-native-index-files-and-activation
+  title: Same version variant failure restores native index files and activation
+  purpose: Same version variant failure restores native index files and activation.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_transactions.py::test_same_version_variant_failure_restores_native_index_files_and_activation
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise same version variant failure restores native index files and
+      activation.
+  criteria:
+  - id: contract
+    expected: Same version variant failure restores native index files and activation.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.rebuild-requires-plan-confirmation-before-detaching-or-moving
+  title: Rebuild requires plan confirmation before detaching or moving
+  purpose: Rebuild requires plan confirmation before detaching or moving.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_transactions.py::test_rebuild_requires_plan_confirmation_before_detaching_or_moving
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise rebuild requires plan confirmation before detaching or moving.
+  criteria:
+  - id: contract
+    expected: Rebuild requires plan confirmation before detaching or moving.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.remove-dependency-also-removes-dependent-roots-but-keeps-automatic-libraries
+  title: Remove dependency also removes dependent roots but keeps automatic libraries
+  purpose: Remove dependency also removes dependent roots but keeps automatic libraries.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_transactions.py::test_remove_dependency_also_removes_dependent_roots_but_keeps_automatic_libraries
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise remove dependency also removes dependent roots but keeps automatic
+      libraries.
+  criteria:
+  - id: contract
+    expected: Remove dependency also removes dependent roots but keeps automatic libraries.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.dry-run-solves-and-saves-history-then-from-uses-exact-lock-without-resolving
+  title: Dry run solves and saves history then from uses exact lock without resolving
+  purpose: Dry run solves and saves history then from uses exact lock without resolving.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_transactions.py::test_dry_run_solves_and_saves_history_then_from_uses_exact_lock_without_resolving
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise dry run solves and saves history then from uses exact lock without
+      resolving.
+  criteria:
+  - id: contract
+    expected: Dry run solves and saves history then from uses exact lock without resolving.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.enabled-app-blocks-remove-and-autoremove
+  title: Enabled app blocks remove and autoremove
+  purpose: Enabled app blocks remove and autoremove.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_transactions.py::test_enabled_app_blocks_remove_and_autoremove
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise enabled app blocks remove and autoremove.
+  criteria:
+  - id: contract
+    expected: Enabled app blocks remove and autoremove.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.same-version-rebuild-uses-original-prefix-and-restores-files-database-and-shell
+  title: Same version rebuild uses original prefix and restores files database and
+    shell
+  purpose: Same version rebuild uses original prefix and restores files database and
+    shell.
+  binding:
+    adapter: pytest
+    selector: tests/test_package_lifecycle.py::test_same_version_rebuild_uses_original_prefix_and_restores_files_database_and_shell
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise same version rebuild uses original prefix and restores files
+      database and shell.
+  criteria:
+  - id: contract
+    expected: Same version rebuild uses original prefix and restores files database
+      and shell.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.version-upgrade-keeps-old-prefix-and-reclaims-no-old-data-early
+  title: Version upgrade keeps old prefix and reclaims no old data early
+  purpose: Version upgrade keeps old prefix and reclaims no old data early.
+  binding:
+    adapter: pytest
+    selector: tests/test_package_lifecycle.py::test_version_upgrade_keeps_old_prefix_and_reclaims_no_old_data_early
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise version upgrade keeps old prefix and reclaims no old data early.
+  criteria:
+  - id: contract
+    expected: Version upgrade keeps old prefix and reclaims no old data early.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.failed-fresh-install-removes-partial-prefixes-and-restores-db
+  title: Failed fresh install removes partial prefixes and restores db
+  purpose: Failed fresh install removes partial prefixes and restores db.
+  binding:
+    adapter: pytest
+    selector: tests/test_package_lifecycle.py::test_failed_fresh_install_removes_partial_prefixes_and_restores_db
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise failed fresh install removes partial prefixes and restores db.
+  criteria:
+  - id: contract
+    expected: Failed fresh install removes partial prefixes and restores db.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.unregistered-collision-is-never-overwritten
+  title: Unregistered collision is never overwritten
+  purpose: Unregistered collision is never overwritten.
+  binding:
+    adapter: pytest
+    selector: tests/test_package_lifecycle.py::test_unregistered_collision_is_never_overwritten
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise unregistered collision is never overwritten.
+  criteria:
+  - id: contract
+    expected: Unregistered collision is never overwritten.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.removal-moves-directories-then-really-reclaims-space
+  title: Removal moves directories then really reclaims space
+  purpose: Removal moves directories then really reclaims space.
+  binding:
+    adapter: pytest
+    selector: tests/test_package_lifecycle.py::test_removal_moves_directories_then_really_reclaims_space
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise removal moves directories then really reclaims space.
+  criteria:
+  - id: contract
+    expected: Removal moves directories then really reclaims space.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.reverse-closure-and-app-references-block-package-removal
+  title: Reverse closure and app references block package removal
+  purpose: Reverse closure and app references block package removal.
+  binding:
+    adapter: pytest
+    selector: tests/test_package_lifecycle.py::test_reverse_closure_and_app_references_block_package_removal
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise reverse closure and app references block package removal.
+  criteria:
+  - id: contract
+    expected: Reverse closure and app references block package removal.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.history-has-only-lock-manifest-and-result-and-checks-integrity
+  title: History has only lock manifest and result and checks integrity
+  purpose: History has only lock manifest and result and checks integrity.
+  binding:
+    adapter: pytest
+    selector: tests/test_package_lifecycle.py::test_history_has_only_lock_manifest_and_result_and_checks_integrity
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise history has only lock manifest and result and checks integrity.
+  criteria:
+  - id: contract
+    expected: History has only lock manifest and result and checks integrity.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.retry-replaces-partial-new-prefix-without-losing-original-backup
+  title: Retry replaces partial new prefix without losing original backup
+  purpose: Retry replaces partial new prefix without losing original backup.
+  binding:
+    adapter: pytest
+    selector: tests/test_package_lifecycle.py::test_retry_replaces_partial_new_prefix_without_losing_original_backup
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise retry replaces partial new prefix without losing original backup.
+  criteria:
+  - id: contract
+    expected: Retry replaces partial new prefix without losing original backup.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.retry-reuses-a-partial-new-install-registered-by-native-engine
+  title: Retry reuses a partial new install registered by native engine
+  purpose: Retry reuses a partial new install registered by native engine.
+  binding:
+    adapter: pytest
+    selector: tests/test_package_lifecycle.py::test_retry_reuses_a_partial_new_install_registered_by_native_engine
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise retry reuses a partial new install registered by native engine.
+  criteria:
+  - id: contract
+    expected: Retry reuses a partial new install registered by native engine.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.database-restore-failure-still-restores-shell-files-and-preserves-recovery-evidence
+  title: Database restore failure still restores shell files and preserves recovery
+    evidence
+  purpose: Database restore failure still restores shell files and preserves recovery
+    evidence.
+  binding:
+    adapter: pytest
+    selector: tests/test_package_lifecycle.py::test_database_restore_failure_still_restores_shell_files_and_preserves_recovery_evidence
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise database restore failure still restores shell files and preserves
+      recovery evidence.
+  criteria:
+  - id: contract
+    expected: Database restore failure still restores shell files and preserves recovery
+      evidence.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.app-hash-protects-its-exact-version-not-an-unused-older-version
+  title: App hash protects its exact version not an unused older version
+  purpose: App hash protects its exact version not an unused older version.
+  binding:
+    adapter: pytest
+    selector: tests/test_package_lifecycle.py::test_app_hash_protects_its_exact_version_not_an_unused_older_version
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise app hash protects its exact version not an unused older version.
+  criteria:
+  - id: contract
+    expected: App hash protects its exact version not an unused older version.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.shared-keyring-keeps-keys-and-config-out-of-runtime
+  title: Shared keyring keeps keys and config out of runtime
+  purpose: Shared keyring keeps keys and config out of runtime.
+  binding:
+    adapter: pytest
+    selector: tests/test_socket_runtime.py::test_shared_keyring_keeps_keys_and_config_out_of_runtime
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise shared keyring keeps keys and config out of runtime.
+  criteria:
+  - id: contract
+    expected: Shared keyring keeps keys and config out of runtime.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.runtime-uses-short-private-directory-and-rejects-symlinks
+  title: Runtime uses short private directory and rejects symlinks
+  purpose: Runtime uses short private directory and rejects symlinks.
+  binding:
+    adapter: pytest
+    selector: tests/test_socket_runtime.py::test_runtime_uses_short_private_directory_and_rejects_symlinks
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise runtime uses short private directory and rejects symlinks.
+  criteria:
+  - id: contract
+    expected: Runtime uses short private directory and rejects symlinks.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.export-uses-full-lock-dag-and-portable-package-identity
+  title: Export uses full lock dag and portable package identity
+  purpose: Export uses full lock dag and portable package identity.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_exports.py::test_export_uses_full_lock_dag_and_portable_package_identity
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise export uses full lock dag and portable package identity.
+  criteria:
+  - id: contract
+    expected: Export uses full lock dag and portable package identity.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.variant-diff-refuses-before-install-and-pins-native-syntax
+  title: Variant diff refuses before install and pins native syntax
+  purpose: Variant diff refuses before install and pins native syntax.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_exports.py::test_variant_diff_refuses_before_install_and_pins_native_syntax
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise variant diff refuses before install and pins native syntax.
+  criteria:
+  - id: contract
+    expected: Variant diff refuses before install and pins native syntax.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.python-mismatch-fails-before-creating-any-platform
+  title: Python mismatch fails before creating any platform
+  purpose: Python mismatch fails before creating any platform.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_exports.py::test_python_mismatch_fails_before_creating_any_platform
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise python mismatch fails before creating any platform.
+  criteria:
+  - id: contract
+    expected: Python mismatch fails before creating any platform.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.export-rejects-ambiguous-or-invalid-identity
+  title: Export rejects ambiguous or invalid identity
+  purpose: Export rejects ambiguous or invalid identity.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_exports.py::test_export_rejects_ambiguous_or_invalid_identity
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise export rejects ambiguous or invalid identity.
+  criteria:
+  - id: contract
+    expected: Export rejects ambiguous or invalid identity.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.app-export-rejects-unavailable-local-source-paths
+  title: App export rejects unavailable local source paths
+  purpose: App export rejects unavailable local source paths.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_exports.py::test_app_export_rejects_unavailable_local_source_paths
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise app export rejects unavailable local source paths.
+  criteria:
+  - id: contract
+    expected: App export rejects unavailable local source paths.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.bundle-integrity-and-companion-materialization
+  title: Bundle integrity and companion materialization
+  purpose: Bundle integrity and companion materialization.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_exports.py::test_bundle_integrity_and_companion_materialization
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise bundle integrity and companion materialization.
+  criteria:
+  - id: contract
+    expected: Bundle integrity and companion materialization.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.release-app-bundle-builds-in-another-empty-profile
+  title: Release app bundle builds in another empty profile
+  purpose: Release app bundle builds in another empty profile.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_exports.py::test_release_app_bundle_builds_in_another_empty_profile
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise release app bundle builds in another empty profile.
+  criteria:
+  - id: contract
+    expected: Release app bundle builds in another empty profile.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.internal-workspace-build-and-prefix-belong-to-profile
+  title: Internal workspace build and prefix belong to profile
+  purpose: Internal workspace build and prefix belong to profile.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_internal_workspace_build_and_prefix_belong_to_profile
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise internal workspace build and prefix belong to profile.
+  criteria:
+  - id: contract
+    expected: Internal workspace build and prefix belong to profile.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.version-switch-reenables-without-building-and-autoremove-reclaims-old-versions
+  title: Version switch reenables without building and autoremove reclaims old versions
+  purpose: Version switch reenables without building and autoremove reclaims old versions.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_version_switch_reenables_without_building_and_autoremove_reclaims_old_versions
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise version switch reenables without building and autoremove reclaims
+      old versions.
+  criteria:
+  - id: contract
+    expected: Version switch reenables without building and autoremove reclaims old
+      versions.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.same-version-rebuild-failure-restores-prefix-metadata-and-activation
+  title: Same version rebuild failure restores prefix metadata and activation
+  purpose: Same version rebuild failure restores prefix metadata and activation.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_same_version_rebuild_failure_restores_prefix_metadata_and_activation
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise same version rebuild failure restores prefix metadata and activation.
+  criteria:
+  - id: contract
+    expected: Same version rebuild failure restores prefix metadata and activation.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.external-workspace-is-excluded-from-profile-activation-and-never-deleted
+  title: External workspace is excluded from profile activation and never deleted
+  purpose: External workspace is excluded from profile activation and never deleted.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_external_workspace_is_excluded_from_profile_activation_and_never_deleted
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise external workspace is excluded from profile activation and never
+      deleted.
+  criteria:
+  - id: contract
+    expected: External workspace is excluded from profile activation and never deleted.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.failed-install-automatically-resumes-only-unchanged-inputs
+  title: Failed install automatically resumes only unchanged inputs
+  purpose: Failed install automatically resumes only unchanged inputs.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_failed_install_automatically_resumes_only_unchanged_inputs
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise failed install automatically resumes only unchanged inputs.
+  criteria:
+  - id: contract
+    expected: Failed install automatically resumes only unchanged inputs.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.dependencies-are-prepared-and-removal-checks-enabled-consumers
+  title: Dependencies are prepared and removal checks enabled consumers
+  purpose: Dependencies are prepared and removal checks enabled consumers.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_dependencies_are_prepared_and_removal_checks_enabled_consumers
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise dependencies are prepared and removal checks enabled consumers.
+  criteria:
+  - id: contract
+    expected: Dependencies are prepared and removal checks enabled consumers.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.dependency-version-switch-refuses-enabled-consumers
+  title: Dependency version switch refuses enabled consumers
+  purpose: Dependency version switch refuses enabled consumers.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_dependency_version_switch_refuses_enabled_consumers
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise dependency version switch refuses enabled consumers.
+  criteria:
+  - id: contract
+    expected: Dependency version switch refuses enabled consumers.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.rebuild-rollback-preserves-last-successful-workspace-state
+  title: Rebuild rollback preserves last successful workspace state
+  purpose: Rebuild rollback preserves last successful workspace state.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_rebuild_rollback_preserves_last_successful_workspace_state
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise rebuild rollback preserves last successful workspace state.
+  criteria:
+  - id: contract
+    expected: Rebuild rollback preserves last successful workspace state.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.catalog-upgrade-installs-new-version-and-preserves-old
+  title: Catalog upgrade installs new version and preserves old
+  purpose: Catalog upgrade installs new version and preserves old.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_catalog_upgrade_installs_new_version_and_preserves_old
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise catalog upgrade installs new version and preserves old.
+  criteria:
+  - id: contract
+    expected: Catalog upgrade installs new version and preserves old.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.same-version-catalog-upgrade-restores-recipe-on-failure
+  title: Same version catalog upgrade restores recipe on failure
+  purpose: Same version catalog upgrade restores recipe on failure.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_same_version_catalog_upgrade_restores_recipe_on_failure
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise same version catalog upgrade restores recipe on failure.
+  criteria:
+  - id: contract
+    expected: Same version catalog upgrade restores recipe on failure.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.external-workspace-profile-rebuild-failure-restores-old-owner
+  title: External workspace profile rebuild failure restores old owner
+  purpose: External workspace profile rebuild failure restores old owner.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_external_workspace_profile_rebuild_failure_restores_old_owner
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise external workspace profile rebuild failure restores old owner.
+  criteria:
+  - id: contract
+    expected: External workspace profile rebuild failure restores old owner.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.root-python-preflight-fails-before-fetching-dependency
+  title: Root python preflight fails before fetching dependency
+  purpose: Root python preflight fails before fetching dependency.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_root_python_preflight_fails_before_fetching_dependency
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes; fake native backends or local tiny
+        CMake sources.
+    action: Exercise root python preflight fails before fetching dependency.
+  criteria:
+  - id: contract
+    expected: Root python preflight fails before fetching dependency.
+    verification: automated
+  failure_meaning: The profile, prefix, transaction or exported identity boundary
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.named-upgrade-holds-other-roots-to-current-versions
+  title: Named upgrade holds other roots to current versions
+  purpose: Named upgrade holds other roots to current versions.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_transactions.py::test_named_upgrade_holds_other_roots_to_current_versions
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise named upgrade holds other roots to current versions.
+  criteria:
+  - id: contract
+    expected: Named upgrade holds other roots to current versions.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.reproduction-diff-is-reported-before-native-install
+  title: Reproduction diff is reported before native install
+  purpose: Reproduction diff is reported before native install.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_transactions.py::test_reproduction_diff_is_reported_before_native_install
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise reproduction diff is reported before native install.
+  criteria:
+  - id: contract
+    expected: Reproduction diff is reported before native install.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.cross-profile-plan-failure-does-not-change-workspace-owner
+  title: Cross profile plan failure does not change workspace owner
+  purpose: Cross profile plan failure does not change workspace owner.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_cross_profile_plan_failure_does_not_change_workspace_owner
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise cross profile plan failure does not change workspace owner.
+  criteria:
+  - id: contract
+    expected: Cross profile plan failure does not change workspace owner.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.late-rebuild-publication-failure-restores-original-prefix
+  title: Late rebuild publication failure restores original prefix
+  purpose: Late rebuild publication failure restores original prefix.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_late_rebuild_publication_failure_restores_original_prefix
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise late rebuild publication failure restores original prefix.
+  criteria:
+  - id: contract
+    expected: Late rebuild publication failure restores original prefix.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.successful-same-version-rebuild-replaces-receipt-at-original-prefix
+  title: Successful same version rebuild replaces receipt at original prefix
+  purpose: Successful same version rebuild replaces receipt at original prefix.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_successful_same_version_rebuild_replaces_receipt_at_original_prefix
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise successful same version rebuild replaces receipt at original
+      prefix.
+  criteria:
+  - id: contract
+    expected: Successful same version rebuild replaces receipt at original prefix.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.unregistered-app-prefix-is-preserved-before-build
+  title: Unregistered app prefix is preserved before build
+  purpose: Unregistered app prefix is preserved before build.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_unregistered_app_prefix_is_preserved_before_build
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise unregistered app prefix is preserved before build.
+  criteria:
+  - id: contract
+    expected: Unregistered app prefix is preserved before build.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.database-checkpoint-is-not-overwritten-by-a-retried-plan
+  title: Database checkpoint is not overwritten by a retried plan
+  purpose: Database checkpoint is not overwritten by a retried plan.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_database_checkpoint_is_not_overwritten_by_a_retried_plan
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise database checkpoint is not overwritten by a retried plan.
+  criteria:
+  - id: contract
+    expected: Database checkpoint is not overwritten by a retried plan.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.native-description-search-is-read-only-and-adapts-version-metadata
+  title: Native description search is read only and adapts version metadata
+  purpose: Native description search is read only and adapts version metadata.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_native_description_search_is_read_only_and_adapts_version_metadata
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise native description search is read only and adapts version metadata.
+  criteria:
+  - id: contract
+    expected: Native description search is read only and adapts version metadata.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.profile-inventory-selection-and-reversible-shell
+  title: Profile inventory selection and reversible shell
+  purpose: Profile inventory selection and reversible shell.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_profile_inventory_selection_and_reversible_shell
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise profile inventory selection and reversible shell.
+  criteria:
+  - id: contract
+    expected: Profile inventory selection and reversible shell.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.python-policy-precedes-install
+  title: Python policy precedes install
+  purpose: Python policy precedes install.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_python_policy_precedes_install
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise python policy precedes install.
+  criteria:
+  - id: contract
+    expected: Python policy precedes install.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.plan-write-failure-retry-and-remove
+  title: Plan write failure retry and remove
+  purpose: Plan write failure retry and remove.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_plan_write_failure_retry_and_remove
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise plan write failure retry and remove.
+  criteria:
+  - id: contract
+    expected: Plan write failure retry and remove.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.repair-lost-dependency-and-activation
+  title: Repair lost dependency and activation
+  purpose: Repair lost dependency and activation.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_repair_lost_dependency_and_activation
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise repair lost dependency and activation.
+  criteria:
+  - id: contract
+    expected: Repair lost dependency and activation.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.permission-and-spack-only-options
+  title: Permission and spack only options
+  purpose: Permission and spack only options.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_permission_and_spack_only_options
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise permission and spack only options.
+  criteria:
+  - id: contract
+    expected: Permission and spack only options.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.explicit-update-and-missing-binding
+  title: Explicit update and missing binding
+  purpose: Explicit update and missing binding.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_explicit_update_and_missing_binding
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise explicit update and missing binding.
+  criteria:
+  - id: contract
+    expected: Explicit update and missing binding.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.init-refuses-legacy-layout-without-migration
+  title: Init refuses legacy layout without migration
+  purpose: Init refuses legacy layout without migration.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_init_refuses_legacy_layout_without_migration
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise init refuses legacy layout without migration.
+  criteria:
+  - id: contract
+    expected: Init refuses legacy layout without migration.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.missing-selected-profile-is-not-silently-replaced
+  title: Missing selected profile is not silently replaced
+  purpose: Missing selected profile is not silently replaced.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_missing_selected_profile_is_not_silently_replaced
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise missing selected profile is not silently replaced.
+  criteria:
+  - id: contract
+    expected: Missing selected profile is not silently replaced.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.macos-first-write-creates-default-but-preview-does-not
+  title: Macos first write creates default but preview does not
+  purpose: Macos first write creates default but preview does not.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_macos_first_write_creates_default_but_preview_does_not
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise macos first write creates default but preview does not.
+  criteria:
+  - id: contract
+    expected: Macos first write creates default but preview does not.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.homebrew-registration-requires-darwin
+  title: Homebrew registration requires darwin
+  purpose: Homebrew registration requires darwin.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_homebrew_registration_requires_darwin
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise homebrew registration requires darwin.
+  criteria:
+  - id: contract
+    expected: Homebrew registration requires darwin.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.spack-build-step-reports-homebrew-boundary
+  title: Spack build step reports homebrew boundary
+  purpose: Spack build step reports homebrew boundary.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_spack_build_step_reports_homebrew_boundary
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise spack build step reports homebrew boundary.
+  criteria:
+  - id: contract
+    expected: Spack build step reports homebrew boundary.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.reuse-preserves-recorded-dependency-version
+  title: Reuse preserves recorded dependency version
+  purpose: Reuse preserves recorded dependency version.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_reuse_preserves_recorded_dependency_version
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise reuse preserves recorded dependency version.
+  criteria:
+  - id: contract
+    expected: Reuse preserves recorded dependency version.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.upgrade-preserves-old-keg-and-rebuild-failure-restores-owned-prefix
+  title: Upgrade preserves old keg and rebuild failure restores owned prefix
+  purpose: Upgrade preserves old keg and rebuild failure restores owned prefix.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_upgrade_preserves_old_keg_and_rebuild_failure_restores_owned_prefix
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise upgrade preserves old keg and rebuild failure restores owned
+      prefix.
+  criteria:
+  - id: contract
+    expected: Upgrade preserves old keg and rebuild failure restores owned prefix.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.shared-keg-cannot-be-rebuilt-or-deleted-by-another-profile
+  title: Shared keg cannot be rebuilt or deleted by another profile
+  purpose: Shared keg cannot be rebuilt or deleted by another profile.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_shared_keg_cannot_be_rebuilt_or_deleted_by_another_profile
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise shared keg cannot be rebuilt or deleted by another profile.
+  criteria:
+  - id: contract
+    expected: Shared keg cannot be rebuilt or deleted by another profile.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.autoremove-collects-only-owned-unreferenced-older-keg
+  title: Autoremove collects only owned unreferenced older keg
+  purpose: Autoremove collects only owned unreferenced older keg.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_autoremove_collects_only_owned_unreferenced_older_keg
+  scenario:
+    inputs:
+      environment: Disposable local Forge homes and fake native backends; tiny local
+        CMake sources where needed.
+    action: Exercise autoremove collects only owned unreferenced older keg.
+  criteria:
+  - id: contract
+    expected: Autoremove collects only owned unreferenced older keg.
+    verification: automated
+  failure_meaning: Native package or app ownership, identity, transaction or planning
+    regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.explicit-version-is-not-overridden-by-another-current-workspace
+  title: Explicit version is not overridden by another current workspace
+  purpose: Explicit version is not overridden by another current workspace.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_explicit_version_is_not_overridden_by_another_current_workspace
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise explicit version is not overridden by another current workspace.
+  criteria:
+  - id: contract
+    expected: Explicit version is not overridden by another current workspace.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.initial-publication-failure-does-not-enable-app-and-can-resume
+  title: Initial publication failure does not enable app and can resume
+  purpose: Initial publication failure does not enable app and can resume.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_initial_publication_failure_does_not_enable_app_and_can_resume
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise initial publication failure does not enable app and can resume.
+  criteria:
+  - id: contract
+    expected: Initial publication failure does not enable app and can resume.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.companion-only-catalog-upgrade-rebuilds-and-preserves-local-edits
+  title: Companion only catalog upgrade rebuilds and preserves local edits
+  purpose: Companion only catalog upgrade rebuilds and preserves local edits.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_companion_only_catalog_upgrade_rebuilds_and_preserves_local_edits
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise companion only catalog upgrade rebuilds and preserves local edits.
+  criteria:
+  - id: contract
+    expected: Companion only catalog upgrade rebuilds and preserves local edits.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.wrong-pyenv-blocks-before-app-environment-mutation
+  title: Wrong pyenv blocks before app environment mutation
+  purpose: Wrong pyenv blocks before app environment mutation.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_wrong_pyenv_blocks_before_app_environment_mutation
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise wrong pyenv blocks before app environment mutation.
+  criteria:
+  - id: contract
+    expected: Wrong pyenv blocks before app environment mutation.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.unchanged-yaml-with-new-companion-is-an-upgrade
+  title: Unchanged yaml with new companion is an upgrade
+  purpose: Unchanged yaml with new companion is an upgrade.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_unchanged_yaml_with_new_companion_is_an_upgrade
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise unchanged yaml with new companion is an upgrade.
+  criteria:
+  - id: contract
+    expected: Unchanged yaml with new companion is an upgrade.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.foreign-forge-workspace-is-not-adopted-by-matching-profile-name
+  title: Foreign forge workspace is not adopted by matching profile name
+  purpose: Foreign forge workspace is not adopted by matching profile name.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_foreign_forge_workspace_is_not_adopted_by_matching_profile_name
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise foreign forge workspace is not adopted by matching profile name.
+  criteria:
+  - id: contract
+    expected: Foreign forge workspace is not adopted by matching profile name.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.backup-cleanup-failure-preserves-successful-rebuild
+  title: Backup cleanup failure preserves successful rebuild
+  purpose: Backup cleanup failure preserves successful rebuild.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_backup_cleanup_failure_preserves_successful_rebuild
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise backup cleanup failure preserves successful rebuild.
+  criteria:
+  - id: contract
+    expected: Backup cleanup failure preserves successful rebuild.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.internal-workspace-cannot-be-transferred-to-another-profile
+  title: Internal workspace cannot be transferred to another profile
+  purpose: Internal workspace cannot be transferred to another profile.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_internal_workspace_cannot_be_transferred_to_another_profile
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise internal workspace cannot be transferred to another profile.
+  criteria:
+  - id: contract
+    expected: Internal workspace cannot be transferred to another profile.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.named-platform-builds-pinned-suite-in-own-store-and-reuses-it
+  title: Named platform builds pinned suite in own store and reuses it
+  purpose: Named platform builds pinned suite in own store and reuses it.
+  binding:
+    adapter: pytest
+    selector: tests/test_unified_profiles.py::test_named_platform_builds_pinned_suite_in_own_store_and_reuses_it
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise named platform builds pinned suite in own store and reuses it.
+  criteria:
+  - id: contract
+    expected: Named platform builds pinned suite in own store and reuses it.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.changed-platform-target-or-compiler-is-rejected
+  title: Changed platform target or compiler is rejected
+  purpose: Changed platform target or compiler is rejected.
+  binding:
+    adapter: pytest
+    selector: tests/test_unified_profiles.py::test_changed_platform_target_or_compiler_is_rejected
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise changed platform target or compiler is rejected.
+  criteria:
+  - id: contract
+    expected: Changed platform target or compiler is rejected.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.invalid-stage-and-unregistered-platform-are-not-adopted
+  title: Invalid stage and unregistered platform are not adopted
+  purpose: Invalid stage and unregistered platform are not adopted.
+  binding:
+    adapter: pytest
+    selector: tests/test_unified_profiles.py::test_invalid_stage_and_unregistered_platform_are_not_adopted
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise invalid stage and unregistered platform are not adopted.
+  criteria:
+  - id: contract
+    expected: Invalid stage and unregistered platform are not adopted.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.failed-platform-records-failure-without-changing-selection
+  title: Failed platform records failure without changing selection
+  purpose: Failed platform records failure without changing selection.
+  binding:
+    adapter: pytest
+    selector: tests/test_unified_profiles.py::test_failed_platform_records_failure_without_changing_selection
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise failed platform records failure without changing selection.
+  criteria:
+  - id: contract
+    expected: Failed platform records failure without changing selection.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.profile-activation-switch-preserves-pyenv-and-user-added-paths
+  title: Profile activation switch preserves pyenv and user added paths
+  purpose: Profile activation switch preserves pyenv and user added paths.
+  binding:
+    adapter: pytest
+    selector: tests/test_unified_profiles.py::test_profile_activation_switch_preserves_pyenv_and_user_added_paths
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise profile activation switch preserves pyenv and user added paths.
+  criteria:
+  - id: contract
+    expected: Profile activation switch preserves pyenv and user added paths.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.external-apps-are-not-loaded-and-queries-do-not-refresh-files
+  title: External apps are not loaded and queries do not refresh files
+  purpose: External apps are not loaded and queries do not refresh files.
+  binding:
+    adapter: pytest
+    selector: tests/test_unified_profiles.py::test_external_apps_are_not_loaded_and_queries_do_not_refresh_files
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise external apps are not loaded and queries do not refresh files.
+  criteria:
+  - id: contract
+    expected: External apps are not loaded and queries do not refresh files.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.selected-python-is-checked-before-apt-mutation
+  title: Selected python is checked before apt mutation
+  purpose: Selected python is checked before apt mutation.
+  binding:
+    adapter: pytest
+    selector: tests/test_unified_profiles.py::test_selected_python_is_checked_before_apt_mutation
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise selected python is checked before apt mutation.
+  criteria:
+  - id: contract
+    expected: Selected python is checked before apt mutation.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.select-missing-profile-does-not-create-a-profile-directory
+  title: Select missing profile does not create a profile directory
+  purpose: Select missing profile does not create a profile directory.
+  binding:
+    adapter: pytest
+    selector: tests/test_unified_profiles.py::test_select_missing_profile_does_not_create_a_profile_directory
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise select missing profile does not create a profile directory.
+  criteria:
+  - id: contract
+    expected: Select missing profile does not create a profile directory.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.profile-selection-revalidates-after-taking-namespace-lock
+  title: Profile selection revalidates after taking namespace lock
+  purpose: Profile selection revalidates after taking namespace lock.
+  binding:
+    adapter: pytest
+    selector: tests/test_unified_profiles.py::test_profile_selection_revalidates_after_taking_namespace_lock
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise profile selection revalidates after taking namespace lock.
+  criteria:
+  - id: contract
+    expected: Profile selection revalidates after taking namespace lock.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.export-preserves-actual-parameter-overrides
+  title: Export preserves actual parameter overrides
+  purpose: Export preserves actual parameter overrides.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_exports.py::test_export_preserves_actual_parameter_overrides
+  scenario:
+    inputs:
+      environment: Local temporary profiles, tiny CMake sources and injected failure
+        boundaries.
+    action: Exercise export preserves actual parameter overrides.
+  criteria:
+  - id: contract
+    expected: Export preserves actual parameter overrides.
+    verification: automated
+  failure_meaning: Profile ownership, provenance or transactional publication regressed.
+  limitations:
+  - Does not certify a real GCC bootstrap or target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.export-refuses-a-partially-published-profile-without-writes
+  title: Export refuses a partially published profile without writes
+  purpose: Export refuses a partially published profile without writes.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_exports.py::test_export_refuses_a_partially_published_profile_without_writes
+  scenario:
+    inputs:
+      environment: Temporary local profiles and tiny CMake fixtures; no NAS or native
+        tool bootstrap.
+    action: Exercise export refuses a partially published profile without writes.
+  criteria:
+  - id: contract
+    expected: Export refuses a partially published profile without writes.
+    verification: automated
+  failure_meaning: Release ownership, snapshot or transaction contract regressed.
+  limitations:
+  - Does not certify a target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.companion-copy-preserves-bytes-used-by-its-checksum
+  title: Companion copy preserves bytes used by its checksum
+  purpose: Companion copy preserves bytes used by its checksum.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_exports.py::test_companion_copy_preserves_bytes_used_by_its_checksum
+  scenario:
+    inputs:
+      environment: Temporary local profiles and tiny CMake fixtures; no NAS or native
+        tool bootstrap.
+    action: Exercise companion copy preserves bytes used by its checksum.
+  criteria:
+  - id: contract
+    expected: Companion copy preserves bytes used by its checksum.
+    verification: automated
+  failure_meaning: Release ownership, snapshot or transaction contract regressed.
+  limitations:
+  - Does not certify a target-host installation.
+  review:
+    status: draft
+- id: forge.profiles.dependency-build-uses-requested-shared-cxx-standard
+  title: Propagate a requested C++ standard to app dependencies
+  purpose: A consumer and its locally built dependency use the same requested C++
+    ABI context.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_apps.py::test_dependency_build_uses_requested_shared_cxx_standard
+  scenario:
+    inputs:
+      cxx_standard: 20
+    action: Build a local CMake producer and consumer through the app controller.
+  criteria:
+  - id: standard
+    expected: Both successful app receipts record C++20.
+    verification: automated
+  failure_meaning: Shared build parameters were dropped while preparing dependencies.
+  limitations:
+  - Local CMake fixtures; no real scientific application build.
+  review:
+    status: draft

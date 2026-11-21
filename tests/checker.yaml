@@ -3,7 +3,7 @@ kind: checker
 id: forge-development
 project: ..
 profiles:
-  daily: &forge-all
+  daily: &id001
   - build-engine
   - checker-engine
   - apt-backend
@@ -15,7 +15,7 @@ profiles:
   - bench
   - playlist
   - root-recipe
-  acceptance: *forge-all
+  acceptance: *id001
   release:
   - build-engine
   - checker-engine
@@ -70,9 +70,13 @@ groups:
   - tests/test_checker.py
   - tests/test_catalog.py
   - tests/test_test_run.py
+  - tests/test_test_reports.py
   inputs:
   - src/jarvis_forge/checker*.py
   - src/jarvis_forge/testing*.py
+  - src/jarvis_forge/test_*.py
+  - src/jarvis_forge/schemas/test-*.json
+  - tests/test_test_reports.py
   - src/jarvis_forge/cli.py
   - src/jarvis_forge/presentation.py
   - src/jarvis_forge/cmake.py
@@ -270,6 +274,12 @@ groups:
   match:
   - tests/test_toolchains.py
   - tests/test_unified_profiles.py
+  - tests/test_profile_model.py
+  - tests/test_profile_transactions.py
+  - tests/test_package_lifecycle.py
+  - tests/test_socket_runtime.py
+  - tests/test_profile_exports.py
+  - tests/test_build_apps.py
   inputs:
   - src/jarvis_forge/toolchain*.py
   - src/jarvis_forge/unified_profiles.py
@@ -289,15 +299,34 @@ groups:
   - tests/checker.yaml
   - pyproject.toml
   - src/jarvis_forge/card/*.yaml
+  - tests/test_paths.py
+  - tests/test_profile_model.py
+  - tests/test_profile_transactions.py
+  - tests/test_package_lifecycle.py
+  - tests/test_socket_runtime.py
+  - tests/test_profile_exports.py
+  - tests/test_build_apps.py
+  - tests/profile_fixtures.py
+  - tests/conftest.py
+  - src/jarvis_forge/profile*.py
+  - src/jarvis_forge/build_apps.py
+  - src/jarvis_forge/package_lifecycle.py
+  - src/jarvis_forge/socket_runtime.py
+  - src/jarvis_forge/apt_cli.py
+  - src/jarvis_forge/homebrew_backend.py
+  - src/jarvis_forge/spack_bridge.py
+  - src/jarvis_forge/spack_entry.py
   skip_allow: []
 checks:
 - id: wheel-smoke
   check:
     package:
       distribution: Jarvis-Forge
-      modules: [jarvis_forge]
+      modules:
+      - jarvis_forge
       commands:
-      - [jforge, --version]
+      - - jforge
+        - --version
 - id: root-recipe
   inputs:
   - builds/root.yaml
@@ -319,5 +348,6 @@ checks:
   - -m
   - jarvis_forge
   - build
-  - validate
+  - show
   - builds/root.yaml
+  - --expanded

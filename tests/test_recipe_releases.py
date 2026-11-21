@@ -52,13 +52,13 @@ def test_download_is_immutable_and_install_is_offline(published, monkeypatch):
     home, output, archive, manifest = published
     with operation(home, "test", {}) as (op, result):
         release = releases.prepare(home, op)
-    assert not (home.root / "apt/recipe-release.json").exists()
+    assert not (home.root / "spack/recipes.json").exists()
     repo = Path(release["repository"])
     original = (repo / "packages/neofetch/package.py").read_bytes()
     assert (
         hashlib.sha256(archive.read_bytes()).hexdigest() == release["archive"]["sha256"]
     )
-    write_json(home.root / "apt/recipe-release.json", release)
+    write_json(home.root / "spack/recipes.json", release)
     monkeypatch.setattr(
         releases, "fetch", lambda *a: pytest.fail("offline install downloaded metadata")
     )
@@ -87,7 +87,7 @@ def test_failed_release_never_switches_policy(published, damage):
         with pytest.raises(ForgeError):
             releases.prepare(home, op)
     assert (home.root / "spack/config/repos.yaml").read_bytes() == before
-    assert not (home.root / "apt/recipe-release.json").exists()
+    assert not (home.root / "spack/recipes.json").exists()
 
 
 def test_previous_bundled_snapshot_remains_usable_offline(published, monkeypatch):

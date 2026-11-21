@@ -125,7 +125,7 @@ def snapshot(runtime_only=False, policy=None, overwrite=(), omit_cached_build_de
         else:
             installed = bool(spec.external or spack.store.STORE.db.query_one(spec))
         prefix_matches = False
-        if not spec.external and spack.store.STORE.layout.projections.get("all") == "{name}" and (installed or Path(spec.prefix).exists()):
+        if not spec.external and spack.store.STORE.layout.projections.get("all") == "{name}-{version}" and (installed or Path(spec.prefix).exists()):
             # Read and verify .spack/spec.json through Spack itself. Forge does
             # not introduce its own prefix metadata format or overwrite policy.
             from spack.directory_layout import DirectoryLayoutError
@@ -161,6 +161,7 @@ def snapshot(runtime_only=False, policy=None, overwrite=(), omit_cached_build_de
                     row[field] = getattr(op, field)
             modifications.append(row)
     document = {"packages": packages, "modifications": modifications}
+    if runtime_only or policy is not None:document["inventory"]=store_inventory()
     if omit_cached_build_deps:
         document["cached_build_dependencies"] = "omit"
     if emit:
@@ -178,17 +179,19 @@ def resolve_plan(options):
     flags = options['flags']
     if flags[0] != 'concretize' or set(flags[1:]) - {'--fresh', '--force'}:
         raise ValueError('Unsupported concretization flags')
-    command = spack.main.SpackCommand('concretize')
-    try:
-        output = command(*flags[1:])
-    except spack.main.SpackCommandError as exc:
-        sys.stderr.write(command.output)
-        raise SystemExit(exc.code) from exc
-    except Exception:
-        # SpackCommand captures descriptors even on failure. Preserve the
-        # actual solver diagnostic instead of showing only its wrapper error.
-        sys.stderr.write(command.output)
-        raise
+    output=''
+    if not options.get('from_lock'):
+        command = spack.main.SpackCommand('concretize')
+        try:
+            output = command(*flags[1:])
+        except spack.main.SpackCommandError as exc:
+            sys.stderr.write(command.output)
+            raise SystemExit(exc.code) from exc
+        except Exception:
+            # SpackCommand captures descriptors even on failure. Preserve the
+            # actual solver diagnostic instead of showing only its wrapper error.
+            sys.stderr.write(command.output)
+            raise
     dag = snapshot(emit=False)
     policy = options['policy']
     plan = snapshot(policy=policy, overwrite=options['overwrite'],
@@ -202,7 +205,34 @@ def resolve_plan(options):
     environment = ev.active_environment()
     tree = spack.spec.tree(environment.concrete_roots(), hashes=True, hashlen=7,
                            format=spack.spec.DISPLAY_FORMAT, key=spack.traverse.by_dag_hash)
-    print(json.dumps({'dag':dag, 'plan':plan, 'policy':policy, 'tree':tree, 'concretize_output':output}))
+    print(json.dumps({'dag':dag, 'plan':plan, 'policy':policy, 'tree':tree, 'concretize_output':output, 'inventory':store_inventory(options.get('database_checkpoint'))}))
+
+
+def store_inventory(checkpoint=None):
+    import spack.store
+    db=spack.store.STORE.db
+    rows=[]
+    with db.read_transaction():
+        if checkpoint and not Path(checkpoint).exists():
+            with open(checkpoint,'x',encoding='utf-8') as stream:db._write_to_file(stream)
+        for spec in db.query_local():
+            rows.append({'name':spec.name,'version':str(spec.version),'hash':spec.dag_hash(),
+                         'prefix':str(spec.prefix),'external':bool(spec.external),'node':spec.node_dict_with_hashes(),
+                         'installed':True,'spec':str(spec)})
+    return rows
+
+
+def database_change(options):
+    import spack.store
+    db=spack.store.STORE.db
+    with db.write_transaction():
+        if options['action']=='restore':
+            db._read_from_file(Path(options['checkpoint']))
+        elif options['action']=='detach':
+            for value in options['hashes']:
+                for spec in db.get_by_hash_local(value,default=[]) or []:db.remove(spec)
+        else:raise ValueError('Unknown database action')
+    print(json.dumps({'status':'passed'}))
 
 
 def prepare_backend():
@@ -287,6 +317,10 @@ def dependency_tree():
 if __name__ == "__main__":
     if sys.argv[1] == "resolve-plan":
         resolve_plan(json.loads(sys.argv[2]))
+    elif sys.argv[1] == "database":
+        database_change(json.loads(sys.argv[2]))
+    elif sys.argv[1] == "inventory":
+        print(json.dumps({"packages":store_inventory(sys.argv[2] if len(sys.argv)>2 else None)}))
     elif sys.argv[1] == "prepare-backend":
         prepare_backend()
     elif sys.argv[1] == "trust-cache-keys":

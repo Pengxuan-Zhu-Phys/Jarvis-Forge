@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "api_version": 1,
+  "items": [
+    {
+      "job_id": "fixture-A1",
+      "run_id": "fixture-A1",
+      "step_id": "unit",
+      "target_id": "local",
+      "schema_version": 1,
+      "seq": 1,
+      "time": "2026-01-01T00:00:00Z",
+      "instance_id": "instance-cac2574cd2af17bb26ed7d0e1102e89d",
+      "attempt": 1,
+      "event_type": "case_finished",
+      "payload": {
+        "state": "finished",
+        "outcome": "passed"
+      }
+    }
+  ],
+  "next_cursor": "opaque-fixture-cursor"
+}

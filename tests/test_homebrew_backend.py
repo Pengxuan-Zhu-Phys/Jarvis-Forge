@@ -10,7 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from jarvis_forge import apt_profiles, build_catalog, homebrew_backend as brew
+from jarvis_forge import apt_profiles, build_catalog, homebrew_backend as brew, unified_profiles
+from jarvis_forge.storage import digest
 from jarvis_forge.cli import main
 from jarvis_forge.storage import ForgeError, ForgeHome, read_json, write_json
 
@@ -41,25 +42,42 @@ elif verb == "--cellar":
     print(prefix / "Cellar")
 elif verb == "info":
     print(json.dumps({"formulae": list(rows.values()) if options[-1] == "--installed"
-                      else [{"name": target, "tap": "homebrew/core"}]}))
+                      else [{"name": target, "tap": "homebrew/core", "versions":{"stable":json.loads((prefix/"available.json").read_text()).get(target,"1.0")} if (prefix/"available.json").exists() else {"stable":"1.0"}, "dependencies":[]}]}))
 elif verb == "formulae":
     print("eigen\\ngsl\\nneeds-python\\nroot")
 elif verb == "deps":
     if target == "needs-python":
         print("native-library\\npython@3.14")
-elif verb == "install":
-    for name in (option.removeprefix("homebrew/core/") for option in options[1:]):
-        assert name not in rows, name
-        keg = prefix / "Cellar" / name / "1.0"
+elif verb == "search":
+    print("eigen: Linear algebra")
+elif verb in {"install","upgrade","reinstall"}:
+    if "--dry-run" in options:
+        print("Native installation preview")
+        sys.exit(0)
+    for name in (option.removeprefix("homebrew/core/") for option in options if not option.startswith("--")):
+        assert verb != "install" or name not in rows, name
+        version=json.loads((prefix/"available.json").read_text()).get(name,"1.0") if (prefix/"available.json").exists() else "1.0"
+        keg = prefix / "Cellar" / name / version
+        if verb=="reinstall" and keg.exists():
+            import shutil
+            shutil.rmtree(keg)
         (keg / "lib/pkgconfig").mkdir(parents=True)
         (keg / "INSTALL_RECEIPT.json").write_text("{}")
+        (prefix / "opt" / name).unlink(missing_ok=True)
         (prefix / "opt" / name).symlink_to(keg)
         rows[name] = {"name": name, "tap": "homebrew/core",
-                      "installed": [{"version": "1.0", "runtime_dependencies": []}]}
+                      "installed": ([item for item in rows.get(name,{}).get("installed",[]) if item["version"]!=version]+[{"version":version,"runtime_dependencies":[]}])}
         installed.write_text(json.dumps(rows))
         if os.getenv("FAKE_BREW_FAIL"):
             sys.stderr.write("simulated install failure after writing a keg\\n")
             sys.exit(7)
+elif verb == "uninstall":
+    import shutil
+    for name in (option.removeprefix("homebrew/core/") for option in options[1:]):
+        rows.pop(name,None)
+        shutil.rmtree(prefix/"Cellar"/name)
+        (prefix/"opt"/name).unlink(missing_ok=True)
+    installed.write_text(json.dumps(rows))
 elif verb != "update":
     sys.exit(f"unexpected Homebrew action: {verb}")
 """)
@@ -100,33 +118,38 @@ elif verb != "update":
 
     def writes():
         calls = map(json.loads, (prefix / "calls.jsonl").read_text().splitlines())
-        return [call for call in calls if call["args"][0] in {"install", "uninstall", "update", "upgrade"}]
+        return [call for call in calls if call["args"][0] in {"install", "uninstall", "update", "upgrade","reinstall"} and "--dry-run" not in call["args"]]
 
-    created = cli("apt", "profile", "mac", "--create", "--backend", "homebrew")
-    assert created["profile"] == "homebrew-mac"
-    return cli, prefix, ForgeHome(Path(created["apt_home"])), writes
+    def platform_tools(*args,**kwargs):
+        drivers={'CC':shutil.which('cc'),'CXX':shutil.which('c++')}
+        return {'external':True,'drivers':drivers,'tools':{}},{path:digest(Path(path)) for path in drivers.values()}
+    monkeypatch.setattr(unified_profiles,'_mac_install',platform_tools)
+    created = cli("profile", "create", "mac", "--platform", "macos")
+    assert created['id']=='mac'
+    cli('profile','use','mac')
+    return cli, prefix, ForgeHome(home/'profiles/mac'), writes
 
 
 def test_profile_inventory_selection_and_reversible_shell(setup_brew):
     cli, prefix, home, writes = setup_brew
-    assert cli("apt", "profile")["environments"][0]["backend"] == "homebrew"
-    assert cli("env", "list")["profiles"][0]["id"] == "homebrew-mac"
-    assert cli("apt", "search", "eigen")["packages"][0]["selected"] is False
-    assert cli("apt", "show", "eigen")["installed_instances"][0]["prefix"] == str(prefix / "Cellar/eigen/1.0")
-    assert cli("apt", "prefix", "eigen", "--path", as_json=False).strip() == str(prefix / "Cellar/eigen/1.0")
+    assert cli("profile")["instances"][0]["backend"] == "homebrew"
+    assert cli("env", "list")["profiles"][0]["id"] == "mac"
+    assert cli("apt", "search", "eigen")["packages"][0]["name"] == "eigen"
+    assert cli("apt", "show", "eigen")["installed_instances"] == []
     installed = cli("apt", "install", "eigen")
     assert installed["packages"][0]["name"] == "eigen"
-    assert installed["environment_activation"] == str(home.root.parents[2] / "env/apt/activate.sh")
+    assert installed["environment_activation"] == str(home.root / "activate.sh")
     assert Path(installed["environment_activation"]).is_file()
-    assert installed["activation"] in Path(installed["environment_activation"]).read_text()
-    assert cli("apt", "list", "eigen")["packages"][0]["selected"] is True
-    active = cli("apt", "env", "--path", as_json=False).strip()
+    assert "runtime/activate.sh" in Path(installed["environment_activation"]).read_text()
+    assert cli("apt", "list", "eigen")["packages"][0]["name"] == "eigen"
+    active = cli("profile", "show", "--path", as_json=False).strip()
     # The alternate profile shares the same physical installation.
-    empty = cli("apt", "profile", "alternate", "--create", "--backend", "homebrew")["activation"]
-    assert cli("apt", "list", "eigen")["packages"][0]["selected"] is False
-    selected = cli("apt", "profile", "mac")
-    assert cli("apt", "env", "--path", as_json=False).strip() == active
-    assert selected["activation"] in Path(active).read_text()
+    empty = cli("profile", "create", "alternate", "--platform", "macos")["activation"]
+    cli("profile","use","alternate")
+    assert cli("apt", "list", "eigen")["packages"] == []
+    selected = cli("profile", "use", "mac")
+    assert cli("profile", "show", "--path", as_json=False).strip() == active
+    assert selected["activation"]==active
     assert not writes()
     for shell in ("bash", "zsh"):
         executable = shutil.which(shell)
@@ -140,7 +163,7 @@ def test_profile_inventory_selection_and_reversible_shell(setup_brew):
             before_flags=$-
             source "$1"
             test "$before" = "$(python -c "$probe")"
-            test "$before_path" = "$PATH"
+            test "${PATH#*:}" = "$before_path"
             test "$before_flags" = "$-"
             test "$CMAKE_PREFIX_PATH" = "$3"
             test "$PKG_CONFIG_PATH" = "$3/lib/pkgconfig"
@@ -149,7 +172,7 @@ def test_profile_inventory_selection_and_reversible_shell(setup_brew):
             test -z "${PKG_CONFIG_PATH:-}"
         """, "test", active, empty, str(prefix / "Cellar/eigen/1.0")], check=True)
     cli("apt", "remove", "eigen", "--yes")
-    assert cli("apt", "list", "eigen")["packages"][0]["selected"] is False
+    assert cli("apt", "list", "eigen")["packages"] == []
     assert not brew.current(home)["roots"]
     assert not writes()
 
@@ -173,7 +196,7 @@ def test_plan_write_failure_retry_and_remove(setup_brew, monkeypatch, cpus):
     monkeypatch.setattr("jarvis_forge.parallelism.available_cpus", lambda: cpus)
     before = brew.current(home)
     assert cli("apt", "install", "gsl", "--dry-run")["would_install"] == ["gsl"]
-    assert cli("apt", "check", "gsl")["audited_dependencies"] == {"gsl": []}
+    assert cli("apt", "install", "gsl","--dry-run")["audited_dependencies"] == {"gsl": []}
     assert brew.current(home) == before
     assert not writes()
     monkeypatch.setenv("FAKE_BREW_FAIL", "1")
@@ -182,7 +205,7 @@ def test_plan_write_failure_retry_and_remove(setup_brew, monkeypatch, cpus):
     assert "Operation logs:" in error["hint"]
     assert brew.current(home) == before
     assert (prefix / "Cellar/gsl/1.0").is_dir()
-    assert cli("apt", "list", "gsl")["packages"][0]["selected"] is False
+    assert cli("apt", "list", "gsl")["packages"] == []
     monkeypatch.delenv("FAKE_BREW_FAIL")
     result = cli("apt", "install", "gsl", "cmake")
     assert result["would_install"] == ["cmake"]
@@ -201,22 +224,22 @@ def test_repair_lost_dependency_and_activation(setup_brew):
     state = brew.current(home)
     adapter = Path(state["activation"]).with_name("homebrew-environment.sh")
     adapter.unlink()
-    cli("apt", "env", "--path", status=2, as_json=False)
+    cli("profile", "show", "--path", as_json=False)
     assert cli("env", "repair", "apt", "--dry-run")["changed"]
     assert not adapter.exists()
-    assert cli("env", "repair", "apt")["activation"] != state["activation"]
+    assert cli("env", "repair", "apt")["activation"] == state["activation"]
     inventory = prefix / "installed.json"
     rows = read_json(inventory)
     rows["gsl"]["installed"][0]["runtime_dependencies"] = [{"full_name": "stale", "pkg_version": "1.0"}]
     inventory.write_text(json.dumps(rows))
     repair = cli("env", "repair")
-    profile = next(item for item in repair["targets"] if item["name"] == "homebrew-mac")
+    profile = next(item for item in repair["targets"] if item["name"] == "mac")
     assert "stale" in profile["deferred_roots"]["gsl"]
     assert profile["removed"] == 1
     assert brew.current(home)["roots"] == ["eigen", "gsl"]
     assert [row["name"] for row in brew.current(home)["packages"]] == ["eigen"]
     cli("apt", "remove", "gsl", "--yes")
-    assert [call["args"][0] for call in writes()] == ["install"]
+    assert [call["args"][0] for call in writes()] == ["install","uninstall"]
 
 
 def test_permission_and_spack_only_options(setup_brew, monkeypatch):
@@ -224,7 +247,7 @@ def test_permission_and_spack_only_options(setup_brew, monkeypatch):
     monkeypatch.setattr(brew.os, "geteuid", lambda: 0)
     result = cli("apt", "install", "gsl", status=2)
     assert "ordinary Homebrew owner" in result["error"]["message"]
-    assert "Spack" in cli("apt", "compilers", status=2)["error"]["message"]
+    assert "profile show" in cli("apt", "compilers", status=2)["error"]["hint"]
     assert "Spack cache" in cli("apt", "install", "gsl", "--cache", "only", status=2)["error"]["message"]
     assert not writes()
 
@@ -235,52 +258,42 @@ def test_explicit_update_and_missing_binding(setup_brew, monkeypatch):
     monkeypatch.setattr(build_catalog, "update", lambda target: catalog)
     updated = cli("apt", "update")
     assert updated["backend"] == "homebrew"
-    assert updated["build_catalog"] == catalog
+    assert "build_catalog" not in updated
     assert [call["args"] for call in writes()] == [["update"]]
     (prefix / "bin/brew").unlink()
     # Login can still load the previously generated script from its evidence.
-    printed = cli("apt", "env", "--path", as_json=False).strip()
+    printed = cli("profile", "show", "--path", as_json=False).strip()
     assert brew.current(home)["activation"] in Path(printed).read_text()
     result = cli("apt", "list", status=1)
     assert "Homebrew launcher" in result["error"]["message"]
 
 
-def test_init_migrates_legacy_spack_default_to_homebrew(setup_brew, monkeypatch):
-    cli, _, profile, writes = setup_brew
-    monkeypatch.setattr(apt_profiles, "sys", SimpleNamespace(platform="darwin"))
-    base = ForgeHome(profile.root.parents[2])
-    shutil.rmtree(profile.root)
-    spack = base.root / "apt/profiles/spack-default"
-    write_json(spack / "config.json", {})
-    write_json(spack / "apt/spack.json", {})
-    write_json(base.root / "apt/selection.json", {"schema_version": 1, "id": "spack-default"})
-    assert cli("init")["apt_profile"] == {"id": "homebrew-mac", "backend": "homebrew", "status": "selected"}
-    rows = {row["id"]: row for row in cli("apt", "profile")["environments"]}
-    assert rows["homebrew-mac"]["active"] and not rows["spack-default"]["active"]
-    assert cli("init")["apt_profile"]["id"] == "homebrew-mac"
-    assert not writes()
+def test_init_refuses_legacy_layout_without_migration(setup_brew):
+    cli,_,scope,writes=setup_brew
+    base=scope.root.parents[1]
+    write_json(base/'apt/selection.json',{'schema_version':1,'id':'spack-default'})
+    before=(base/'profiles/selection.json').read_bytes()
+    assert 'Unsupported profile layout' in cli('init',status=2)['error']['message']
+    assert (base/'profiles/selection.json').read_bytes()==before and not writes()
 
 
-def test_macos_apt_preview_is_native_and_recovers_missing_profile(setup_brew, monkeypatch):
-    cli, _, profile, writes = setup_brew
-    monkeypatch.setattr(apt_profiles, "sys", SimpleNamespace(platform="darwin"))
-    base = profile.root.parents[2]
-    selection = base / "apt/selection.json"
-    shutil.rmtree(profile.root)
-    selection.unlink()
-    before = {file: file.read_bytes() for file in base.rglob("*") if file.is_file()}
-    plan = cli("apt", "install", "eigen", "--dry-run")
-    assert plan["backend"] == "homebrew" and plan["would_install"] == []
-    assert before == {file: file.read_bytes() for file in base.rglob("*") if file.is_file()}
-    cli("apt", "profile", "other", "--create", "--backend", "homebrew")
-    write_json(selection, {"schema_version": 1, "platform": "darwin", "id": "homebrew-deleted"})
-    profiles = {row["id"]: row for row in cli("apt", "profile")["environments"]}
-    assert profiles["homebrew-deleted"]["status"] == "missing"
-    assert profiles["homebrew-mac"]["active"]
-    assert "homebrew-other" in profiles
-    assert cli("init")["apt_profile"]["id"] == "homebrew-mac"
-    assert read_json(selection)["id"] == "homebrew-mac"
-    assert not writes()
+def test_missing_selected_profile_is_not_silently_replaced(setup_brew):
+    cli,_,scope,writes=setup_brew
+    base=scope.root.parents[1];before=(base/'profiles/selection.json').read_bytes()
+    shutil.rmtree(scope.root)
+    assert 'missing' in cli('apt','install','eigen',status=2)['error']['message']
+    assert (base/'profiles/selection.json').read_bytes()==before and not writes()
+
+
+def test_macos_first_write_creates_default_but_preview_does_not(setup_brew):
+    cli,_,scope,writes=setup_brew
+    base=scope.root.parents[1]
+    (base/'profiles/selection.json').unlink()
+    assert 'Select a profile' in cli('apt','install','eigen','--dry-run',status=2)['error']['message']
+    assert not (base/'profiles/default').exists()
+    result=cli('apt','install','eigen')
+    assert result['backend']=='homebrew' and (base/'profiles/default/activate.sh').is_file()
+    assert apt_profiles.active_home(ForgeHome(base)).root.name=='default' and not writes()
 
 
 def test_homebrew_registration_requires_darwin(monkeypatch):
@@ -293,7 +306,7 @@ def test_spack_build_step_reports_homebrew_boundary(setup_brew, tmp_path):
     from jarvis_forge.builds import _step
 
     _, _, profile, writes = setup_brew
-    home = ForgeHome(profile.root.parents[2])
+    home = ForgeHome(profile.root.parents[1])
     with pytest.raises(ForgeError, match="This build requires a Spack apt profile"):
         _step(home, {"uses": "apt.install"}, {"specs": ["eigen"]}, tmp_path, tmp_path / "logs",
               {}, {}, {}, {}, {}, 1, None, None)
@@ -314,10 +327,50 @@ def test_reuse_preserves_recorded_dependency_version(setup_brew):
     link = prefix / "opt/gsl"
     link.unlink()
     link.symlink_to(upgraded)
-    cli("apt", "profile", "new", "--create", "--backend", "homebrew")
+    cli("profile", "create", "new", "--platform", "macos")
+    cli("profile","use","new")
     selected = cli("apt", "install", "eigen")["packages"]
     dependency = next(row for row in selected if row["name"] == "gsl")
     assert dependency["version"] == "1.0"
     assert dependency["automatic"]
     assert cli("apt", "install", "gsl", status=2)["error"]["message"].endswith("keg of 'gsl'.")
     assert [call["args"][0] for call in writes()] == ["install"]
+
+
+def test_upgrade_preserves_old_keg_and_rebuild_failure_restores_owned_prefix(setup_brew,monkeypatch):
+    cli,prefix,home,writes=setup_brew
+    cli('apt','install','gsl')
+    (prefix/'available.json').write_text(json.dumps({'gsl':'2.0'}))
+    plan=cli('apt','upgrade','gsl','--dry-run')
+    assert plan['changes']['upgrade'][0]['version']=='2.0' and not (prefix/'Cellar/gsl/2.0').exists()
+    cli('apt','upgrade','gsl','--yes')
+    assert (prefix/'Cellar/gsl/1.0').is_dir() and (prefix/'Cellar/gsl/2.0').is_dir()
+    assert brew.current(home)['packages'][0]['version']=='2.0'
+    sentinel=prefix/'Cellar/gsl/2.0/original';sentinel.write_text('keep')
+    original=(home.root/'packages.json').read_bytes();activation=(home.root/'activate.sh').read_bytes()
+    monkeypatch.setenv('FAKE_BREW_FAIL','1')
+    cli('apt','install','--rebuild','gsl','--yes',status=1)
+    assert sentinel.read_text()=='keep'
+    assert (home.root/'packages.json').read_bytes()==original and (home.root/'activate.sh').read_bytes()==activation
+
+
+def test_shared_keg_cannot_be_rebuilt_or_deleted_by_another_profile(setup_brew):
+    cli,prefix,home,writes=setup_brew
+    cli('apt','install','gsl')
+    cli('profile','create','second','--platform','macos');cli('profile','use','second')
+    cli('apt','install','gsl')
+    error=cli('apt','install','--rebuild','gsl','--yes',status=2)
+    assert 'other profile references' in error['error']['message']
+    cli('apt','remove','gsl','--yes')
+    assert (prefix/'Cellar/gsl/1.0').is_dir()
+
+
+def test_autoremove_collects_only_owned_unreferenced_older_keg(setup_brew):
+    cli,prefix,home,writes=setup_brew
+    cli('apt','install','gsl')
+    (prefix/'available.json').write_text(json.dumps({'gsl':'2.0'}));cli('apt','upgrade','gsl','--yes')
+    preview=cli('apt','autoremove','--dry-run')
+    assert [row['version'] for row in preview['changes']['remove']]==['1.0']
+    cli('apt','autoremove','--yes')
+    assert not (prefix/'Cellar/gsl/1.0').exists() and (prefix/'Cellar/gsl/2.0').is_dir()
+    assert (prefix/'opt/gsl').resolve()==prefix/'Cellar/gsl/2.0'

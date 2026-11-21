@@ -13,7 +13,7 @@ INDEX_URL = "https://github.com/Pengxuan-Zhu-Phys/Jarvis-Forge/releases/download
 
 
 def current(home):
-    path = home.root / "apt/recipe-release.json"
+    path = home.root / "spack/recipes.json"
     return read_json(path) if path.exists() else None
 
 
@@ -38,7 +38,7 @@ def prepare(home, op):
         or not str(archive.get("url", "")).startswith("https://")
     ):
         raise ForgeError("Invalid or incompatible recipe release manifest.")
-    directory = object_path(root(home) / "repositories", "jforge", archive, create=True)
+    directory = object_path(root(home) / "repositories", "jforge", archive, create=True, version=value["version"])
     _unpack(home, archive, directory, op, "recipe-archive-download")
     repo = directory / "spack_repo/jforge"
     if not (repo / "repo.yaml").is_file():
@@ -83,5 +83,5 @@ def ensure(home, op):
     if register(home) is None:
         release = prepare(home, op)
         register(home, release)
-        write_json(home.root / "apt/recipe-release.json", release)
+        write_json(home.root / "spack/recipes.json", release)
     return register(home)

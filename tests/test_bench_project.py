@@ -36,7 +36,7 @@ def test_workspace_isolates_external_steps_and_pruning(tmp_path, monkeypatch):
         paths.append(bench.data_list(home)["rows"][0]["path"])
 
     assert paths[0] != paths[1]
-    leftovers = [Path(path) / "r001.partial" for path in paths]
+    leftovers = [Path(path) / "0002-repeat.partial" for path in paths]
     for path in leftovers:
         path.mkdir()
     project = bench_project.discover()

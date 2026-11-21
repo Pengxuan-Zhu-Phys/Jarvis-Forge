@@ -74,7 +74,8 @@ def fetch(url: str, target: Path, logs: Path, *, timeout: float = 300, progress=
         argv = [wget, "--https-only", "--timeout=60", "--tries=1", "-O", str(target), url]
     else:
         raise ForgeError("HTTPS downloads require curl or wget on PATH.")
-    header_directory = tempfile.TemporaryDirectory(prefix="forge-download-") if curl and progress else nullcontext()
+    from .paths import temporary_directory
+    header_directory = temporary_directory(logs.parent,"download-headers") if curl and progress else nullcontext()
     with (header_directory as directory, logs.with_suffix(".stdout.log").open("wb") as out,
           logs.with_suffix(".stderr.log").open("wb") as err):
         headers = Path(directory) / "headers" if directory else None

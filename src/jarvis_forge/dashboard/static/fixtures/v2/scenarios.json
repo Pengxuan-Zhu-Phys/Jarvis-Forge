@@ -1,0 +1,46 @@
+{
+  "fixture_version": 2,
+  "contract_status": "Frontend-owned target-contract fixtures; Forge schema handoff pending",
+  "scenarios": [
+    {
+      "id": "large",
+      "title": "635 tests · complete filtering",
+      "description": "Ten finished, one running; rare tags, metadata and filenames beyond page one."
+    },
+    {
+      "id": "states",
+      "title": "Results & report lifecycle",
+      "description": "Failure phases, skip/xfail/xpass, reuse, not-run, missing metadata, attempts, cleaned and failed reports, CTest and CI identities."
+    },
+    {
+      "id": "logs",
+      "title": "Large UTF-8 log",
+      "description": "Byte pagination, stream/attempt switching, copy/download, follow-tail pause and a bounded display buffer."
+    },
+    {
+      "id": "reconnect",
+      "title": "Disconnect & resume",
+      "description": "One controlled event failure and one log failure after the first chunk; retries retain their cursor."
+    },
+    {
+      "id": "final-only",
+      "title": "Final-only command",
+      "description": "A known command check with no live percentage until final evidence is available."
+    },
+    {
+      "id": "collecting",
+      "title": "Collecting · unknown total",
+      "description": "No leaf count is fabricated during collection."
+    },
+    {
+      "id": "collection-error",
+      "title": "Collection failed",
+      "description": "Step-level collection failure, without invented parameterized items."
+    },
+    {
+      "id": "blocked",
+      "title": "Precondition blocked",
+      "description": "The prerequisite failed before leaf discovery. Step evidence remains separate."
+    }
+  ]
+}

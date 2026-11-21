@@ -1,0 +1,49 @@
+{
+  "ok": true,
+  "api_version": 1,
+  "test_case": {
+    "project_id": "contract-fixture",
+    "job_id": "fixture-A1",
+    "run_id": "fixture-A1",
+    "step_id": "unit",
+    "target_id": "local",
+    "case_id": "case-f2c5258eb7731b08db03b2746ef628cd",
+    "instance_id": "instance-bb6cd547ec154bcd5c5e556be36655a3",
+    "definition_id": null,
+    "adapter": "ctest",
+    "native_id": "geometry::mesh_convergence",
+    "variant_key": "default",
+    "parameters": {
+      "pytest_id": "default"
+    },
+    "group": {
+      "file": "geometry"
+    },
+    "source": {
+      "repository": "fixture/project",
+      "commit": "fixture-commit"
+    },
+    "environment_digest": null,
+    "file": "geometry",
+    "title": "geometry::mesh_convergence",
+    "criteria": [],
+    "metadata_status": "missing",
+    "metadata_digest": null,
+    "review": {
+      "status": "draft"
+    },
+    "storage_key": "case-B6",
+    "state": "finished",
+    "outcome": "passed",
+    "execution_mode": "executed",
+    "attempt": 1,
+    "attempts": [
+      1
+    ],
+    "seconds": 0.012,
+    "phases": [],
+    "artifacts": [],
+    "report_status": "provisional",
+    "fixture": true
+  }
+}

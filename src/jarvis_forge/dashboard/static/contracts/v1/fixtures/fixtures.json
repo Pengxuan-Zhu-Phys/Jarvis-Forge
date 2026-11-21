@@ -1,0 +1,23 @@
+{
+  "contract_version": 1,
+  "fixture_only": true,
+  "schemas": {
+    "capabilities.json": "capabilities",
+    "cases.json": "list",
+    "progress.json": "progress",
+    "collection-error.json": "progress",
+    "reused.json": "detail",
+    "interrupted.json": "detail",
+    "ctest.json": "detail",
+    "ci.json": "detail",
+    "missing.json": "detail",
+    "report.json": "report_response",
+    "log.json": "log",
+    "empty-log.json": "log",
+    "discovery.json": "discovery_response",
+    "events.json": "events",
+    "page-1.json": "list",
+    "page-2.json": "list",
+    "query-conflict.json": "error"
+  }
+}

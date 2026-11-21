@@ -24,13 +24,13 @@ def base(tmp_path, monkeypatch, linux_apt):
     def bootstrap(home, python=None, progress=None):
         home.initialize()
         write_json(
-            home.root / "apt/spack.json", {"schema_version": 1, "backend": "spack"}
+            home.root / "spack/backend.json", {"schema_version": 1, "backend": "spack"}
         )
         file = home.root / "environments/apt/revisions/empty/activate.sh"
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(activation(home, []))
         write_json(
-            home.root / "apt/state.json",
+            home.root / "packages.json",
             {
                 "schema_version": 1,
                 "backend": "spack",
@@ -47,157 +47,26 @@ def base(tmp_path, monkeypatch, linux_apt):
     return base
 
 
-def legacy(base, profile=None):
-    home = base if profile is None else ForgeHome(base.root / "apt/profiles" / profile)
-    home.initialize()
-    file = home.root / "packages/libgsl-dev/2.7.1/old/manifest.json"
-    write_json(
-        file,
-        {
-            "name": "libgsl-dev",
-            "version": "2.7.1",
-            "install_id": "old",
-            "prefix": str(home.root / "old-prefix"),
-        },
-    )
-    write_json(
-        home.root / "apt/state.json",
-        {"schema_version": 1, "active": {"libgsl-dev": "old"}, "manual": ["old"]},
-    )
-    return home
 
 
-def test_old_selection_routes_to_spack_without_modifying_history(base):
-    old = legacy(base, "ubuntu-noble-main-universe")
-    write_json(
-        base.root / "apt/selection.json", {"schema_version": 1, "id": old.root.name}
-    )
-    before = {f: f.read_bytes() for f in base.root.rglob("*") if f.is_file()}
-    assert active_home(base).root == base.root / "apt/profiles/spack-default"
-    assert archived_packages(base)[0]["archived"]
-    assert all(p.read_bytes() == content for p, content in before.items())
-    switched = switch(base, "spack")
-    assert switched["backend"] == "spack"
-    assert active_home(base).root == base.root / "apt/profiles/spack-default"
-    assert all(
-        p.read_bytes() == content
-        for p, content in before.items()
-        if p.name != "selection.json"
-    )
-    rows = profiles(base, archived=True)
-    assert {r["backend"] for r in rows} == {"spack", "archived"}
-    assert next(r for r in rows if r["backend"] == "archived")["active"] is False
 
 
-def test_linux_initialization_selects_spack_without_bootstrapping(base, monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(apt_profiles, "sys", SimpleNamespace(platform="linux"))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    assert main(["--home", str(base.root), "--json", "init"]) == 0
-    profile = json.loads(capsys.readouterr().out)["apt_profile"]
-    assert profile == {"id": "spack-default", "backend": "spack", "status": "pending"}
-    assert profiles(base)[0]["configured"] is False
-    assert not apt_profiles.configured(active_home(base))
-    assert apt_profiles.ensure_active(base).root.name == "spack-default"
-    assert profiles(base)[0]["active"] and "configured" not in profiles(base)[0]
-    switch(base, "spack", name="custom")
-    assert apt_profiles.initialize_profile(base)["id"] == "spack-custom"
 
 
-def test_macos_without_brew_leaves_homebrew_pending(base, monkeypatch):
-    monkeypatch.setattr(apt_profiles, "sys", SimpleNamespace(platform="darwin"))
-    monkeypatch.setattr(homebrew_backend, "find_brew", lambda: None)
-    assert apt_profiles.initialize_profile(base) == {"id": "homebrew-mac", "backend": "homebrew", "status": "pending"}
-    assert active_home(base).root.name == "homebrew-mac"
-    assert profiles(base)[0]["configured"] is False
-    assert not (base.root / "apt/profiles/spack-default").exists()
 
 
-def test_two_spack_profiles_keep_separate_records_and_shared_home(base):
-    first = switch(base, "spack", name="gambit")
-    one = active_home(base)
-    second = switch(base, "spack", name="root")
-    two = active_home(base)
-    assert (
-        one != two
-        and one.root.is_relative_to(base.root)
-        and two.root.is_relative_to(base.root)
-    )
-    assert first["user_home"] == second["user_home"] == str(base.root)
-    assert Path(first["activation"]).is_file() and Path(second["activation"]).is_file()
-    assert read_json(two.root / "config.json")["apt_base_home"] == str(base.root)
-    assert len(profiles(base)) == 2
-    switch(base, "spack", name="gambit")
-    assert active_home(base) == one
 
 
-def test_failed_switch_keeps_previous_spack_selection(base, monkeypatch):
-    switch(base, "spack", name="working")
-    before = (base.root / "apt/selection.json").read_bytes()
-
-    def fail(*args, **kwargs):
-        raise ForgeError("backend unavailable", code=1)
-
-    monkeypatch.setattr(b, "bootstrap", fail)
-    with pytest.raises(ForgeError):
-        switch(base, "spack", name="broken")
-    assert (base.root / "apt/selection.json").read_bytes() == before
-    assert active_home(base).root.name == "spack-working"
 
 
-def test_archive_queries_never_execute_source_scripts(base, capsys):
-    old = legacy(base)
-    dangerous = old.root / "packages/libgsl-dev/2.7.1/old/environment.sh"
-    dangerous.write_text("exit 77\n")
-    before = dangerous.read_bytes()
-    for args in [
-        ["apt", "instances", "--archived"],
-        ["apt", "list", "--archived"],
-        ["apt", "prefix", "libgsl-dev", "--archived"],
-        ["apt", "switch", "--archived"],
-    ]:
-        assert main(["--home", str(base.root), *args, "--json"]) == 0
-        assert json.loads(capsys.readouterr().out)["ok"]
-    assert main(["--home", str(base.root), "apt", "instances", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["packages"] == []
-    assert (
-        main(["--home", str(base.root), "apt", "prefix", "libgsl-dev", "--archived", "--path"])
-        == 0
-    )
-    assert capsys.readouterr().out.strip() == str(old.root / "old-prefix")
-    assert dangerous.read_bytes() == before
-    assert not (base.root / "apt/profiles/spack-default").exists()
 
 
-def test_switch_recovers_missing_or_corrupt_selection(base, capsys):
-    (base.root / "apt/selection.json").write_text("{broken")
-    assert main(["--home", str(base.root), "apt", "switch", "spack", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["profile"] == "spack-default"
 
 
-def test_profile_command_lists_selects_and_creates(base, capsys, monkeypatch):
-    args = ["--home", str(base.root), "--json"]
-    assert main([*args, "apt", "profile", "gambit", "--create"]) == 0
-    assert json.loads(capsys.readouterr().out)["profile"] == "spack-gambit"
-    assert main([*args, "apt", "profile", "root", "--create"]) == 0
-    capsys.readouterr()
-    monkeypatch.setattr(b, "bootstrap", lambda *args, **kwargs: pytest.fail("use must not bootstrap"))
-    assert main([*args, "apt", "profile", "missing"]) == 2
-    assert "No configured" in json.loads(capsys.readouterr().out)["error"]["message"]
-    assert not (base.root / "apt/profiles/spack-missing").exists()
-    assert active_home(base).root.name == "spack-root"
-    assert main([*args, "apt", "profile", "spack-gambit", "--create"]) == 2
-    assert "already exists" in json.loads(capsys.readouterr().out)["error"]["message"]
-    assert main([*args, "apt", "profile", "gambit"]) == 0
-    assert json.loads(capsys.readouterr().out)["profile"] == "spack-gambit"
-    assert main([*args, "apt", "profile"]) == 0
-    listed = json.loads(capsys.readouterr().out)["environments"]
-    assert [(item["id"], item["active"]) for item in listed] == [("spack-gambit", True), ("spack-root", False)]
-    assert main([*args, "env", "list"]) == 0
-    assert json.loads(capsys.readouterr().out)["profiles"] == listed
 
 
 def test_shell_hook_is_available_with_invalid_preferences(base, tmp_path, monkeypatch, capsys):
-    (base.root / "apt/selection.json").write_text("{broken")
+    write_json(base.root / "profiles/selection.json", {"invalid":True})
     config = tmp_path / "config"
     preference = config / "jarvis-forge/default-home.json"
     preference.parent.mkdir(parents=True)
@@ -205,13 +74,13 @@ def test_shell_hook_is_available_with_invalid_preferences(base, tmp_path, monkey
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
     monkeypatch.delenv("JFORGE_HOME", raising=False)
     for options in [[], ["--home", str(base.root)]]:
-        assert main([*options, "apt", "shell-init"]) == 0
+        assert main([*options, "shell-init"]) == 0
         assert "jforge() {" in capsys.readouterr().out
 
 
 def test_shell_hook_initial_activation_uses_explicit_home(tmp_path, capsys):
     home = tmp_path / "explicit home"
-    assert main(["--home", str(home), "apt", "shell-init"]) == 0
+    assert main(["--home", str(home), "shell-init"]) == 0
     hook = capsys.readouterr().out
     fake = tmp_path / "jforge"
     fake.write_text('#!/bin/bash\n[ "$1" = --home ] && [ "$2" = "$EXPECTED_HOME" ] && printf "%s\\n" "$ACTIVATION"\n')
@@ -243,7 +112,7 @@ def test_shell_hook_initial_activation_uses_explicit_home(tmp_path, capsys):
     ],
 )
 def test_shell_hook_only_refreshes_after_changes(tmp_path, capsys, arguments, expected, activation_status):
-    assert main(["--home", str(tmp_path / "home"), "apt", "shell-init"]) == 0
+    assert main(["--home", str(tmp_path / "home"), "shell-init"]) == 0
     hook = capsys.readouterr().out
     fake = tmp_path / "jforge"
     fake.write_text(
@@ -279,13 +148,13 @@ def test_shell_hook_only_refreshes_after_changes(tmp_path, capsys, arguments, ex
 def test_shell_hook_activates_only_successful_interactive_builds(tmp_path, capsys, shell):
     if not shutil.which(shell):
         pytest.skip("shell is not installed")
-    assert main(["apt", "shell-init"]) == 0
+    assert main(["shell-init"]) == 0
     hook = capsys.readouterr().out
     fake = tmp_path / "jforge"
     fake.write_text(
         '#!/bin/bash\n'
-        'case "$1 $2" in\n'
-        '  "build run"|"build resume") ;;\n'
+        'case "$1 ${2-}" in\n'
+        '  "build install") ;;\n'
         '  *) exit 2 ;;\n'
         'esac\n'
         'if [ "${_JFORGE_SHELL_HANDOFF-}" = 1 ] && [ "$3" != empty ]; then\n'
@@ -299,19 +168,19 @@ def test_shell_hook_activates_only_successful_interactive_builds(tmp_path, capsy
     code = r'''
 export PATH="$1:$PATH" ACTIVATION="$2" TMPDIR="$1"
 eval "$3"
-jforge build run fixture
+jforge build install fixture
 printf 'run %s\n' "${FIXTURE_BUILD-unset}"
 unset FIXTURE_BUILD
-jforge build resume fixture
+jforge build install fixture
 printf 'resume %s\n' "${FIXTURE_BUILD-unset}"
 unset FIXTURE_BUILD
-jforge build run failed
+jforge build install failed
 printf 'failed %s %s\n' "$?" "${FIXTURE_BUILD-unset}"
-jforge build run empty
+jforge build install empty
 printf 'empty %s\n' "${FIXTURE_BUILD-unset}"
-jforge build run fixture --json
+jforge build install fixture --json
 printf 'json %s\n' "${FIXTURE_BUILD-unset}"
-jforge build run fixture --no-activate
+jforge build install fixture --no-activate
 printf 'optout %s\n' "${FIXTURE_BUILD-unset}"
 '''
     args = ["--noprofile", "--norc"] if shell == "bash" else ["-f"]
@@ -323,7 +192,7 @@ printf 'optout %s\n' "${FIXTURE_BUILD-unset}"
     assert not list(tmp_path.glob("jforge-shell.*"))
 
     script.write_text("return 9\n")
-    check = 'export PATH="$1:$PATH" ACTIVATION="$2"; eval "$3"; jforge build run fixture; echo $?'
+    check = 'export PATH="$1:$PATH" ACTIVATION="$2"; eval "$3"; jforge build install fixture; echo $?'
     result = subprocess.run([shell, *args, "-ic", check, "test", str(tmp_path), str(script), hook],
                             capture_output=True, text=True, check=True)
     assert result.stdout.strip() == "0" and "Could not activate" in result.stderr
@@ -336,12 +205,12 @@ printf 'optout %s\n' "${FIXTURE_BUILD-unset}"
 def test_managed_repair_refreshes_the_loaded_hook(tmp_path, capsys, shell):
     if not shutil.which(shell):
         pytest.skip("shell is not installed")
-    assert main(["apt", "shell-init"]) == 0
+    assert main(["shell-init"]) == 0
     hook = capsys.readouterr().out
     fake = tmp_path / "jforge"
     fake.write_text(
-        '#!/bin/sh\n[ "$1" != --home ] || shift 2\ncase "$1 $2" in\n'
-        '  "apt shell-init") printf "%s\\n" "export FIXTURE_HOOK=refreshed" ;;\n'
+        '#!/bin/sh\n[ "$1" != --home ] || shift 2\ncase "$1 ${2-}" in\n'
+        '  "shell-init ") printf "%s\\n" "export FIXTURE_HOOK=refreshed" ;;\n'
         '  "env repair") [ "$#" != 2 ] || printf "hook\\0%s\\0" "$FIXTURE_HOME" >&9 ;;\n'
         '  *) exit 2 ;;\nesac\n'
     )
@@ -401,12 +270,6 @@ def test_spack_profile_activation_removes_old_managed_paths(base, tmp_path, shel
     assert result.stdout.endswith("second")
 
 
-def test_existing_root_spack_can_be_reselected(base):
-    b.bootstrap(base)
-    switch(base, "spack", name="other")
-    assert active_home(base) != base
-    result = switch(base, "spack", direct=True)
-    assert active_home(base) == base and result["profile"] == "direct"
 
 
 def test_direct_root_option_requires_existing_spack(tmp_path, capsys):

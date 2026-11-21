@@ -19,8 +19,8 @@ def fake_bootstrap(target, *args, **kwargs):
     activation = target.root / "environments/apt/activate.sh"
     activation.parent.mkdir(parents=True, exist_ok=True)
     activation.write_text(":\n")
-    write_json(target.root / "apt/spack.json", {"schema_version": 1, "backend": "spack"})
-    write_json(target.root / "apt/state.json", {
+    write_json(target.root / "spack/backend.json", {"schema_version": 1, "backend": "spack"})
+    write_json(target.root / "packages.json", {
         "schema_version": 1,
         "spack": {"roots": [], "packages": []},
         "activation": str(activation),
@@ -33,9 +33,12 @@ def save(path, **config):
 
 
 @pytest.fixture
-def home(tmp_path):
+def home(tmp_path,request):
+    if 'linux_apt' in request.fixturenames:request.getfixturevalue('linux_apt')
     value = ForgeHome(tmp_path / 'home')
     value.initialize()
+    from profile_fixtures import project_profile
+    project_profile(value)
     return value
 
 
@@ -145,7 +148,7 @@ def test_resume_uses_original_recipe_and_retries_failed_check(home, projects, tm
     assert first['failed_step']['id'] == 'check'
     if legacy_marker:
         step = next(Path(first['attempt']).glob('*/tiny/environment.sh'))
-        configured = next((home.root / 'builds/work').glob('*/build/tiny/.jforge-configure.json'))
+        configured = next((home.root / 'profiles/default/build').glob('*/tiny/.jforge-configure.json'))
         argv = read_json(step.parent / 'command-1.json')['requested_argv']
         write_json(configured, {'fingerprint': builds.fingerprint({'configure': argv, 'environment': digest(step)})})
     assert not list((home.root / 'builds/artifacts').glob('*/manifest.json'))
@@ -170,37 +173,37 @@ def test_build_reuse_tracks_selected_profile_and_installed_dag(home, projects, m
 
     def install(target, action, specs, **options):
         targets.append(target.root.name)
-        activation = target.root / "environment.sh"
+        activation = target.root / "spack/runtime/environment.sh"
         activation.write_text(":\n")
-        state = read_json(target.root / "apt/state.json")
+        state = read_json(target.root / "packages.json")
         selected = state["spack"]
         selected["roots"] = ["gsl"]
         if not selected["packages"]:
             selected["packages"] = [{"name": "gsl", "hash": "first", "prefix": str(target.root)}]
-        write_json(target.root / "apt/state.json", state)
+        write_json(target.root / "packages.json", state)
         lock = target.root / ("lock-" + selected["packages"][0]["hash"])
         lock.write_text("{}")
         return {"activation": str(activation), "lockfile": str(lock), "packages": selected["packages"],
                 "roots": selected["roots"]}
 
     monkeypatch.setattr(spack_backend, "transact", install)
-    apt_profiles.switch(home, name="first")
+    from profile_fixtures import project_profile
+    project_profile(home,"first")
     first = builds.execute(home, producer)
     assert first["status"] == "passed", first
     repeated = builds.execute(home, producer)
     assert repeated["outputs"]["installation"]["artifact_id"] == first["outputs"]["installation"]["artifact_id"]
-    apt_profiles.switch(home, name="second")
+    project_profile(home,"second")
     second = builds.execute(home, producer)
     assert second["status"] == "passed", second
     assert second["outputs"]["installation"]["artifact_id"] != first["outputs"]["installation"]["artifact_id"]
-    state_file = apt_profiles.active_home(home).root / "apt/state.json"
+    state_file = apt_profiles.active_home(home).root / "packages.json"
     state = read_json(state_file)
     state["spack"]["packages"][0]["hash"] = "changed"
     write_json(state_file, state)
     changed = builds.execute(home, producer)
-    assert changed["status"] == "passed", changed
-    assert changed["outputs"]["installation"]["artifact_id"] != second["outputs"]["installation"]["artifact_id"]
-    assert targets == ["spack-first", "spack-second", "spack-second"]
+    assert changed["status"] == "failed" and "Different inputs occupy" in changed["error"]
+    assert targets == ["first", "second"]
 
 
 def test_pending_apt_step_resumes_with_original_profile(home, tmp_path, monkeypatch):
@@ -213,7 +216,7 @@ def test_pending_apt_step_resumes_with_original_profile(home, tmp_path, monkeypa
         targets.append(target.root.name)
         if len(targets) == 1:
             raise ForgeError("transient package failure", code=1)
-        activation = target.root / "environment.sh"
+        activation = target.root / "spack/runtime/environment.sh"
         activation.write_text(":\n")
         lock = target.root / "spack.lock"
         lock.write_text("{}")
@@ -222,14 +225,15 @@ def test_pending_apt_step_resumes_with_original_profile(home, tmp_path, monkeypa
     monkeypatch.setattr(spack_backend, "transact", install)
     path = save(tmp_path / "apt.yaml", id="apt-build",
                 steps=[{"id": "packages", "uses": "apt.install", "with": {"specs": ["gsl"]}}])
-    apt_profiles.switch(home, name="first")
+    from profile_fixtures import project_profile
+    project_profile(home,"first")
     first = builds.execute(home, path)
     assert first["status"] == "failed"
-    apt_profiles.switch(home, name="second")
+    project_profile(home,"second")
     resumed = builds.execute(home, resume=first["run_id"])
     assert resumed["status"] == "passed", resumed
-    assert targets == ["spack-first", "spack-first"]
-    assert apt_profiles.active_home(home).root.name == "spack-second"
+    assert targets == ["first", "first"]
+    assert apt_profiles.active_home(home).root.name == "second"
 
 
 def test_two_pinned_artifacts_from_one_recipe_survive_resume(home, projects, tmp_path):
@@ -237,6 +241,8 @@ def test_two_pinned_artifacts_from_one_recipe_survive_resume(home, projects, tmp
     first = builds.execute(home, producer)["outputs"]["installation"]
     source = Path(yaml.safe_load(producer.read_text())["sources"]["tiny"]["path"])
     (source / "tiny.cpp").write_text("int forge_value(){return 43;}\n")
+    config=yaml.safe_load(producer.read_text());config['steps'][0]['with']['export']['version']='2.0'
+    producer.write_text(yaml.safe_dump(config))
     second = builds.execute(home, producer)["outputs"]["installation"]
     assert first["artifact_id"] != second["artifact_id"]
     marker = tmp_path / "ready"
@@ -407,14 +413,15 @@ def test_catalog_refresh_downloads_only_supported_builds(tmp_path, home, monkeyp
     assert len(downloaded) == 3
 
 
-def test_build_cli_json_and_read_only_plan(tmp_path, capsys):
-    path = save(tmp_path / 'flow.yaml', id='test', steps=[{'id':'x','uses':'command','with':{'argv':['true']}}])
-    absent = tmp_path / 'absent'
-    assert main(['--home',str(absent),'build','plan',str(path),'--json']) == 0
-    assert json.loads(capsys.readouterr().out)['ok']
+def test_build_cli_read_only_show_and_retired_plan(tmp_path,capsys):
+    path=save(tmp_path/'flow.yaml',id='test',steps=[{'id':'x','uses':'command','with':{'argv':['true']}}])
+    absent=tmp_path/'absent'
+    assert main(['--home',str(absent),'build','show',str(path),'--json'])==0
+    assert json.loads(capsys.readouterr().out)['build']['id']=='test'
+    for old in ('plan','validate','run','resume','artifacts','env'):
+        assert main(['--home',str(absent),'build',old,'--json'])==2
+        assert json.loads(capsys.readouterr().out)['error']['hint']
     assert not absent.exists()
-    assert main(['--home',str(absent),'build','validate',str(path),'--json']) == 0
-    assert json.loads(capsys.readouterr().out)['nodes'] == 1
 
 
 def test_duplicate_yaml_rejected(tmp_path):
@@ -448,7 +455,7 @@ def test_artifact_runtime_works_in_a_fresh_child_environment(home, projects, tmp
     result = builds.execute(home, consumer, jobs=2)
     assert result['status'] == 'passed', result
     output = result['outputs']['installation']
-    activated = cmake.capture(Path(output['activation']))
+    activated=cmake.capture(Path(output['activation']),environment=cmake.capture(home.root/'profiles/default/activate.sh'))
     import subprocess
     completed = subprocess.run([output['prefix']+'/bin/consumer'],env=activated)
     assert completed.returncode == 0
@@ -761,8 +768,8 @@ def test_build_show_summarizes_root_recipe(tmp_path, capsys):
     assert not home.exists()
     assert main(["--home", str(home), "build", "show", str(root), "--expanded"]) == 0
     expanded = capsys.readouterr().out
-    assert "Steps (" in expanded and "apt.install" in expanded and "cmake.project" in expanded
-    assert "-Dall=ON" in expanded and "phases configure, build, install" in expanded
+    assert "steps:" in expanded and "apt.install" in expanded and "cmake.project" in expanded
+    assert yaml.safe_load(expanded)["kind"]=="build"
     assert not home.exists()
     assert main(["--home", str(home), "--json", "build", "show", str(root)]) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -880,15 +887,10 @@ def test_linux_recipe_rejected_on_macos_before_run(home, name, requirements, mon
     path = Path(__file__).parents[1] / "builds" / f"{name}.yaml"
     monkeypatch.setattr(builds, "sys", SimpleNamespace(platform="darwin"))
     args = ["--home", str(home.root), "--json", "build"]
-    assert main([*args, "plan", str(path)]) == 0
-    plan = json.loads(capsys.readouterr().out)
-    assert plan["nodes"][-1]["host_requirements"] == requirements
-    assert main([*args, "run", str(path)]) == 2
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["command"] == "build run"
-    error = payload["error"]
-    assert f"Build {name} requires platform linux. Current platform is darwin." == error["message"]
-    assert not list((home.root / "runs").iterdir())
+    assert builds.host_requirements(builds.load(path,home=home)['config'])==requirements
+    with pytest.raises(ForgeError,match='requires platform linux'):
+        builds._check_host(home,builds.graph(home,str(path)))
+    assert not list((home.root/'runs').iterdir())
 
 
 def test_dependency_host_requirements_are_checked_before_parent(home, tmp_path, monkeypatch):
@@ -903,12 +905,10 @@ def test_dependency_host_requirements_are_checked_before_parent(home, tmp_path, 
     with pytest.raises(ForgeError, match="Build child requires platform linux"):
         builds.execute(home, parent)
     monkeypatch.setattr(builds, "sys", SimpleNamespace(platform="linux"))
-    profile = home.root / "apt/profiles/homebrew-mac"
-    write_json(profile / "config.json", {})
-    write_json(profile / "apt/homebrew.json", {})
-    write_json(home.root / "apt/selection.json", {"schema_version": 1, "id": profile.name})
-    with pytest.raises(ForgeError, match="Build child requires a Spack apt profile.*homebrew-mac"):
-        builds.execute(home, parent)
+    from jarvis_forge import apt_profiles
+    monkeypatch.setattr(apt_profiles,'backend_name',lambda scope:'homebrew')
+    with pytest.raises(ForgeError, match="Build child requires a Spack apt profile"):
+        builds.execute(home,parent)
     assert not list((home.root / "runs").iterdir())
 
 
@@ -932,7 +932,7 @@ def test_package_install_uses_active_apt_profile(home, tmp_path, monkeypatch, li
         seen["root"] = target.root
         seen["action"] = action
         seen["specs"] = list(specs)
-        activation = target.root / "activate.sh"
+        activation = target.root / "spack/runtime/activate.sh"
         activation.write_text(":\n")
         lock = target.root / "spack.lock"
         lock.write_text("{}")
@@ -943,9 +943,10 @@ def test_package_install_uses_active_apt_profile(home, tmp_path, monkeypatch, li
     path.write_text(yaml.safe_dump({"name": "deps", "dependencies": ["gsl"], "checks": {"after": [["true"]]}}))
     result = builds.execute(home, path)
     assert result["status"] == "passed", result
-    assert seen == {"root": home.root / "apt/profiles/spack-default", "action": "install", "specs": ["gsl"]}
-    assert read_json(home.root / "apt/selection.json")["id"] == "spack-default"
-    assert not list((home.root / "apt/profiles").glob("spack-build-*"))
+    assert seen == {"root": home.root / "profiles/default", "action": "install", "specs": ["gsl"]}
+    from jarvis_forge.apt_profiles import active_home
+    assert active_home(home).root.name=="default"
+    assert not list((home.root / "profiles").glob("spack-build-*"))
 
 
 @pytest.mark.parametrize("verbose", [False, True])
@@ -965,7 +966,7 @@ def test_build_package_install_uses_apt_progress_display(home, tmp_path, monkeyp
         progress.output("stdout", status)
         progress.installation_plan([])
         progress("[4/4] Save environment")
-        activation = target.root / "activate.sh"
+        activation = target.root / "spack/runtime/activate.sh"
         activation.write_text(":\n")
         lock = target.root / "spack.lock"
         lock.write_text("{}")
@@ -1005,7 +1006,7 @@ def test_build_failure_shows_stage_diagnostic_and_resume_once(home, tmp_path, mo
     path = tmp_path / "failure.yaml"
     path.write_text(yaml.safe_dump({"name": "sample-build", "dependencies": ["gsl"],
                                    "checks": {"before": {"python": {"version": ">=3.10"}}}}))
-    argv = ["--home", str(home.root), "build", "run", str(path)]
+    argv = ["--home", str(home.root), "build", "install", str(path)]
     assert main(argv) == 1
     captured = capsys.readouterr()
     log, = (home.root / "runs").glob("*/attempts/*/build.log")
@@ -1018,7 +1019,7 @@ def test_build_failure_shows_stage_diagnostic_and_resume_once(home, tmp_path, mo
     assert captured.err.count(message) == 1
     assert f"Operation logs: {operation}" in captured.err
     assert str(log) in captured.err
-    assert f"jforge --home {home.root} build resume {run_id}" in captured.err
+    assert "jforge build install " in captured.err
     assert "[INFO]" not in captured.err and "--request" not in captured.err
     assert "Jarvis-Forge.Checker" in log.read_text() and "--request" in log.read_text()
     raw, = log.parent.glob("*/preflight.command-1/command-1.stdout.log")
@@ -1027,10 +1028,10 @@ def test_build_failure_shows_stage_diagnostic_and_resume_once(home, tmp_path, mo
     assert main([*argv, "--json"]) == 1
     captured = capsys.readouterr()
     result = json.loads(captured.out)
-    assert not result["ok"] and result["command"] == "build run"
+    assert not result["ok"] and result["command"] == "build install"
     assert result["error"]["message"] == message
     assert result["error"]["hint"] == f"Operation logs: {operation}"
-    assert result["failed_step"]["id"] == "packages.install"
+    assert result["runs"][0]["failed_step"]["id"] == "packages.install"
     assert "Failed at step" not in captured.err
 
 
@@ -1040,7 +1041,7 @@ def test_build_success_keeps_command_output_for_verbose_and_logs(home, tmp_path,
     path.write_text(yaml.safe_dump({"name": "sample-build", "checks": {"after": [
         [sys.executable, "-c", "print('raw subprocess output')"],
     ]}}))
-    argv = ["--home", str(home.root), "build", "run", str(path)]
+    argv = ["--home", str(home.root), "build", "install", str(path)]
     assert main([*argv, "--verbose"] if verbose else argv) == 0
     captured = capfd.readouterr()
     assert "sample · Passed" in captured.out
@@ -1064,7 +1065,7 @@ def test_inline_package_archive_and_cmake_paths(home,projects,tmp_path,monkeypat
     (package/'include/dependency.h').write_text('#define DEP_VALUE 42\n')
     monkeypatch.setattr(spack_backend,'bootstrap',fake_bootstrap)
     def install(target,*args,**kwargs):
-        activation=target.root/'activate.sh'; activation.write_text(':\n')
+        activation=target.root/'spack/runtime/activate.sh'; activation.write_text(':\n')
         lock=target.root/'spack.lock'; lock.write_text('{}')
         return {'activation':str(activation),'lockfile':str(lock),'packages':[{
             'name':'dep','version':'1','hash':'dep-hash','prefix':str(package)}]}
@@ -1082,8 +1083,8 @@ def test_inline_package_archive_and_cmake_paths(home,projects,tmp_path,monkeypat
     assert Path(output['prefix'],'include/value.h').is_file()
     activation=Path(output['activation']).read_text()
     assert str(package/'lib64') not in activation and str(package/'lib') in activation
-    assert read_json(home.root/'apt/selection.json')['id'] == 'spack-default'
-    assert not list((home.root/'apt/profiles').glob('spack-build-*'))
+    assert __import__('jarvis_forge.apt_profiles',fromlist=['active_home']).active_home(home).root.name=='default'
+    assert not list((home.root/'profiles').glob('spack-build-*'))
 
 
 def test_package_paths_reach_cmake_discovery_and_nested_build(home, projects, tmp_path, monkeypatch, linux_apt):
@@ -1194,39 +1195,37 @@ def test_release_workspace_keeps_download_source_build_install_and_activation(ho
         return update(target, index.as_uri())
     monkeypatch.setattr(build_catalog, 'update', acquire_release)
     directory = tmp_path / 'workspace-tiny'
-    assert main(['--home',str(home.root),'build','fetch','workspace-tiny','--json']) == 0
+    assert main(['--home',str(home.root),'build','fetch','workspace-tiny',str(directory),'--json']) == 0
     fetched = json.loads(capsys.readouterr().out)
     assert fetched['workspace'] == str(directory)
     assert calls == ['download']
     assert (directory / 'scripts/accept.py').is_file()
     assert builds.plan(home, "workspace-tiny-build")["workspace"] == str(directory)
-    assert main(["--home", str(home.root), "build", "plan", "workspace-tiny"]) == 0
-    planned = capsys.readouterr().out
-    assert "Build plan · workspace-tiny" in planned and "Build Tiny" in planned
-    assert "workspace-tiny-build" not in planned and str(directory) in planned
+    planned=builds.plan(home,str(directory))
+    assert planned['workspace']==str(directory)
     script = directory / "scripts/accept.py"
     script.write_text(script.read_text() + "print('edited workspace script')\n")
-    assert main(["--home", str(home.root), "build", "fetch", "workspace-tiny", "--json"]) == 2
-    assert "already contains" in json.loads(capsys.readouterr().out)["error"]["message"]
+    assert main(["--home", str(home.root), "build", "fetch", "workspace-tiny",str(directory), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["workspace"]==str(directory)
     assert "edited workspace script" in script.read_text()
-    assert main(['--home',str(home.root),'build','run','workspace-tiny','--json']) == 0
+    assert main(['--home',str(home.root),'build','install',str(directory),'--json']) == 0
     result = json.loads(capsys.readouterr().out)
-    prefix = Path(result['outputs'][0]['prefix'])
-    instance = prefix.parent.parent
-    assert instance.parent == directory / 'instances'
-    assert instance.name == 'workspace-tiny-A1'
-    assert (instance / 'sources/Tiny/tiny/CMakeLists.txt').is_file()
+    prefix = Path(result['apps'][0]['prefix'])
+    instance=directory
+    assert prefix==directory/'install'
+    assert not (directory/'instances').exists()
+    assert (instance / 'src/Tiny/tiny/CMakeLists.txt').is_file()
     assert (instance / 'build/Tiny.install/CMakeCache.txt').is_file()
-    assert (instance / 'install/Tiny.install/include/value.h').is_file()
-    assert list((instance / 'downloads').iterdir())
-    assert (directory / 'runs' / result['run_id']).resolve() == home.run_path(result['run_id']).resolve()
+    assert (instance / 'install/include/value.h').is_file()
+    assert list((home.root/'cache/downloads').glob('*.tar.gz'))
+    assert (directory / 'runs' / result['runs'][0]['run_id']).resolve() == home.run_path(result['runs'][0]['run_id']).resolve()
     assert cmake.capture(directory / 'activate.sh')['CMAKE_PREFIX_PATH'].split(':')[0] == str(prefix)
-    assert main(["--home", str(home.root), "build", "env", "workspace-tiny", "--path"]) == 0
-    assert cmake.capture(Path(capsys.readouterr().out.strip()))["CMAKE_PREFIX_PATH"].split(":")[0] == str(prefix)
+    assert main(["--home", str(home.root), "build", "show", "workspace-tiny", "--path"]) == 0
+    assert capsys.readouterr().out.strip()==str(prefix)
     original = (directory / 'activate.sh').read_bytes()
-    current = read_json(directory / '.jforge/current.json')
+    current = read_json(directory / 'metadata.json')
     identity = builds.artifact(home, current['artifact_id'])['instance']
-    assert read_json(instance / '.jforge-instance.json')['instance'] == identity
+    assert read_json(instance / 'metadata.json')['instance'] == identity
     from jarvis_forge.build_workspace import create
     other = tmp_path / 'other-workspace'
     create(home, build_catalog.resolve(home, "workspace-tiny", local_workspaces=False), other)
@@ -1237,16 +1236,16 @@ def test_release_workspace_keeps_download_source_build_install_and_activation(ho
     (directory / 'scripts/accept.py').write_text('raise RuntimeError("acceptance failed")\n')
     failed = builds.execute(home, str(directory))
     assert failed['status'] == 'failed'
-    assert (directory / 'instances/workspace-tiny-A2').is_dir()
+    assert not (directory/'instances').exists()
     assert (directory / 'activate.sh').read_bytes() == original
-    assert read_json(directory / '.jforge/current.json') == current
+    assert read_json(directory/'metadata.json')['artifact_id']==current['artifact_id']
     builds.artifact(home, current['artifact_id'])
     assert calls == ['download']  # Local workspaces remain usable without the Release service.
 
 
 def test_workspace_build_activates_in_the_calling_shell(home, projects, tmp_path, capsys):
     build_catalog.update(home, workspace_release(tmp_path, projects).as_uri())
-    assert main(["apt", "shell-init"]) == 0
+    assert main(["shell-init"]) == 0
     hook = capsys.readouterr().out
     launcher = tmp_path / "jforge"
     source = Path(__file__).resolve().parents[1] / "src"
@@ -1261,7 +1260,8 @@ eval "$4"
 check='import sys; print(sys.executable, sys.prefix, sys.base_prefix)'
 before=$(python3 -c "$check") || exit 11
 flags=$-; options=$SHELLOPTS
-jforge build run workspace-tiny --directory "$3" || exit 12
+jforge build fetch workspace-tiny "$3" || exit 12
+jforge build install "$3" || exit 12
 test "$flags" = "$-" && test "$options" = "$SHELLOPTS" || exit 13
 test "$before" = "$(python3 -c "$check")" || exit 14
 printf 'AUTO_PREFIX=%s\n' "${CMAKE_PREFIX_PATH%%:*}"
@@ -1271,7 +1271,7 @@ echo shell-survived
     process = subprocess.run(["bash", "--noprofile", "--norc", "-ic", command, "test", str(tmp_path),
                               str(home.root), str(workspace), hook, str(Path(sys.executable).parent)],
                              capture_output=True, text=True, check=True)
-    current = read_json(workspace / ".jforge/current.json")
+    current = read_json(workspace / "metadata.json")
     assert f"AUTO_PREFIX={current['prefix']}" in process.stdout
     assert "shell-survived" in process.stdout
     assert "Build environment activated." in process.stderr
@@ -1289,45 +1289,32 @@ def test_workspace_resume_preserves_directory_and_script_snapshot(home, projects
     first = builds.execute(home, str(directory))
     assert first['status'] == 'failed'
     assert not (directory / 'activate.sh').exists()
-    instance = next(p for p in (directory / 'instances').iterdir() if p.is_dir())
+    instance=directory
     entry.write_text('invalid edited yaml')
     script.unlink()
     marker.touch()
     resumed = builds.execute(home, resume=first['run_id'])
     assert resumed['status'] == 'passed', resumed
     assert Path(resumed['outputs']['installation']['prefix']).is_relative_to(instance)
-    assert len([p for p in (directory / 'instances').iterdir() if p.is_dir()]) == 1
+    assert not (directory/'instances').exists()
     assert (directory / 'activate.sh').is_file()
     assert home.show(first['run_id'])['status'] == 'passed'
 
 
-def test_run_can_fetch_workspace_in_one_command_and_reuse_offline(home, projects, tmp_path, monkeypatch, capsys):
-    index = workspace_release(tmp_path, projects)
-    update = build_catalog.update
-    monkeypatch.setattr(build_catalog, 'update', lambda target: update(target, index.as_uri()))
-    directory = tmp_path / 'one-command'
-    argv = ['--home',str(home.root),'build','run','workspace-tiny','--directory',str(directory),'--json']
-    assert main(argv) == 0
-    first = json.loads(capsys.readouterr().out)
-    monkeypatch.setattr(build_catalog, 'update', lambda target: pytest.fail('Offline rerun must not access Release'))
-    assert main(argv) == 0
-    second = json.loads(capsys.readouterr().out)
-    assert second['outputs'][0]['artifact_id'] == first['outputs'][0]['artifact_id']
-    assert second['nodes'][0]['status'] == 'reused'
-    assert main(['--home',str(home.root),'build','run','other','--directory',str(directory),'--json']) == 2
-    assert json.loads(capsys.readouterr().out)['ok'] is False
-
-    prefix = Path(first["outputs"][0]["prefix"])
-    (prefix / "include/value.h").unlink()
-    assert main(argv) == 1
-    assert "Installed artifact is missing or modified" in json.loads(capsys.readouterr().out)["error"]["message"]
-    shutil.rmtree(directory)
-    assert main(argv) == 0
-    rebuilt = json.loads(capsys.readouterr().out)
-    assert rebuilt["nodes"][0]["status"] == "passed"
-    assert rebuilt["outputs"][0]["artifact_id"] == first["outputs"][0]["artifact_id"]
-    assert (directory / "activate.sh").is_file()
-    assert (prefix / "include/value.h").is_file()
+def test_install_fetches_internal_workspace_and_reuses_offline(home,projects,tmp_path,monkeypatch,capsys):
+    index=workspace_release(tmp_path,projects)
+    update=build_catalog.update
+    monkeypatch.setattr(build_catalog,'update',lambda target:update(target,index.as_uri()))
+    argv=['--home',str(home.root),'build','install','workspace-tiny','--json']
+    assert main(argv)==0
+    first=json.loads(capsys.readouterr().out)
+    monkeypatch.setattr(build_catalog,'update',lambda target:pytest.fail('Offline rerun must not download'))
+    assert main(argv)==0
+    second=json.loads(capsys.readouterr().out)
+    assert second['apps'][0]['artifact_id']==first['apps'][0]['artifact_id'] and not second['runs']
+    prefix=Path(first['apps'][0]['prefix']);(prefix/'include/value.h').unlink()
+    assert main(argv)==1
+    assert 'missing or modified' in json.loads(capsys.readouterr().out)['error']['message']
 
 
 def test_workspace_fetch_rejects_collisions_and_read_only_plan_stays_offline(home, tmp_path, monkeypatch, capsys):
@@ -1342,8 +1329,8 @@ def test_workspace_fetch_rejects_collisions_and_read_only_plan_stays_offline(hom
     with pytest.raises(ForgeError, match='not found'):
         builds.plan(home, 'not-cached')
     assert main(["--home", str(home.root), "build", "fetch", "not-cached",
-                 "--directory", str(destination), "--output", str(source), "--json"]) == 2
-    assert "either --output or --directory" in json.loads(capsys.readouterr().out)["error"]["message"]
+                 str(destination), "--output", str(source), "--json"]) == 2
+    assert "--output" in json.loads(capsys.readouterr().out)["error"]["message"]
 
 
 def test_workspace_publishes_a_safe_entry_for_an_existing_legacy_artifact(tmp_path):
@@ -1352,6 +1339,7 @@ def test_workspace_publishes_a_safe_entry_for_an_existing_legacy_artifact(tmp_pa
     legacy = tmp_path / "ROOT.install-activate.sh"
     original = "# Generated by jforge build\nset -e\nset -o pipefail\nexport ROOTSYS=fixture\n"
     legacy.write_text(original)
+    write_json(tmp_path/"metadata.json",{"kind":"workspace","home":str(tmp_path)})
     publish(tmp_path, {"run_id": "build-fixture", "outputs": {"installation": {
         "artifact_id": "root-fixture", "prefix": str(tmp_path), "activation": str(legacy),
     }}})
@@ -1517,8 +1505,7 @@ def test_source_override_selects_another_checkout(home, projects, tmp_path):
     node = saved["nodes"][saved["root"]]
     assert node["config"]["sources"]["tiny"]["path"] == str(other.resolve())
     plain = builds.execute(home, producer)
-    assert plain["status"] == "passed", plain
-    assert plain["outputs"]["installation"]["artifact_id"] != overridden["outputs"]["installation"]["artifact_id"]
+    assert plain['status']=='failed' and 'Different inputs occupy' in plain['error']
     with pytest.raises(ForgeError, match="saved source"):
         builds.execute(home, resume=overridden["run_id"], source=original)
 
@@ -1530,7 +1517,8 @@ def test_source_lock_lives_in_the_git_directory(home, tmp_path):
     source.mkdir()
     subprocess.run(["git", "init"], cwd=source, check=True)
     lock = builds.source_cmake_lock(home, source)
-    assert lock == (source / ".git" / "jforge-cmake.lock").resolve()
+    assert lock.parent.parent==home.root/"locks/sources"
+    assert lock.parent.name=="0001-cmake" and not (source/".git/jforge-cmake.lock").exists()
     with builds.file_lock(lock, blocking=True):
         with pytest.raises(ForgeError, match="busy"):
             with builds.file_lock(lock):
@@ -1538,4 +1526,4 @@ def test_source_lock_lives_in_the_git_directory(home, tmp_path):
     loose = tmp_path / "loose"
     loose.mkdir()
     other = builds.source_cmake_lock(home, loose)
-    assert other.is_relative_to(home.root / "builds/source-locks")
+    assert other.is_relative_to(home.root / "locks/sources")

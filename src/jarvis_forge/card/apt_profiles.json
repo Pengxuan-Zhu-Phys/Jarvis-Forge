@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
   "profiles": {
-    "ubuntu-22.04": {
+    "ubuntu22": {
       "revision": 1,
       "platform": "linux",
       "backend": "spack",
       "reference": "Ubuntu 22.04 LTS (Jammy)",
       "versions": {"gcc": "11.4.0", "cmake": "3.22.6", "gmake": "4.3", "autoconf": "2.71", "automake": "1.16.5"}
     },
-    "ubuntu-24.04": {
+    "ubuntu24": {
       "revision": 1,
       "platform": "linux",
       "backend": "spack",
       "reference": "Ubuntu 24.04 LTS (Noble)",
       "versions": {"gcc": "13.3.0", "cmake": "3.28.6", "gmake": "4.3", "autoconf": "2.71", "automake": "1.16.5"}
     },
-    "ubuntu-26.04": {
+    "ubuntu26": {
       "revision": 1,
       "platform": "linux",
       "backend": "spack",

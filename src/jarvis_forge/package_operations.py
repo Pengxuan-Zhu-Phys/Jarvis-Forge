@@ -8,6 +8,7 @@ from contextlib import contextmanager, ExitStack
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import selectors
 import shlex
@@ -20,6 +21,18 @@ from . import __version__
 from .downloads import fetch
 from .paths import object_path
 from .storage import ForgeError, ForgeHome, digest, new_id, now, read_json, write_json
+
+
+def profile_write_lock(function):
+    """Serialize package and app mutations against the same profile snapshot."""
+    from functools import wraps
+    @wraps(function)
+    def invoke(home,*args,**kwargs):
+        from .unified_profiles import record
+        if kwargs.get('dry_run') or not record(home):return function(home,*args,**kwargs)
+        from .build_apps import locked as app_locked
+        with app_locked(home):return function(home,*args,**kwargs)
+    return invoke
 
 
 def key_for(record):
@@ -47,8 +60,11 @@ def locked(home: ForgeHome):
         )
     # Check existing path components before initialization can follow a symlink.
     for name in (
-        "apt",
-        "packages",
+        "spack",
+        "pkg",
+        "src",
+        "build",
+        "apps",
         "environments",
         "operations",
         "cache",
@@ -83,7 +99,7 @@ def locked(home: ForgeHome):
 
 @contextmanager
 def operation(home, action, request):
-    operation_id = new_id("apt", root=home.root / "operations")
+    operation_id = new_id(action.removeprefix("spack-"), root=home.root / "operations")
     directory = _inside(home, home.root / "operations" / operation_id)
     directory.mkdir(mode=0o700)
     write_json(
@@ -235,35 +251,48 @@ def run_command(argv, cwd, environment_script, logs, number, timeout, progress=N
         write_json(probe, record)
 
 
+def archive_name(source):
+    from urllib.parse import urlparse
+    from .paths import semantic_name
+    file=Path(urlparse(source.get('url','source')).path).name
+    extension=next((ext for ext in ('.tar.gz','.tar.xz','.tar.bz2','.tgz','.zip','.tar') if file.endswith(ext)),'.tar')
+    stem=file[:-len(extension)] if file.endswith(extension) else file
+    stem=re.sub(r'[._-](?:source|src|orig)$','',stem)
+    match=re.match(r'(.+?)[_-]v?(\d[0-9A-Za-z_.-]*)$',stem)
+    name=source.get('name') or (match[1] if match else stem) or 'source'
+    version=source.get('version') or (match[2] if match else 'dev')
+    if re.fullmatch(r'[a-f0-9]{7,}',name):name='source'
+    return semantic_name(name,version)+extension
+
+
 def archive_path(home, source, *, create=False):
-    parent = _inside(home, home.root / "cache/downloads")
-    directory = object_path(parent, "source", {"sha256": source["sha256"]}, create=create)
-    return directory / "archive" if directory else None
+    from .unified_profiles import base_home
+    parent=_inside(base_home(home),base_home(home).root/'cache/downloads')
+    return parent/archive_name(source)
 
 
 def verified_archive(home, source, log_path, *, progress=None):
-    archive = archive_path(home, source, create=True)
-    archive.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if not archive.is_file() or digest(archive) != source["sha256"]:
-        import tempfile
-        descriptor, temporary_name = tempfile.mkstemp(prefix="fetch-", suffix=".part", dir=archive.parent)
-        os.close(descriptor)
-        temporary = Path(temporary_name)
-        try:
-            options = {}
-            if source.get("timeout_seconds"):
-                options["timeout"] = source["timeout_seconds"]
-            if progress is not None:
-                options["progress"] = progress
-            fetch(source["url"], temporary, log_path, **options)
-            if digest(temporary) != source["sha256"]:
-                raise ForgeError(
-                    f"SHA-256 mismatch for source archive: {source['url']}", code=1
-                )
-            os.replace(temporary, archive)
-        finally:
-            temporary.unlink(missing_ok=True)
-    write_json(archive.parent / "source.json", source)
+    from .paths import directory_lock
+    archive=archive_path(home,source)
+    with directory_lock(archive.parent,'.downloads.lock'):
+        marker=archive.parent/'metadata.json'
+        index=read_json(marker) if marker.is_file() else {'schema_version':1,'kind':'downloads','archives':{}}
+        previous=index['archives'].get(archive.name)
+        if not archive.is_file() or digest(archive)!=source['sha256']:
+            import tempfile
+            descriptor,name=tempfile.mkstemp(prefix='.download-',suffix='.part',dir=archive.parent)
+            os.close(descriptor)
+            temporary=Path(name)
+            try:
+                options={}
+                if source.get('timeout_seconds'):options['timeout']=source['timeout_seconds']
+                if progress is not None:options['progress']=progress
+                fetch(source['url'],temporary,log_path,**options)
+                if digest(temporary)!=source['sha256']:raise ForgeError(f'SHA-256 mismatch for source archive: {source["url"]}',code=1)
+                os.replace(temporary,archive)
+            finally:temporary.unlink(missing_ok=True)
+        index['archives'][archive.name]=source
+        write_json(marker,index)
     return archive
 
 
@@ -273,7 +302,7 @@ def environment_path(home):
 
     if backend_name(home) == "homebrew":
         return homebrew_backend.environment_path(home)
-    file = home.root / "apt/state.json"
+    file = home.root / "packages.json"
     state = read_json(file) if file.exists() else {}
     if not state.get("spack"):
         raise ForgeError(
@@ -285,6 +314,10 @@ def environment_path(home):
             "The Spack activation script is missing.", hint="jforge apt import spack"
         )
     from .spack_backend import _validate_external_python, refresh_runtime_environment, repaired_runtime_environment
+    from .unified_profiles import record
+    if record(home):
+        _validate_external_python(home,state["spack"].get("packages",()))
+        return str(path)
 
     _validate_external_python(home, state["spack"].get("packages", ()))
     if state.get("activation_repair"):

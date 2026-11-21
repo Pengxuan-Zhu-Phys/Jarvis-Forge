@@ -1,128 +1,67 @@
+"""Semantic stores refuse former padded or allocated layouts without migration."""
 from pathlib import Path
-import json
 import sys
-
 import pytest
 import yaml
-
 from jarvis_forge import spack_backend as backend
-from jarvis_forge.cli import main
-from jarvis_forge.storage import ForgeError, ForgeHome, read_json, write_json
+from jarvis_forge.storage import ForgeHome,ForgeError,write_json
 
 
 def configure(home):
-    return backend._config(home, home.root / 'repository', {'prefix':sys.prefix, 'version':'3.13.13'})
+    return backend._config(home,home.root/'repository',{'prefix':sys.prefix,'version':'3.13'})
 
 
-def test_fresh_profile_uses_real_flat_store_under_shared_home(tmp_path, capsys, linux_apt):
-    base = ForgeHome(tmp_path / 'forge'); base.initialize()
-    profile = ForgeHome(base.root / 'apt/profiles/spack-default'); profile.initialize()
-    write_json(profile.root / 'config.json', {**read_json(profile.root / 'config.json'), 'apt_base_home':str(base.root)})
-    tree = configure(profile)
-    assert tree == {'root':str(profile.root / 'pkg'), 'padded_length':False,
-                    'projections':{'all':'{name}'}}
-    assert backend.store_root(profile) == profile.root / 'pkg'
-    assert not (base.root / 'apps').is_symlink()
-    assert not (base.root / 'apps').exists()  # Spack creates the real store when installing.
-    write_json(profile.root / 'apt/spack.json', {'schema_version':1, 'backend':'spack', 'install_tree':tree})
-    write_json(base.root / 'apt/selection.json', {'schema_version':1, 'id':'spack-default'})
-    assert main(['--home',str(base.root),'doctor','--paths','--json']) == 0
-    assert json.loads(capsys.readouterr().out)['spack_store'] == tree['root']
+def test_profile_and_platform_stores_use_name_version_and_real_distinct_roots(tmp_path):
+    roots=[]
+    for parent,name in [('platforms','ubuntu24'),('profiles','cbs'),('profiles','gambit')]:
+        home=ForgeHome(tmp_path/parent/name);home.initialize()
+        tree=configure(home)
+        assert tree=={'root':str(home.root/'pkg'),'padded_length':False,'projections':{'all':'{name}-{version}'}}
+        assert backend.store_root(home)==home.root/'pkg'
+        roots.append(tree['root'])
+    assert len(set(roots))==3
 
 
-def test_profiles_and_direct_store_have_distinct_real_roots(tmp_path):
-    base = ForgeHome(tmp_path / 'forge'); base.initialize()
-    assert configure(base)['root'] == str(base.root / 'pkg')
-    roots = []
-    for name in ('default','root','build-123-Tiny.install'):
-        home = ForgeHome(base.root / 'apt/profiles' / ('spack-' + name)); home.initialize()
-        write_json(home.root / 'config.json', {**read_json(home.root / 'config.json'), 'apt_base_home':str(base.root)})
-        roots.append(configure(home)['root'])
-    assert len(set(roots)) == 3
-    assert all(Path(root).name == 'pkg' and Path(root).is_relative_to(base.root / 'apt/profiles') for root in roots)
+@pytest.mark.parametrize('tree',[{'padded_length':128}, {'padded_length':False,'projections':{'all':'{name}'}},
+                                  {'padded_length':False,'projections':{'all':'{name}-{version}-{hash:12}'}}])
+def test_previous_store_layout_is_refused_and_untouched(tmp_path,tree):
+    home=ForgeHome(tmp_path/'forge');home.initialize()
+    file=home.root/'spack/config/config.yaml';file.parent.mkdir()
+    file.write_text(yaml.safe_dump({'config':{'install_tree':{'root':str(home.root/'pkg'),**tree}}}))
+    original=file.read_bytes()
+    with pytest.raises(ForgeError,match='Unsupported Spack store layout'):configure(home)
+    assert file.read_bytes()==original
 
 
-def test_existing_layout_is_kept_when_regenerating_config(tmp_path):
-    home = ForgeHome(tmp_path / 'forge'); home.initialize()
-    old = {'root':str(home.root / 'spack/store'), 'padded_length':128,
-           'projections':{'all':'{architecture.platform}-{architecture.target}/{name}-{version}-{hash}'}}
-    file = home.root / 'spack/config/config.yaml'; file.parent.mkdir(parents=True)
-    file.write_text(yaml.safe_dump({'config':{'install_tree':old}}))
-    assert configure(home) == old
-    assert backend.store_root(home) == Path(old['root'])
-    assert yaml.safe_load(file.read_text())['config']['install_tree'] == old
+def test_missing_config_reads_current_backend_layout_without_moving_files(tmp_path):
+    home=ForgeHome(tmp_path/'profile');home.initialize()
+    tree={'root':str(home.root/'pkg'),'padded_length':False,'projections':{'all':'{name}-{version}'}}
+    write_json(home.root/'spack/backend.json',{'schema_version':1,'backend':'spack','install_tree':tree})
+    prefix=home.root/'pkg/zlib-1.3.1';prefix.mkdir(parents=True);(prefix/'payload').write_text('retain')
+    assert configure(home)==tree and (prefix/'payload').read_text()=='retain'
 
 
-def test_missing_config_recovers_persisted_layout_without_moving_packages(tmp_path):
-    home = ForgeHome(tmp_path / 'forge'); home.initialize()
-    old = {'root':str(home.root / 'old-store'), 'padded_length':256}
-    write_json(home.root / 'apt/spack.json', {'schema_version':1, 'backend':'spack', 'install_tree':old})
-    (Path(old['root']) / 'existing-package').mkdir(parents=True)
-    assert configure(home) == old
-    assert (Path(old['root']) / 'existing-package').is_dir()
+def test_invalid_config_and_unregistered_legacy_store_are_preserved(tmp_path):
+    home=ForgeHome(tmp_path/'profile');home.initialize()
+    file=home.root/'spack/config/config.yaml';file.parent.mkdir();file.write_text('config: [broken]\n')
+    with pytest.raises(ForgeError,match='existing Spack install layout'):configure(home)
+    assert file.read_text()=='config: [broken]\n'
+    file.unlink();store=home.root/'spack/store';store.mkdir();(store/'binary').write_text('old')
+    with pytest.raises(ForgeError,match='Unsupported Spack store layout'):configure(home)
+    assert (store/'binary').read_text()=='old'
 
 
-def test_legacy_settings_without_layout_keep_original_padding(tmp_path):
-    home = ForgeHome(tmp_path / 'forge'); home.initialize()
-    write_json(home.root / 'apt/spack.json', {'schema_version':1, 'backend':'spack'})
-    tree = configure(home)
-    assert tree['root'] == str(home.root / 'spack/store')
-    assert tree['padded_length'] == max(128,len(tree['root'])+32)
-    assert 'projections' not in tree
+def test_reading_store_does_not_create_any_directory(tmp_path):
+    home=ForgeHome(tmp_path/'absent')
+    assert backend.store_root(home)==home.root/'pkg'
+    assert not home.root.exists()
 
 
-def test_invalid_existing_layout_is_not_replaced(tmp_path):
-    home = ForgeHome(tmp_path / 'forge'); home.initialize()
-    file = home.root / 'spack/config/config.yaml'; file.parent.mkdir(parents=True)
-    file.write_text('config: [broken]\n')
-    original = file.read_bytes()
-    with pytest.raises(ForgeError, match='existing Spack install layout'):
-        configure(home)
-    assert file.read_bytes() == original
-
-
-def test_existing_store_is_preserved_when_settings_are_missing(tmp_path):
-    home = ForgeHome(tmp_path / 'forge'); home.initialize()
-    store = home.root / 'spack/store'; store.mkdir(parents=True)
-    (store / 'old-binary').write_bytes(b'original')
-    assert configure(home)['root'] == str(store)
-    assert (store / 'old-binary').read_bytes() == b'original'
-
-
-def test_legacy_multi_instance_policy_is_not_restricted(tmp_path):
-    env = tmp_path / 'environment'
-    file = env / '.jforge-config/config.yaml'; file.parent.mkdir(parents=True)
-    file.write_text(yaml.safe_dump({'config':{'install_tree':{'root':str(tmp_path / 'store'),
-        'projections':{'all':'{name}-{version}-{hash:12}'}}}}))
-    original = file.read_bytes()
-    backend._validate_name_only_plan({'packages':[{'name':'eigen','hash':'first'},
-                                                   {'name':'eigen','hash':'second'}]}, env)
-    assert file.read_bytes() == original
-
-
-def test_matching_native_metadata_allows_same_build_retry(tmp_path):
-    env = tmp_path / 'environment'
-    store = tmp_path / 'apps/test'
-    prefix = store / 'eigen'; prefix.mkdir(parents=True)
-    file = env / '.jforge-config/config.yaml'; file.parent.mkdir(parents=True)
-    file.write_text(yaml.safe_dump({'config':{'install_tree':{'root':str(store), 'projections':{'all':'{name}'}}}}))
-    package = {'name':'eigen', 'hash':'first', 'prefix':str(prefix), 'external':False,
-               'installed':False, 'prefix_matches':True}
-    backend._validate_name_only_plan({'packages':[package]}, env)
-    package['prefix_matches'] = False
-    with pytest.raises(ForgeError, match='another build'):
-        backend._validate_name_only_plan({'packages':[package]}, env)
-
-
-def test_external_instances_do_not_compete_for_store_directory(tmp_path):
-    env = tmp_path / 'environment'
-    store = tmp_path / 'apps/test'
-    file = env / '.jforge-config/config.yaml'; file.parent.mkdir(parents=True)
-    file.write_text(yaml.safe_dump({'config': {'install_tree': {
-        'root': str(store), 'projections': {'all': '{name}'}}}}))
-    backend._validate_name_only_plan({'packages': [
-        {'name': 'tool', 'hash': 'external-one', 'external': True},
-        {'name': 'tool', 'hash': 'external-two', 'external': True},
-        {'name': 'tool', 'hash': 'managed', 'external': False,
-         'prefix': str(store / 'tool'), 'installed': False},
-    ]}, env)
+def test_duplicate_native_builds_rejected_external_instances_do_not_compete(tmp_path):
+    env=tmp_path/'candidate';file=env/'.jforge-config/config.yaml';file.parent.mkdir(parents=True)
+    tree={'root':str(tmp_path/'pkg'),'padded_length':False,'projections':{'all':'{name}-{version}'}}
+    file.write_text(yaml.safe_dump({'config':{'install_tree':tree}}))
+    row={'name':'eigen','version':'5.0.1','hash':'first','external':False,'prefix':str(tmp_path/'pkg/eigen-5.0.1')}
+    backend._validate_name_only_plan({'packages':[row,{**row,'external':True,'hash':'external'}]},env)
+    with pytest.raises(ForgeError,match='multiple instances'):
+        backend._validate_name_only_plan({'packages':[row,{**row,'hash':'second'}]},env)

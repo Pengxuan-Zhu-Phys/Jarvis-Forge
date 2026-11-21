@@ -36,6 +36,7 @@ def _font_directories(store, packages):
 def write_config(home, store, revision, packages):
     directories = _font_directories(store, packages)
     if not directories:
+        (revision/"fonts.conf").unlink(missing_ok=True)
         return None
 
     cache = _inside(home, home.root / "cache/fontconfig")

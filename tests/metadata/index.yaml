@@ -2,4 +2,6 @@ schema_version: 1
 kind: test-metadata-index
 project_id: jarvis-forge
 documents:
+- reports.yaml
 - native-runtime.yaml
+- profile-model.yaml

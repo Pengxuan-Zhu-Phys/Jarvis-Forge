@@ -336,7 +336,7 @@ case "${0##*/}:$-" in
     sh:*|-sh:*) ;;
     *:*i*)
         if [ -n "${BASH_VERSION-}${ZSH_VERSION-}" ] &&
-            _jforge_bootstrap_hook=$(command jforge apt shell-init); then
+            _jforge_bootstrap_hook=$(command jforge shell-init); then
             eval "$_jforge_bootstrap_hook"
         fi
         unset _jforge_bootstrap_hook
@@ -349,7 +349,7 @@ mv -f "$activation_tmp" "$activation_file"
 if ! "$configure_startup"; then
     printf '\nActivate this installation with\n'
     printf 'source %q\n' "$activation_file"
-    printf 'Then run: jforge apt profile\n'
+    printf 'Then run: jforge profile check\n'
     exit 0
 fi
 
@@ -422,4 +422,4 @@ else
 fi
 
 printf '\nOpen a new terminal or run: exec %s -l\n' "$login_shell"
-printf 'Then run: jforge apt profile\n'
+printf 'Then run: jforge profile check\n'

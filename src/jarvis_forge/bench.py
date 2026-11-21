@@ -25,7 +25,7 @@ from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import Version
 
 from . import __version__, bench_cards, bench_project, builds, cmake
-from .paths import object_path, named_path, logical_name
+from .paths import record_path, named_path, logical_name
 from .storage import ForgeError, digest, identifier, new_id, now, read_json, write_json, write_text
 from .suite import UniqueLoader
 
@@ -162,7 +162,7 @@ def verify(home, path, *, step, profile=None, cases=(), tags=(), environment_nam
         count = _repeat_count(prepared["card"], case, spec, prepared["software"])
         root = _step_dir(prepared, case["name"], step)
         for index in range(count):
-            slot = root / f"r{index:03d}"
+            slot = root / f"{index+1:04d}-repeat"
             done = _read_done(slot)
             if not done:
                 continue
@@ -642,7 +642,7 @@ def _resolve_profile_software(home, name, spec):
             validate_active(profile)
         backend = backend_name(profile)
         backend_module = homebrew_backend if backend == "homebrew" else spack_backend
-        if (profile.root / "apt/state.json").is_file():
+        if (profile.root / "packages.json").is_file():
             state = backend_module.current(profile)
             for row in state["packages"]:
                 if row["name"] != package or not Path(row["prefix"]).is_dir():
@@ -670,7 +670,7 @@ def _resolve_profile_software(home, name, spec):
             elif row.get("profile_instance") or (row.get("apt") or {}).get("profile", {}).get("path") != str(profile.root):
                 continue
             choices.append(_build_item(name, spec, row, "reuse"))
-        install = f"jforge build fetch {app} && jforge build run {app}"
+        install = f"jforge build install {app}"
     matches = []
     rejected = []
     for item in choices:
@@ -735,7 +735,7 @@ def _resolve_build(home, card, name, spec, *, intent):
                 "version": None, "activation": [], "detail": "no artifact", "label": spec["build"],
                 "features": []}
     raise ForgeError(f"No compatible installed artifact for {spec['build']}.",
-                     hint=f"jforge build run {reference}")
+                     hint=f"jforge build install {reference}")
 
 
 def _build_item(name, spec, output, action):
@@ -870,7 +870,7 @@ def _decide_step(prepared, case, step, produced, ran):
             repeats.append({"index": index, "action": "run", "inputs": {}, "directory": None})
         return _unit(case, step, "run", repeats, count, missing, [], False, prepared, redo, replace=False, compare=True)
     for index in range(count):
-        slot = work_root / f"r{index:03d}"
+        slot = work_root / f"{index+1:04d}-repeat"
         current = _inputs(prepared, case, step, index, count, produced, task=slot)
         done = _read_done(slot)
         usable = bool(done) and _outputs_present(done, slot, prepared["verify_full"])
@@ -1113,11 +1113,11 @@ def _run_unit(home, directory, prepared, unit, produced, env, progress, retry_fa
         if fresh["replace"] and statuses and all(item == "passed" or item == "reused" for item in statuses) and len(statuses) == fresh["count"]:
             _commit_new(root)
             for repeat in fresh["repeats"]:
-                repeat["directory"] = str(root / f"r{repeat['index']:03d}")
+                repeat["directory"] = str(root / f"{repeat['index']+1:04d}-repeat")
                 repeat["done"] = _read_done(Path(repeat["directory"]))
         elif not fresh["replace"]:
             for repeat in fresh["repeats"]:
-                slot = root / f"r{repeat['index']:03d}"
+                slot = root / f"{repeat['index']+1:04d}-repeat"
                 if slot.is_dir():
                     repeat["directory"] = str(slot)
                     repeat["done"] = _read_done(slot)
@@ -1132,8 +1132,8 @@ def _ran(produced):
 
 def _run_repeat(home, directory, prepared, case, step, unit, repeat, work_root, env, progress):
     index = repeat["index"]
-    final = work_root / f"r{index:03d}"
-    partial = work_root / f"r{index:03d}.partial"
+    final = work_root / f"{index+1:04d}-repeat"
+    partial = work_root / f"{index+1:04d}-repeat.partial"
     if partial.exists():
         shutil.rmtree(partial)
     partial.mkdir(parents=True)
@@ -1221,7 +1221,7 @@ def _previous(prepared, case_name, step_name):
 
 def _apply_keep(prepared, root, unit, directory):
     for repeat in unit["repeats"]:
-        slot = root / f"r{repeat['index']:03d}"
+        slot = root / f"{repeat['index']+1:04d}-repeat"
         done = _read_done(slot)
         if not done:
             raise ForgeError(f"Cannot keep a missing result: {slot}")
@@ -1444,7 +1444,7 @@ def _command_env(base, prepared, step, case, task, bindings):
     if project := prepared["card"].get("project"):
         checkpoint = bench_project.inside(project["root"], project["roots"]["checkpoints"])
         for component in (prepared["card"]["name"], prepared["data_profile"], case["name"], step["name"],
-                          f"r{bindings['repeat']['index']:03d}"):
+                          f"{bindings['repeat']['index']+1:04d}-repeat"):
             checkpoint = named_path(checkpoint, component, create=True)
         env["BENCH_CHECKPOINT_DIR"] = str(checkpoint)
     extra = bench_cards.expand(step.get("env") or {}, bindings, where=f"{step['name']} env")
@@ -1575,7 +1575,7 @@ def _clean(task, outputs):
 def _variant(root, suffix, *, create=False):
     if len((root.name + suffix).encode()) <= 24:
         return root.with_name(root.name + suffix)
-    return object_path(root.parent / "staging", suffix.strip("."),
+    return record_path(root.parent / "staging", suffix.strip("."),
                        {"target": root.name, "kind": suffix}, create=create) or root.parent / ".unbuilt"
 
 
@@ -1802,7 +1802,7 @@ def _check_case_receipt(prepared, case, recorded, redo):
         staging = _variant(root, ".new", create=prepared.get("create_paths", False)) if not step["reuse"] or name in redo else root
         repeats = []
         for index, row in enumerate(rows):
-            slot = root / f"r{index:03d}"
+            slot = root / f"{index+1:04d}-repeat"
             done = _read_done(slot)
             if (not done or done.get("kept") or not _outputs_present(done, slot, False, update=False)
                     or _output_digests(done) != row["outputs"]):
@@ -1893,7 +1893,7 @@ def _state_key(prepared):
 
 
 def _gate_state_path(home, prepared, *, create=False):
-    path = object_path(home.root / "bench/state", prepared["card"]["name"],
+    path = record_path(home.root / "bench/state", prepared["card"]["name"],
                        {"key": _state_key(prepared)}, create=create)
     return path / "state.json" if path else None
 

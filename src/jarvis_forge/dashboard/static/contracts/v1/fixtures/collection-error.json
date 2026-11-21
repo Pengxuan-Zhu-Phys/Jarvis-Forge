@@ -1,0 +1,44 @@
+{
+  "ok": true,
+  "api_version": 1,
+  "job_id": "fixture-collection",
+  "revision": 1,
+  "updated_at": "2026-01-01T00:00:00Z",
+  "collection_status": "failed",
+  "summaries": [
+    {
+      "unit": "test_case",
+      "total": null,
+      "total_confirmed": false,
+      "completed": 0,
+      "running": 0,
+      "pending": 0,
+      "interrupted": 0,
+      "not_run": 0,
+      "outcomes": {
+        "passed": 0,
+        "failed": 0,
+        "error": 0,
+        "skipped": 0,
+        "xfailed": 0,
+        "xpassed": 0
+      },
+      "reused": 0
+    }
+  ],
+  "steps": [
+    {
+      "id": "unit",
+      "status": "failed",
+      "collection": {
+        "status": "failed",
+        "errors": [
+          {
+            "message": "Controlled collection error"
+          }
+        ]
+      }
+    }
+  ],
+  "current_test": null
+}

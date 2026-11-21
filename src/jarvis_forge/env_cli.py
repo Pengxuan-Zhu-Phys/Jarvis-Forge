@@ -15,7 +15,7 @@ app = typer.Typer(add_completion=False, pretty_exceptions_enable=False,
                   context_settings={"help_option_names": ["-h", "--help"]},
                   help="Choose the environment a shell loads.\n\n"
                        "jforge env switch <name> selects apt or a named environment.\n"
-                       "jforge apt profile <name> selects the package profile used by apt.\n"
+                       "jforge profile use <name> selects the package profile used by apt.\n"
                        "jforge env metadata [name] shows that environment's metadata file.\n"
                        "jforge env drop root removes that build from the apt environment.\n\n"
                        "Command help: jforge env COMMAND -h")
@@ -53,7 +53,9 @@ def show_metadata(ctx: typer.Context,
         if name is None:
             raise ForgeError("No environment is selected.", hint="jforge env switch apt")
     record = load_metadata(ctx.obj.home, name)
-    emit(ctx, "env metadata", path=str(directory(ctx.obj.home, name) / "env.json"), metadata=record)
+    from .apt_profiles import active_home
+    file=active_home(ctx.obj.home).root/"metadata.json" if name=="apt" and record.get("schema_version")==3 else directory(ctx.obj.home,name)/"env.json"
+    emit(ctx, "env metadata", path=str(file), metadata=record)
 
 
 @app.command("show")

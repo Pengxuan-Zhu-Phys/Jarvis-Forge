@@ -61,7 +61,7 @@ def test_real_dependency_install_activation_and_failure(tmp_path, capsys):
     base = ForgeHome(tmp_path / "forge")
     base.initialize()
     write_json(
-        base.root / "apt/state.json", {"schema_version": 1, "active": {}, "manual": []}
+        base.root / "packages.json", {"schema_version": 1, "active": {}, "manual": []}
     )
     write_json(
         base.root / "packages/old/1/previous/manifest.json",
@@ -72,12 +72,12 @@ def test_real_dependency_install_activation_and_failure(tmp_path, capsys):
             "prefix": str(base.root / "old-prefix"),
         },
     )
-    old_state = (base.root / "apt/state.json").read_bytes()
+    old_state = (base.root / "packages.json").read_bytes()
     switch(base, "spack")
     home = active_home(base)
     assert home != base
     assert archived_packages(base)[0]["name"] == "old"
-    assert (base.root / "apt/state.json").read_bytes() == old_state
+    assert (base.root / "packages.json").read_bytes() == old_state
     repo = Path(__file__).parent / "fixtures/spack_repo/forge_test"
     config = b.root(home) / "config/repos.yaml"
     repos = yaml.safe_load(config.read_text())["repos"]
@@ -113,7 +113,7 @@ case "$PATH" in *forge-app*) exit 13 ;; esac
         )
         assert result.returncode == 0, result.stderr
         assert result.stdout == "fixture-ok\n"
-    before = (home.root / "apt/state.json").read_bytes()
+    before = (home.root / "packages.json").read_bytes()
     check = b.transact(home, "check", timeout=120)
     assert not check["state_committed"] and not check["builds_executed"]
     assert Path(check["lockfile"]).is_file()
@@ -125,10 +125,10 @@ case "$PATH" in *forge-app*) exit 13 ;; esac
             cache="never",
             timeout=120,
         )
-    assert (home.root / "apt/state.json").read_bytes() == before
+    assert (home.root / "packages.json").read_bytes() == before
     with pytest.raises(ForgeError, match="forge-app already occupies"):
         b.transact(home, "install", ["forge-app@=2.0"], cache="never", timeout=120)
-    assert (home.root / "apt/state.json").read_bytes() == before
+    assert (home.root / "packages.json").read_bytes() == before
     removed = b.transact(home, "remove", ["forge-app"], timeout=120)
     assert [p["name"] for p in removed["packages"]] == ["forge-lib"]
     assert removed["store_retained"]

@@ -35,7 +35,10 @@
         "outputs_off": {
           "type": "array",
           "uniqueItems": true,
-          "items": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"}
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"
+          }
         },
         "variables": {
           "type": "object",
@@ -262,10 +265,14 @@
                       "minLength": 1
                     },
                     "binary_dir": {
-                      "enum": ["preset"]
+                      "enum": [
+                        "preset"
+                      ]
                     },
                     "lock": {
-                      "enum": ["source"]
+                      "enum": [
+                        "source"
+                      ]
                     },
                     "in_place": {
                       "type": "boolean"
@@ -570,6 +577,28 @@
           "darwin"
         ]
       }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "additionalProperties": false
+      },
+      "uniqueItems": true
     }
   },
   "required": [

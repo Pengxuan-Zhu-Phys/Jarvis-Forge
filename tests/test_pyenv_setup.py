@@ -31,7 +31,7 @@ def main():
         print("Jarvis-Forge " + __version__)
     elif sys.argv[1:] == ["init"]:
         Path(os.environ["JFORGE_HOME"]).mkdir(parents=True, exist_ok=True)
-    elif sys.argv[1:] == ["apt", "shell-init"]:
+    elif sys.argv[1:] == ["shell-init"]:
         print("# fixture shell hook")
     else:
         raise SystemExit("Unexpected fixture arguments: " + repr(sys.argv))

@@ -49,7 +49,7 @@ def test_unknown_command_has_one_error_and_one_suggestion(tmp_path, capsys, args
 @pytest.mark.parametrize("command", [[], ["init"], ["doctor"], ["history"], ["show"], ["logs"],
     ["apt"], ["env"], ["build"], ["test"], ["bench"], ["suite"],
     ["suite", "example"], ["suite", "validate"], ["suite", "plan"], ["suite", "run"], ["suite", "compare"],
-    ["apt", "instances"], ["apt", "prefix"], ["apt", "toolchain"], ["bench", "executor"]])
+    ["profile"], ["profile", "show"], ["shell-init"], ["bench", "executor"]])
 def test_help(command, capsys):
     assert main([*command, "-h"]) == 0
     out = capsys.readouterr()
@@ -57,8 +57,8 @@ def test_help(command, capsys):
     assert "\x1b[" not in out.out
 
 
-@pytest.mark.parametrize('command', [[], ['list'], ['update'], ['show'], ['fetch'], ['validate'],
-                                      ['plan'], ['run'], ['resume'], ['artifacts'], ['env']])
+@pytest.mark.parametrize('command', [[], ['list'], ['update'], ['show'], ['fetch'], ['install'],
+                                      ['remove'], ['autoremove'], ['upgrade'], ['search']])
 def test_build_help_and_reserved_workflow_namespace(command, capsys):
     assert main(['build', *command, '--help']) == 0
     output = capsys.readouterr().out
@@ -87,23 +87,21 @@ def test_build_list_summarizes_the_catalog_and_preserves_json(tmp_path, capsys):
     assert result["builds"] == [{**recipe, "app": "root"}] and result["libraries"] == libraries
 
 
-def test_build_list_defaults_to_present_installations(tmp_path, capsys):
-    prefix = tmp_path / "root prefix"
-    prefix.mkdir()
-    installed = {"artifact_id": "root-live", "build_id": "root-build", "output": "installation",
-                 "prefix": str(prefix), "version": "6.40.04", "status": "ready"}
-    missing = {**installed, "artifact_id": "root-removed", "prefix": str(tmp_path / "deleted")}
-    for record in (installed, missing):
-        write_json(tmp_path / "builds/artifacts" / record["artifact_id"] / "manifest.json", record)
-    args = ["--home", str(tmp_path), "build"]
-    assert main([*args, "list", "--json"]) == 0
-    result = json.loads(capsys.readouterr().out)
-    assert result["view"] == "installed" and result["builds"] == [{**installed, "app": "root"}]
-    assert main([*args, "artifacts", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["artifacts"] == [{**installed, "app": "root"}, {**missing, "app": "root"}]
-    assert main([*args, "list"]) == 0
-    output = capsys.readouterr().out
-    assert "Installed apps (1)" in output and str(prefix) in output
+def test_build_list_defaults_to_profile_registry(tmp_path,capsys):
+    from profile_fixtures import project_profile
+    from jarvis_forge.storage import read_json
+    home=ForgeHome(tmp_path/'forge');scope=project_profile(home)
+    prefix=scope.root/'apps/root-6.40.04';prefix.mkdir(parents=True)
+    activation=prefix/'activate.sh';activation.write_text('# shell')
+    row={'name':'root','artifact_id':'0001-publish-root','build_id':'root','output':'installation','prefix':str(prefix),'version':'6.40.04','activation':str(activation),'enabled':True}
+    metadata=read_json(scope.root/'metadata.json');metadata['apps']=[row];write_json(scope.root/'metadata.json',metadata)
+    args=['--home',str(home.root),'build','list']
+    assert main([*args,'--json'])==0
+    result=json.loads(capsys.readouterr().out)
+    assert result['view']=='installed' and result['builds'][0]['name']=='root'
+    assert main(args)==0
+    output=capsys.readouterr().out
+    assert 'Installed apps (1)' in output and 'ON' in output and str(prefix) in output
 
 
 def test_workflow_is_reserved(capsys):
@@ -171,18 +169,13 @@ def test_run_failure_exit_code_and_json_are_preserved(tmp_path, capsys):
     assert isinstance(value["error"], dict) and value["error"]["message"]
 
 
-def test_multiple_package_instances_require_explicit_path_selection(tmp_path, capsys):
-    home = tmp_path / "home"
-    for name in ["a", "b"]:
-        write_json(home / "packages/eigen/3.4.0" / name / "manifest.json",
-                   {"name": "eigen", "version": "3.4.0", "install_id": name,
-                    "prefix": str(tmp_path / name)})
-    assert main(["apt", "prefix", "eigen", "--archived", "--path", "--home", str(home), "--json"]) == 2
-    capsys.readouterr()
-    assert main(["apt", "prefix", "eigen", "--archived", "--path", "--home", str(home)]) == 2
-    capsys.readouterr()
-    assert main(["apt", "prefix", "eigen", "--archived", "--instance", "a", "--path", "--home", str(home)]) == 0
-    assert capsys.readouterr().out.strip() == str(tmp_path / "a")
+def test_archived_layout_queries_are_refused_without_modifying_user_files(tmp_path,capsys):
+    home=tmp_path/'home';file=home/'packages/eigen/3.4.0/old/manifest.json'
+    write_json(file,{'name':'eigen','version':'3.4.0','prefix':str(tmp_path/'old')})
+    before=file.read_bytes()
+    assert main(['--home',str(home),'--json','apt','prefix','eigen','--archived'])==2
+    assert 'replaced' in json.loads(capsys.readouterr().out)['error']['message']
+    assert file.read_bytes()==before and not (home/'profiles').exists()
 
 
 def test_host_entry_point_uses_host_program_name(capsys):

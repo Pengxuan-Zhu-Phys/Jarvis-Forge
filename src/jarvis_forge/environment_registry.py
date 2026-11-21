@@ -72,9 +72,21 @@ def show(home, name, revision=None, *, strict=False):
         base = home
         home = active_home(home)
         if revision:
-            raise ForgeError("Use jforge apt env for the current apt activation script.")
-        state_path = home.root / "apt/state.json"
+            raise ForgeError("Use jforge profile show --path for the current apt activation script.")
+        state_path = home.root / "packages.json"
         state = read_json(state_path) if state_path.exists() else {}
+        from .unified_profiles import record as profile_record
+        if managed:=profile_record(home):
+            entry=home.root/'activate.sh'
+            if strict:
+                from .apt_profiles import validate_active
+                validate_active(home)
+                if not entry.is_file():raise ForgeError(f'Profile activation is missing: {entry}',hint='jforge env repair')
+            return {'schema_version':1,'managed_by':'jforge-profile','home':str(base.root),'name':'apt',
+                    'revision':state.get('last_operation_id'), 'path':str(home.root),'activation':str(entry),'entry':str(entry),
+                    'backend_activation':state.get('activation'),'description':'Profile '+managed['id'],
+                    'builds':managed.get('apps',[]),'profile':managed['id'],'files':{},
+                    'status':'ready' if entry.is_file() else 'missing'}
         if not state.get("activation"):
             raise ForgeError("No apt environment has been published.", hint="jforge apt install PACKAGE")
         backend = _inside(home, Path(state["activation"]))
@@ -150,7 +162,7 @@ def list_environments(home):
     records = [show(home, read_json(path)["name"])
                for path in sorted((home.root / "environments").glob("*/current.json"))
                if path.parent.name != "apt"]
-    state_path = active_home(home).root / "apt/state.json"
+    state_path = active_home(home).root / "packages.json"
     if state_path.exists() and read_json(state_path).get("activation"):
         records.append(show(home, "apt"))
     return sorted(records, key=lambda item: item["name"])

@@ -5,7 +5,6 @@ import hashlib
 from importlib.resources import files
 import json
 from pathlib import Path
-import re
 import shlex
 
 import yaml
@@ -390,7 +389,8 @@ def normalize(config, path, home=None, library_files=None):
                             content = source_script.read_bytes().decode("utf-8")
                         except (OSError, UnicodeError) as exc:
                             raise ForgeError(f"Cannot read companion Python script: {relative}: {exc}") from exc
-                        script_id = "check-" + hashlib.sha256(relative.encode()).hexdigest()[:16]
+                        previous=next((item for item in provenance if item.get('path')==relative and item.get('script_id')),None)
+                        script_id=previous['script_id'] if previous else f"{1+sum('script_id' in item for item in provenance):04d}-check"
                         if not any(item.get("script_id") == script_id for item in provenance):
                             provenance.append({"card": "script", "script_id": script_id, "path": relative,
                                                "sha256": digest(source_script), "content": content})

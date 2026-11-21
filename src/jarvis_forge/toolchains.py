@@ -3,14 +3,12 @@
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 
-from .package_operations import _inside, locked
-from .paths import physical_name, named_path
-from .storage import ForgeError, ForgeHome, digest, identifier, read_json, write_json
+from .package_operations import _inside
+from .paths import named_path
+from .storage import ForgeError, digest, identifier, read_json
 
 DRIVERS = {"CC": "gcc", "CXX": "g++", "FC": "gfortran"}
 RUNTIMES = {"libgcc_s.so.1": "CC", "libstdc++.so.6": "CXX", "libgfortran.so.5": "FC"}
@@ -46,7 +44,7 @@ def _verify(record):
         if any(not Path(path).is_file() or digest(Path(path)) != value for path, value in record["fingerprints"].items()):
             raise ForgeError(f"External toolchain changed: {record['id']}")
     elif not spec.is_file() or digest(spec) != record["spec_sha256"]:
-        raise ForgeError(f"Toolchain installation changed: {record['id']}", hint="jforge apt toolchain list")
+        raise ForgeError(f"Toolchain installation changed: {record['id']}", hint="jforge profile")
     for path in record["drivers"].values():
         file = Path(path)
         if not file.is_file() or not os.access(file, os.X_OK) or not file.resolve().is_relative_to(prefix):
@@ -76,13 +74,17 @@ def list_installed(home):
 def installed(home, name):
     file = _manifest(home, name)
     if not file.is_file():
-        raise ForgeError(f"No managed toolchain named {name}.", hint="jforge apt toolchain list")
+        raise ForgeError(f"No managed toolchain named {name}.", hint="jforge profile")
     return _verify(read_json(file))
 
 
 def binding(profile):
-    file = _inside(profile, profile.root / "apt/toolchain.json")
-    return _verify(read_json(file)) if file.is_file() else None
+    from .unified_profiles import record, base_home, platform_record
+    data=record(profile)
+    if data:
+        selected=platform_record(base_home(profile),data['platform'])
+        return _verify(selected['toolchain']) if selected['backend']=='spack' else None
+    return None
 
 
 def environment(record, base):
@@ -92,7 +94,8 @@ def environment(record, base):
 
 def bin_dirs(record):
     paths = [Path(path).parent for tool in record.get("tools", {}).values() for path in tool["commands"].values()]
-    paths.extend(Path(path).parent for path in record["drivers"].values())
+    if not record.get("external"):
+        paths.extend(Path(path).parent for path in record["drivers"].values())
     return list(dict.fromkeys(map(str, paths)))
 
 
@@ -121,114 +124,12 @@ def _root_package(result, name, version):
     return package
 
 
-def install(home, spec, *, target=None, stage=None, jobs=None, timeout=14400, cache="never", progress=None,
-            instance=None, tools=None, deprecated_versions=None):
-    from . import spack_backend
-    from .builds import file_lock
-
-    _linux()
-    match = re.fullmatch(r"gcc@=?([0-9]+\.[0-9]+\.[0-9]+)", spec)
-    if not match:
-        raise ForgeError("Select an exact GCC version, for example gcc@14.3.0.")
-    if cache not in {"auto", "only", "never"}:
-        raise ForgeError("Build cache mode must be auto, only or never.")
-    version = match[1]
-    allowed = spack_backend._deprecated_permissions(deprecated_versions or {})
-    suite_versions = {"gcc": version, **(tools or {})}
-    if any(suite_versions.get(name) != value for name, value in allowed.items()):
-        raise ForgeError("Deprecated-version permissions must match this tool suite's exact versions.")
-    if target is not None:
-        identifier(target)
-    if stage is not None:
-        stage = stage.expanduser().resolve()
-        if not stage.is_dir() or not os.access(stage, os.W_OK | os.X_OK):
-            raise ForgeError(f"Toolchain build stage is not writable: {stage}")
-    name = identifier(instance) if instance else physical_name(home.root / "toolchains", "gcc",
-            {"version": version, "target": target, "tools": tools or {}}, create=True)
-    manifest = _manifest(home, name, create=True)
-    home.initialize()
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    with file_lock(manifest.parent / "install.lock"):
-        if manifest.is_file():
-            record = installed(home, name)
-            if instance and (record["version"] != version or record["target"] != target
-                    or {key: tool["version"] for key, tool in record.get("tools", {}).items()} != (tools or {})):
-                raise ForgeError(f"Toolchain definition changed for {instance}; use a new preset revision.")
-            if allowed and record.get("deprecated_versions") != allowed:
-                record["deprecated_versions"] = allowed
-                write_json(manifest, record)
-            return {**record, "status": "reused"}
-        if cache != "only":
-            missing = [program for program in ("make", "tar", "xz") if not shutil.which(program)]
-            if missing:
-                raise ForgeError("Missing compiler bootstrap tools: " + ", ".join(missing),
-                                 hint="Load the site tool module or add a user-local installation to PATH.")
-        # A bootstrap is a private backend scope within this toolchain, not
-        # another recursively nested package profile.
-        profile = manifest.parent
-        bootstrap_home = ForgeHome(profile)
-        bootstrap_home.initialize()
-        spack_backend.bootstrap(bootstrap_home, extensions=False, progress=progress)
-        request = f"gcc@={version} languages=c,c++,fortran" + (f" target={target}" if target else "")
-        tool_specs = [f"{name}@={value}" + (f" target={target}" if target else "")
-                      for name, value in (tools or {}).items()]
-        result = spack_backend.transact(ForgeHome(profile), "install", [request, *tool_specs], jobs=jobs, timeout=timeout,
-                                        cache=cache, progress=progress, build_stage=stage, target=target,
-                                        deprecated_versions=allowed)
-        gcc = _root_package(result, "gcc", version)
-        if gcc["external"] and not instance:
-            raise ForgeError("Spack did not install the requested user-local GCC.", code=1,
-                             hint=f"Operation logs: {result['path']}")
-        prefix = Path(gcc["prefix"]).resolve()
-        drivers = {variable: str(prefix / "bin" / binary) for variable, binary in DRIVERS.items()}
-        record = {"schema_version": 1, "id": name, "version": version, "target": target, "prefix": str(prefix),
-                  "profile": str(profile), "drivers": drivers, "path": result["path"]}
-        if allowed:
-            record["deprecated_versions"] = allowed
-        if gcc["external"]:
-            selected = gcc.get("node", {}).get("external", {}).get("extra_attributes", {}).get("compilers", {})
-            drivers.update({variable: str(Path(selected[key]).absolute())
-                            for variable, key in (("CC", "c"), ("CXX", "cxx"), ("FC", "fortran"))
-                            if selected.get(key)})
-            if not all(Path(path).is_file() for path in drivers.values()):
-                raise ForgeError(f"External GCC suite is incomplete under {prefix}.", code=1)
-            record.update(external=True, fingerprints={path: digest(Path(path)) for path in drivers.values()})
-        else:
-            record["spec_sha256"] = digest(prefix / ".spack/spec.json")
-        if tools:
-            record["tools"] = _suite_tools(result, tools)
-        _verify(record)
-        _, libraries = _inspect(record)
-        record["runtimes"] = {name: str(path) for name, path in libraries.items()}
-        write_json(manifest, record)
-        return {**record, "status": "installed"}
+def install(*args, **kwargs):
+    raise ForgeError('Independent toolchains have been removed.',hint='jforge profile create NAME --platform ubuntu24')
 
 
-def use(home, name, *, progress=None):
-    from .apt_profiles import active_home, backend_name, ensure_active
-    from .spack_backend import current
-    from .unified_profiles import record as profile_record
-
-    _linux()
-    record = installed(home, name)
-    if "runtimes" not in record:
-        _, libraries = _inspect(record)
-        record["runtimes"] = {soname: str(path) for soname, path in libraries.items()}
-    target = active_home(home)
-    if profile_record(target):
-        raise ForgeError("The selected profile already defines its compiler suite.",
-                         hint="Use jforge apt profile build and jforge apt profile global to select another suite.")
-    if backend_name(target) != "spack" or target.root.name.startswith("spack-toolchain-"):
-        raise ForgeError("Select a separate project Spack profile before binding this toolchain.")
-    target = ensure_active(home, progress=progress, selected=target)
-    with locked(target):
-        existing = binding(target)
-        if existing != record:
-            if current(target)["roots"]:
-                raise ForgeError("Changing toolchains requires a project profile with no package roots.",
-                                 hint="jforge apt profile NAME --create --backend spack")
-            write_json(_inside(target, target.root / "apt/toolchain.json"), record)
-    return {"toolchain": name, "profile": target.root.name, "prefix": record["prefix"]}
+def use(*args, **kwargs):
+    raise ForgeError('A profile uses the compiler of its platform.',hint='jforge profile use NAME')
 
 
 def spack_requirements(record, packages):
@@ -298,7 +199,8 @@ def check(home, name):
     _linux()
     record = installed(home, name)
     env, libraries = _inspect(record)
-    with TemporaryDirectory(prefix="jforge-gcc-check-") as directory:
+    from .paths import temporary_directory
+    with temporary_directory(Path(record["profile"])/"checks", "compiler") as directory:
         work = Path(directory)
         sources = {
             "CC": ("c", "extern int cpp_value(void), f_value(void);\n"
@@ -334,3 +236,27 @@ def check(home, name):
     return {"toolchain": record["id"], "version": record["version"], "node": os.uname().nodename,
             "libc": os.confstr("CS_GNU_LIBC_VERSION"), "drivers": record["drivers"],
             "runtimes": {name: str(path) for name, path in libraries.items()}, "output": output, "status": "passed"}
+
+
+def install_platform(scope, versions, *, target, stage, jobs=None, timeout=14400, cache='never', progress=None,confirm=None):
+    """Install the platform suite into its own store, using host compilers once."""
+    from . import spack_backend
+    stage.mkdir(parents=True,exist_ok=True)
+    spack_backend.bootstrap(scope,extensions=False,progress=progress)
+    specs=[f'gcc@={versions["gcc"]} languages=c,c++,fortran target={target}']
+    specs += [f'{name}@={version} target={target}' for name,version in versions.items() if name!='gcc']
+    result=spack_backend.transact(scope,'install',specs,jobs=jobs,timeout=timeout,cache=cache,progress=progress,
+                                 build_stage=stage,target=target,deprecated_versions=versions,confirm=confirm)
+    package=_root_package(result,'gcc',versions['gcc'])
+    if package['external']:
+        raise ForgeError('The platform compiler must be installed in the platform store.',code=1)
+    prefix=Path(package['prefix']).resolve()
+    record={'deprecated_versions':versions,'schema_version':3,'id':scope.root.name,'version':versions['gcc'],'target':target,
+            'prefix':str(prefix),'profile':str(scope.root),'drivers':{key:str(prefix/'bin'/name) for key,name in DRIVERS.items()},
+            'spec_sha256':digest(prefix/'.spack/spec.json'),
+            'tools':_suite_tools(result,{key:value for key,value in versions.items() if key!='gcc'})}
+    _verify(record)
+    _,libraries=_inspect(record)
+    record['runtimes']={name:str(path) for name,path in libraries.items()}
+    check_tools(record)
+    return record

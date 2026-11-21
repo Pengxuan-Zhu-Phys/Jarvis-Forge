@@ -23,11 +23,11 @@ import xml.etree.ElementTree as ET
 
 from . import __version__, builds, checker, cmake, testing, testing_evidence
 from .package_operations import run_command
-from .paths import object_path, named_path
+from .paths import record_path, named_path
 from .storage import ForgeError, digest, identifier, new_id, now, read_json, write_json
 
 
-EXECUTOR = 1  # Bump when argv assembly or evidence parsing changes what a passed slot means.
+EXECUTOR = 2  # Bump when argv assembly or evidence parsing changes what a passed slot means.
 MESSAGE_LIMIT = 500
 TREE_LIMIT = 20
 PASSING = frozenset({"passed", "reused"})
@@ -188,11 +188,13 @@ def pytest_sessionfinish(session, exitstatus):
 '''
 
 
-def write_plugin(step_dir, project):
+def write_plugin(step_dir, project, rootdir=None):
     directory = step_dir / "plugin"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "jforge_identity.py").write_text(_PLUGIN)
     (directory / "jforge_identity.json").write_text(json.dumps({"project": str(project)}) + "\n")
+    from .test_reports import configure_plugin
+    configure_plugin(step_dir, project, rootdir)
     return directory
 
 
@@ -359,6 +361,8 @@ def pytest_argv(python, group, step_dir, paths, project, nodes=None):
             f"--junitxml={step_dir / 'junit.xml'}",
             f"--override-ini=cache_dir={step_dir / 'pytest-cache'}",
             "--override-ini=junit_family=xunit1"]
+    if (step_dir / "plugin/jforge_test_plugin.py").exists():
+        argv += ["-p", "jforge_test_plugin"]
     if installed:
         argv += [f"--rootdir={step_dir / 'work'}", "--override-ini=addopts=", "--override-ini=pythonpath="]
     if group["markers"]:
@@ -413,11 +417,11 @@ def _locks_dir(home):
 
 
 def _state_object(home, key, *, create=False):
-    return object_path(home.root / "checker/state", "card", {"key": key}, create=create)
+    return record_path(home.root / "checker/state", "card", {"key": key}, create=create)
 
 
 def _step_lock(home, key, step):
-    return object_path(_locks_dir(home), "check", {"card": key, "step": step}, create=True) / "operation.lock"
+    return record_path(_locks_dir(home), "check", {"card": key, "step": step}, create=True) / "operation.lock"
 
 
 def read_state(home, key):
@@ -607,6 +611,11 @@ class _CardRun:
         self.card, self.selection, self.key = plan["card"], plan["selection"], plan["key"]
         self.index, self.count = prepared["index"], prepared["count"]
         self.project = Path(self.card["project"])
+        from .test_metadata import project_metadata
+        self.test_metadata = project_metadata(self.project)
+        metadata_inputs = [str(Path(name).relative_to(self.project)) for name in self.test_metadata["documents"]]
+        for group in self.card["groups"].values():
+            group["inputs"] = list(dict.fromkeys([*group["inputs"], *metadata_inputs]))
         self.run_id = new_id("checker", root=home.root / "runs")
         # A --rerun-failed run is partial: it never joins an acceptance and never touches reuse state.
         self.previous = plan.get("previous")
@@ -628,7 +637,7 @@ class _CardRun:
         identity = self.source.identity()
         self.request = {
             "schema_version": 1, "kind": "checker", "catalog": "test", "forge_version": __version__,
-            "run_id": self.run_id, "suite_id": card["id"], "project_id": self.plan["entry"]["id"],
+            "run_id": self.run_id, "playlist_job_id": os.environ.get("JFORGE_PLAYLIST_JOB"), "suite_id": card["id"], "project_id": self.plan["entry"]["id"],
             "card": card["path"], "project": str(self.project), "profile": self.selection["profile"],
             "groups": self.selection["ids"], "seeds": self.selection["seeds"],
             "batch": {"index": self.index, "count": self.count}, "acceptance_id": self.acceptance_id,
@@ -657,6 +666,9 @@ class _CardRun:
             raise _Interrupted
 
     def _prepare(self):
+        from .test_metadata import project_metadata
+        if project_metadata(self.project)["digest"] != self.test_metadata["digest"]:
+            raise ForgeError("Metadata changed while preparing the run. Run again.", code=409)
         card = self.card
         environment, observed, origin, script, name = checker.prepare_environment(
             self.home, self.directory, card["environment"], Path(card["path"]).parent, self.plan["environment_name"])
@@ -679,6 +691,10 @@ class _CardRun:
                         "environment_origin": origin, "observed": observed, "env_script": script,
                         "environment_name": name, "jobs": self.jobs, "run_dir": self.directory,
                         "acceptance": self.request.get("evidence")}
+        from .test_reports import prepare_run
+        prepare_run(self)
+        write_json(self.directory / "request.json", self.request)
+        self.result.update(self.request)
 
     def _evidence(self, prepared=None, source=None):
         return testing_evidence.snapshot(self.home, self.card, self.selection, self.plan["environment_name"],
@@ -688,7 +704,7 @@ class _CardRun:
         key = (_effective(environment), str(cwd))
         if key not in self.packages:
             value, rows = probe_packages(self.python["path"], environment, cwd)
-            file = object_path(self.directory / "packages", "inventory", {"digest": value}, create=True) / "packages.json"
+            file = record_path(self.directory / "packages", "inventory", {"digest": value}, create=True) / "packages.json"
             if not file.exists():
                 write_json(file, {"packages_digest": value, "distributions": rows})
             self.packages[key] = value
@@ -717,9 +733,10 @@ class _CardRun:
             if item_id not in seeds:
                 self.locks.acquire(lock, blocking=True)
             step_dir = named_path(self.directory / "steps", step, create=True)
-            step_dir.mkdir(parents=True)
+            step_dir.mkdir(parents=True, exist_ok=True)
             prerequisites = {need: (statuses[need], tokens[need]) for need in (group or self.card["checks"][item_id]).get("needs", [])}
-            record = {"id": step, "status": "running", "started_at": now()}
+            record = {"id": step, "kind": "pytest" if group else testing.check_kind(self.card["checks"][item_id]), "status": "running", "started_at": now()}
+            write_json(step_dir / "test-report-v1/execution.json", {"status": "running"})
             carried = self._carried(group, step)
             try:
                 if carried is not None:
@@ -755,6 +772,8 @@ class _CardRun:
         if group is not None and (before.get("batch") or {}).get("shard_set_digest") != self._shard_digest(group):
             return None
         origin = before.get("reused_from") or self.previous["run_id"]
+        if not (named_path(self.home.run_path(origin) / "steps", step) / "test-report-v1/inventory.json").exists():
+            return None
         record = {key: value for key, value in before.items()
                   if key not in {"started_at", "finished_at", "duration_seconds", "reason", "reused_from", "rerun"}}
         record.update(status="reused", reused_from=origin, started_at=now(),
@@ -778,6 +797,15 @@ class _CardRun:
         return nodes or None
 
     def _record(self, step_dir, record):
+        from .test_reports import finalize_step, evidence_files
+        finalize_step(self.home, step_dir, record)
+        if record.get("kind") != "pytest" and record["status"] == "passed":
+            evidence = {str(file): digest(file) for file in evidence_files(step_dir / "test-report-v1")}
+            def attach(state):
+                slot = state["checks"].get(record["id"])
+                if slot and slot.get("run_id") == self.run_id:
+                    slot["evidence"].update(evidence)
+            if self.previous is None: update_state(self.home, self.key, attach)
         write_json(step_dir / "result.json", record)
         self.result["steps"].append(record)
         write_json(self.directory / "result.json", self.result)
@@ -786,6 +814,8 @@ class _CardRun:
         from . import testing_package
         partial = self.previous is not None
         cached = None if partial else read_state(self.home, self.key)["checks"].get(check["id"])
+        if cached and (cached.get("test_metadata_digest") != self.test_metadata["digest"] or not (self.home.run_path(cached.get("run_id", "missing")) / "steps" / step_dir.name / "test-report-v1/inventory.json").exists()):
+            cached = None
         context = {**self.context, "packages": self._packages, "step_environment": self._step_environment}
         exclusive = check.get("exclusive", [])
         with self._resources(exclusive):
@@ -794,6 +824,7 @@ class _CardRun:
                 run_id=self.run_id, progress=self.progress, event=self.event,
                 executors={"package": testing_package.executor()})
         record["kind"] = testing.check_kind(check)
+        if slot is not None: slot["test_metadata_digest"] = self.test_metadata["digest"]
 
         def change(state):
             if slot is not None:
@@ -835,7 +866,7 @@ class _CardRun:
         if partial:
             record["rerun"] = {"from": self.previous["run_id"], "nodes": nodes}
         installed = group["isolate"] == "installed"
-        plugin = write_plugin(step_dir, project)
+        plugin = write_plugin(step_dir, project, step_dir / "work" if installed else project)
         environment = self._step_environment(group, step_dir, plugin)
         work = step_dir / "work"
         if installed:
@@ -846,7 +877,7 @@ class _CardRun:
         inputs = checker.input_manifest(project, group["inputs"])
         hashes = [(path, digest(project / path)) for path in paths]
         fingerprint = builds.fingerprint({
-            "executor": EXECUTOR,
+            "executor": EXECUTOR, "metadata_digest": self.test_metadata["digest"],
             "group": {key: group[key] for key in ("markers", "isolate", "import_mode", "pythonpath", "env",
                                                   "pytest_args", "workers", "skip_allow", "timeout_seconds",
                                                   "distributions", "needs")},
@@ -943,6 +974,9 @@ class _CardRun:
                     file = step_dir / name
                     if file.is_file():
                         evidence[str(file)] = digest(file)
+                from .test_reports import evidence_files
+                for file in evidence_files(step_dir / "test-report-v1"):
+                    evidence[str(file)] = digest(file)
                 new_slot = {"fingerprint": fingerprint, "packages_digest": packages,
                             "acceptance": self.request.get("evidence"),
                             "source_key": None if record["tree_modified"] else source_key,

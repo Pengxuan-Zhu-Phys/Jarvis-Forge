@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "api_version": 1,
+  "discovery": {
+    "id": "discovery-A1",
+    "status": "completed",
+    "href": "/api/test-discoveries/discovery-A1",
+    "freshness": "fresh",
+    "inventory_revision": "fixture-v1",
+    "selection": [
+      "unit"
+    ],
+    "environment": null,
+    "test_cases_href": "/api/test-discoveries/discovery-A1/test-cases",
+    "metadata_diagnostics": []
+  }
+}

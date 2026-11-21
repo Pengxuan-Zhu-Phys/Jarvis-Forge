@@ -10,7 +10,7 @@ import pytest
 
 from jarvis_forge.apt_profiles import active_home
 from jarvis_forge.cli import main
-from jarvis_forge.env_entries import attach_build, attach_root_build, drop_build, publish_apt, write_selection
+from jarvis_forge.env_entries import attach_build, attach_build_outputs, drop_build, publish_apt, write_selection
 from jarvis_forge.environment_registry import add
 from jarvis_forge.storage import ForgeHome, write_json
 
@@ -26,37 +26,28 @@ def write_backend(profile, revision="op-1", text="export FIXTURE_PKG=1\n"):
     script = profile.root / "environments/apt/revisions" / revision / "activate.sh"
     script.parent.mkdir(parents=True)
     script.write_text(text)
-    write_json(profile.root / "apt/state.json", {
+    write_json(profile.root / "packages.json", {
         "backend": "spack", "spack": {"roots": [], "packages": []},
         "activation": str(script), "last_operation_id": revision,
     })
     return script
 
 
-def test_apt_entry_is_short_and_tracks_the_revision(home, linux_apt, capsys):
-    profile = active_home(home)
-    profile.initialize()
-    first = write_backend(profile)
-    assert main(["--home", str(home.root), "apt", "env", "--path"]) == 0
-    short = Path(capsys.readouterr().out.strip())
-    assert short == home.root / "env/apt/activate.sh"
-    assert "revisions" not in str(short)
-    metadata = json.loads((home.root / "env/apt/env.json").read_text())
-    assert metadata["backend_activation"] == str(first)
-    assert metadata["revision"] == "op-1"
-    second = write_backend(profile, "op-2", "export FIXTURE_PKG=2\n")
-    assert main(["--home", str(home.root), "apt", "env", "--path"]) == 0
-    assert Path(capsys.readouterr().out.strip()) == short
-    assert str(second) in short.read_text()
-    assert str(first) not in short.read_text()
+def test_profile_entry_is_stable_and_queries_do_not_write(home,linux_apt,capsys):
+    from profile_fixtures import project_profile
+    profile=project_profile(home);short=profile.root/'activate.sh'
+    original=short.read_bytes();mtime=short.stat().st_mtime_ns
+    assert main(['--home',str(home.root),'profile','show','--path'])==0
+    assert Path(capsys.readouterr().out.strip())==short
+    assert short.read_bytes()==original and short.stat().st_mtime_ns==mtime
 
 
-@pytest.mark.parametrize("command", ["install", "reinstall", "upgrade", "full-upgrade", "satisfy", "remove"])
+@pytest.mark.parametrize("command", ["install", "upgrade", "remove"])
 def test_package_changes_publish_the_stable_entry_without_a_shell_hook(home, linux_apt, monkeypatch, capsys, command):
     from jarvis_forge import apt_cli, spack_backend
 
-    profile = active_home(home)
-    profile.initialize()
+    from profile_fixtures import project_profile
+    profile=project_profile(home)
     revisions = []
 
     def transact(target, action, specs, *, dry_run=False, **kwargs):
@@ -73,35 +64,30 @@ def test_package_changes_publish_the_stable_entry_without_a_shell_hook(home, lin
     if command == "remove":
         args.append("--yes")
     common = ["--home", str(home.root), "apt", command, *args]
-    short = home.root / "env/apt/activate.sh"
+    short = profile.root / "activate.sh"
     assert main(common) == 0
     output = capsys.readouterr().out
     assert str(short) in output
     assert str(revisions[0]) not in output
-    assert "apt env --path" in output and 'source "$(' in output
+    assert "source " in output
     assert short.is_file() and str(revisions[0]) in short.read_text()
 
     assert main([*common, "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["activation"] == str(revisions[1])
     assert result["environment_activation"] == str(short)
-    assert f"--home {home.root}" in result["source_command"]
+    assert result["source_command"]=="source "+str(short)
     assert str(revisions[1]) in short.read_text()
     assert str(revisions[0]) not in short.read_text()
     assert revisions[0].is_file()
 
 
-def test_apt_env_text_hides_the_backend_revision(home, linux_apt, capsys):
-    profile = active_home(home)
-    profile.initialize()
-    backend = write_backend(profile, "op-long-revision")
-    assert main(["--home", str(home.root), "apt", "env"]) == 0
-    output = capsys.readouterr().out
-    assert str(home.root / "env/apt/activate.sh") in output
-    assert str(backend) not in output
-    assert "apt env --path" in output
-    assert main(["--home", str(home.root), "apt", "env", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["backend_activation"] == str(backend)
+def test_profile_show_reports_metadata_without_backend_revision(home,linux_apt,capsys):
+    from profile_fixtures import project_profile
+    profile=project_profile(home)
+    assert main(['--home',str(home.root),'profile','show'])==0
+    output=capsys.readouterr().out
+    assert str(profile.root/'activate.sh') in output and '0 packages' in output
 
 
 def test_entry_can_be_sourced_twice_and_then_restored(home):
@@ -142,9 +128,9 @@ def test_root_is_attached_only_after_success(home, monkeypatch):
     root.write_text("export ROOTSYS=/opt/root\n")
     monkeypatch.setattr("jarvis_forge.apt_profiles.active_home", lambda base: home)
     output = {"build_id": "root-build", "output": "ROOT", "artifact_id": "root-1", "activation": str(root)}
-    assert attach_root_build(home, {"status": "failed", "outputs": {"ROOT": output}}) is None
+    assert attach_build_outputs(home, {"status": "failed", "outputs": {"ROOT": output}}) is None
     assert not (home.root / "env/apt/activate.sh").exists()
-    attached = attach_root_build(home, {"status": "passed", "outputs": {"ROOT": output}})
+    attached = attach_build_outputs(home, {"status": "passed", "outputs": {"ROOT": output}})
     text = Path(attached["activation"]).read_text()
     assert str(root) in text
     metadata = json.loads((home.root / "env/apt/env.json").read_text())
@@ -209,7 +195,7 @@ def test_drop_keeps_root_out_until_the_next_successful_build(home, linux_apt, ca
     assert again["builds"] == []
     assert "omitted_builds" in json.loads((home.root / "env/apt/env.json").read_text())
     assert main(["--home", str(home.root), "env", "drop", "missing-build"]) == 2
-    restored = attach_root_build(home, {"status": "passed", "outputs": {"installation": {
+    restored = attach_build_outputs(home, {"status": "passed", "outputs": {"installation": {
         "build_id": "root-build", "output": "installation", "artifact_id": "root-live", "activation": str(script),
     }}})
     assert str(script) in Path(restored["activation"]).read_text()
@@ -224,7 +210,7 @@ def test_shell_hook_reloads_after_dropping_a_build(home, capsys):
     after = home.root / "packages.sh"
     before.write_text("export FIXTURE_ENV=with-root\n")
     after.write_text("export FIXTURE_ENV=packages\n")
-    assert main(["--home", str(home.root), "apt", "shell-init"]) == 0
+    assert main(["--home", str(home.root), "shell-init"]) == 0
     hook = capsys.readouterr().out
     marker = home.root / "dropped"
     fake = home.root / "jforge"
@@ -280,7 +266,7 @@ def test_shell_hook_switches_and_detaches_the_current_shell(home, capsys):
         pytest.skip("bash is not installed")
     script = write_backend(home, text="export FIXTURE_ENV=selected\n")
     entry = publish_apt(home, home, script)["activation"]
-    assert main(["--home", str(home.root), "apt", "shell-init"]) == 0
+    assert main(["--home", str(home.root), "shell-init"]) == 0
     hook = capsys.readouterr().out
     fake = home.root / "jforge"
     fake.write_text(

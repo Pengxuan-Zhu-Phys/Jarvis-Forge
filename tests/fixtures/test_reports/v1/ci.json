@@ -1,0 +1,99 @@
+{
+  "ok": true,
+  "api_version": 1,
+  "test_case": {
+    "id": "contract.presentation",
+    "title": "Contract report preserves the supplied evidence",
+    "purpose": "Check that the fixture identity, lifecycle and declared observation remain independently inspectable.",
+    "binding": {
+      "adapter": "pytest",
+      "selector": "tests/fixture.py::test_contract"
+    },
+    "component": "report.consumer",
+    "owner": "fixture maintainers",
+    "tags": [
+      "contract"
+    ],
+    "scenario": {
+      "preconditions": "Controlled development fixture; no local test execution is represented.",
+      "inputs": {
+        "case": "fixture"
+      },
+      "action": "Read the supplied outcome and compare it with the criteria and evidence scope."
+    },
+    "criteria": [
+      {
+        "id": "truthful",
+        "expected": "The outcome and report generation state remain separate.",
+        "verification": "automated",
+        "criterion_id": "truthful",
+        "status": "unobserved",
+        "observed": null,
+        "evidence_refs": []
+      },
+      {
+        "id": "review",
+        "expected": "A reviewer inspects the supplied presentation.",
+        "verification": "manual",
+        "criterion_id": "review",
+        "status": "unobserved",
+        "observed": null,
+        "evidence_refs": [],
+        "review_status": "pending"
+      }
+    ],
+    "failure_meaning": "A consumer may have confused result, lifecycle or observation.",
+    "limitations": [
+      "Does not prove a project acceptance run."
+    ],
+    "expected_evidence": [],
+    "review": {
+      "status": "draft"
+    },
+    "project_id": "contract-fixture",
+    "job_id": "fixture-A1",
+    "run_id": "fixture-A1",
+    "step_id": "unit",
+    "target_id": "ci-linux-py313",
+    "case_id": "case-d3b6b510b739d0eab4938cefd55c57ce",
+    "instance_id": "instance-892af902441fc5436a1cce12b5fb9d18",
+    "definition_id": "contract.presentation",
+    "adapter": "pytest",
+    "native_id": "tests/fixture.py::test_contract[ci]",
+    "variant_key": "ci",
+    "parameters": {
+      "pytest_id": "ci"
+    },
+    "group": {
+      "file": "tests/fixture.py"
+    },
+    "source": {
+      "repository": "fixture/repository",
+      "commit": "fixture-commit",
+      "workflow": "acceptance",
+      "job": "linux",
+      "matrix": {
+        "python": "3.13"
+      },
+      "attempt": 1,
+      "runner": "fixture-runner"
+    },
+    "environment_digest": null,
+    "file": "tests/fixture.py",
+    "metadata_status": "complete",
+    "metadata_digest": "b17f2a8a13f0d5e18f1eb7f3a9e943a755f8033f8f671aad0db0c2f67385a165",
+    "storage_key": "case-B7",
+    "state": "finished",
+    "outcome": "passed",
+    "execution_mode": "executed",
+    "attempt": 1,
+    "attempts": [
+      1
+    ],
+    "seconds": 0.012,
+    "phases": [],
+    "artifacts": [],
+    "report_status": "provisional",
+    "fixture": true
+  }
+}

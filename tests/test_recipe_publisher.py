@@ -418,7 +418,7 @@ def test_project_release_requires_the_current_client(tmp_path, monkeypatch):
         pytest.skip("Independent recipe sources are not shipped in the Python distribution")
     output = tmp_path / "assets"
     manifest = publisher.build_projects("2026.11.05.1", source, output)
-    assert manifest["requires_forge"] == ">=1.1.11"
+    assert manifest["requires_forge"] == ">=1.2.0"
     local = build("2026.11.05.1", tmp_path / "local", source=source)
     assert local["requires_forge"] == manifest["requires_forge"]
     root = next(row for row in manifest["builds"] if row["id"] == "root")
@@ -435,8 +435,8 @@ def test_project_release_requires_the_current_client(tmp_path, monkeypatch):
     home = ForgeHome(tmp_path / "home")
     home.initialize()
     with monkeypatch.context() as previous:
-        previous.setattr(build_catalog, "__version__", "1.1.10")
-        with pytest.raises(ForgeError, match="requires Jarvis-Forge >=1.1.11; installed version is 1.1.10"):
+        previous.setattr(build_catalog, "__version__", "1.1.17")
+        with pytest.raises(ForgeError, match="requires Jarvis-Forge >=1.2.0; installed version is 1.1.17"):
             build_catalog.update(home, platform="linux")
     assert downloads == ["builds.json"]
     assert not (home.root / "builds/catalog/index.json").exists()

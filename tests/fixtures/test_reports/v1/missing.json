@@ -1,0 +1,72 @@
+{
+  "ok": true,
+  "api_version": 1,
+  "test_case": {
+    "id": "contract.presentation",
+    "title": "Contract report preserves the supplied evidence",
+    "purpose": null,
+    "binding": {
+      "adapter": "pytest",
+      "selector": "tests/fixture.py::test_contract"
+    },
+    "component": "report.consumer",
+    "owner": "fixture maintainers",
+    "tags": [
+      "contract"
+    ],
+    "scenario": {
+      "preconditions": "Controlled development fixture; no local test execution is represented.",
+      "inputs": {
+        "case": "fixture"
+      },
+      "action": "Read the supplied outcome and compare it with the criteria and evidence scope."
+    },
+    "criteria": [],
+    "failure_meaning": "A consumer may have confused result, lifecycle or observation.",
+    "limitations": [
+      "Does not prove a project acceptance run."
+    ],
+    "expected_evidence": [],
+    "review": {
+      "status": "draft"
+    },
+    "project_id": "contract-fixture",
+    "job_id": "fixture-A1",
+    "run_id": "fixture-A1",
+    "step_id": "unit",
+    "target_id": "local",
+    "case_id": "case-8054473bce3335a9276591a226bc3ebe",
+    "instance_id": "instance-be3383d02c30e27d3cd69c38f114feff",
+    "definition_id": null,
+    "adapter": "pytest",
+    "native_id": "tests/fixture.py::test_contract[missing]",
+    "variant_key": "missing",
+    "parameters": {
+      "pytest_id": "missing"
+    },
+    "group": {
+      "file": "tests/fixture.py"
+    },
+    "source": {
+      "repository": "fixture/project",
+      "commit": "fixture-commit"
+    },
+    "environment_digest": null,
+    "file": "tests/fixture.py",
+    "metadata_status": "missing",
+    "metadata_digest": "b17f2a8a13f0d5e18f1eb7f3a9e943a755f8033f8f671aad0db0c2f67385a165",
+    "storage_key": "case-B2",
+    "state": "finished",
+    "outcome": "passed",
+    "execution_mode": "executed",
+    "attempt": 1,
+    "attempts": [
+      1
+    ],
+    "seconds": 0.012,
+    "phases": [],
+    "artifacts": [],
+    "report_status": "provisional",
+    "fixture": true
+  }
+}

@@ -168,8 +168,7 @@ def test_managed_repair_refreshes_independent_build_export(tmp_path, capsys, mon
     report = json.loads(capsys.readouterr().out)
     assert report["changed"] == report["removed"] == 1
     assert report["targets"][0]["kind"] == "artifact"
-    assert main([*args, "build", "env", "test-installation", "--path"]) == 0
-    entry = Path(capsys.readouterr().out.strip())
+    entry = Path(report["targets"][0]["activation"])
     assert entry == Path(report["targets"][0]["activation"])
     assert "export PATH=" not in entry.read_text()
     assert all(p.read_bytes() == contents for p, contents in original.items())

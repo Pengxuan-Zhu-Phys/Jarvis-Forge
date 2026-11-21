@@ -199,7 +199,7 @@ def test_data_list_and_prune(home, tmp_path):
     stale = data / "retired" / "alpha" / "measure"
     stale.mkdir(parents=True)
     (stale / "old.txt").write_text("x")
-    partial = data / "quick" / "alpha" / "measure" / "r000.partial"
+    partial = data / "quick" / "alpha" / "measure" / "0001-repeat.partial"
     partial.mkdir()
     (partial / "junk.txt").write_text("y")
     listed = bench.data_list(home, "perf")
@@ -210,7 +210,7 @@ def test_data_list_and_prune(home, tmp_path):
     assert any(item.endswith("retired") or "/retired" in item for item in removed["removed"])
     assert not stale.exists()
     assert not partial.exists()
-    assert (data / "quick" / "alpha" / "measure" / "r000" / "metrics.json").is_file()
+    assert (data / "quick" / "alpha" / "measure" / "0001-repeat" / "metrics.json").is_file()
 
 
 def test_cli_compare_and_trend(home, tmp_path, capsys):

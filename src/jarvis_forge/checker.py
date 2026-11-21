@@ -11,7 +11,7 @@ import yaml
 from . import cmake, builds
 from .environment_registry import show as registered_environment
 from .package_operations import run_command
-from .paths import object_path
+from .paths import record_path
 from .paths import named_path
 from .storage import ForgeError, digest, identifier, new_id, now, read_json, write_json
 from .suite import UniqueLoader
@@ -284,7 +284,7 @@ def run(home, path, *, full=False, selected=(), environment_name=None, jobs=1, p
                "environment_origin": origin, "observed": observed, "env_script": env_script,
                "environment_name": name, "jobs": jobs, "run_dir": directory}
     key = builds.fingerprint({"id": config["id"], "project": str(project)})
-    state_object = object_path(home.root / "checker/state", "card", {"key": key}, create=True)
+    state_object = record_path(home.root / "checker/state", "card", {"key": key}, create=True)
     state_file = state_object / "state.json"
     result = {**request, "path": str(directory), "status": "running", "steps": []}
     write_json(directory / "result.json", result)

@@ -15,19 +15,21 @@ import sys
 
 import yaml
 
-from .paths import object_path, physical_name
+from .paths import object_path, record_path, semantic_name, metadata
 from .storage import ForgeError, ForgeHome, digest, identifier, now, read_json, write_json, write_text
 
 ENGINE_VERSION = "1.2.2"
-INSTALL_PROJECTION = "{name}"
+INSTALL_PROJECTION = "{name}-{version}"
 PYTHON_PACKAGES = ("python", "python-venv")
 ENGINE = {
+    "name":"spack", "version":ENGINE_VERSION,
     "url": "https://github.com/spack/spack/releases/download/v1.2.2/spack-1.2.2.tar.gz",
     "sha256": "ed39d08bc295571cdec23a4566cbd8aa7ef4ebd582013d43874471a2b1257bf5",
 }
 REPO_COMMIT = "d4f7c711a6a42f1c4d551c8fd10fce9a11340a81"
 REPO_BRANCH = "releases/v2026.06"
 REPOSITORY = {
+    "name":"builtin", "version":"2026.06",
     "url": f"https://github.com/spack/spack-packages/archive/{REPO_COMMIT}.tar.gz",
     "sha256": "06f6bbd84f040e1da916c0f81ec1292422d5fc17e352f565459a853f9d3d7361",
 }
@@ -39,37 +41,31 @@ def root(home):
 
 
 def configured(home):
-    return (home.root / "apt/spack.json").is_file()
+    return (home.root / "spack/backend.json").is_file()
 
 
 def settings(home):
-    data = read_json(home.root / "apt/spack.json")
+    data = read_json(home.root / "spack/backend.json")
     if data.get("schema_version") != 1 or data.get("backend") != "spack":
         raise ForgeError("Invalid Spack backend settings.")
     return data
 
 
 def _saved_install_tree(home):
-    file = root(home) / "config/config.yaml"
+    file=root(home)/'config/config.yaml'
+    saved=None
     if file.is_file():
-        try:
-            data = yaml.safe_load(file.read_text())
-            tree = data["config"]["install_tree"]
-        except (OSError, KeyError, TypeError, yaml.YAMLError) as exc:
-            raise ForgeError(f"Cannot read the existing Spack install layout: {file}") from exc
-        if not isinstance(tree, dict) or not isinstance(tree.get("root"), str):
-            raise ForgeError(f"Invalid Spack install layout: {file}")
-        return tree
-    if configured(home) or (root(home) / "store").exists():
-        saved = settings(home).get("install_tree") if configured(home) else None
-        if saved:
-            if not isinstance(saved, dict) or not isinstance(saved.get("root"), str):
-                raise ForgeError("Invalid saved Spack install layout.")
-            return saved
-        # Old deployments used this exact padding rule. Never change their
-        # layout in place, even when repairing a missing config file.
-        return {"root": str(root(home) / "store"),
-                "padded_length": max(128, len(str(root(home) / "store")) + 32)}
+        try:saved=yaml.safe_load(file.read_text())['config']['install_tree']
+        except (TypeError,KeyError,yaml.YAMLError) as exc:
+            raise ForgeError(f'Invalid existing Spack install layout: {file}') from exc
+    elif configured(home):
+        saved=settings(home).get('install_tree')
+    if saved is not None:
+        if not isinstance(saved,dict) or saved.get('projections',{}).get('all')!=INSTALL_PROJECTION or saved.get('padded_length') is not False or saved.get('root')!=str(home.root/'pkg'):
+            raise ForgeError(f'Unsupported Spack store layout: {file}',hint='Recreate the profile in a fresh Forge home.')
+        return saved
+    if (root(home)/'store').exists():
+        raise ForgeError(f'Unsupported Spack store layout: {root(home)/"store"}',hint='Create a fresh Forge home.')
     return None
 
 
@@ -124,7 +120,7 @@ def name_of(text):
 
 
 def current(home):
-    file = home.root / "apt/state.json"
+    file = home.root / "packages.json"
     value = read_json(file).get("spack", {}) if file.exists() else {}
     if file.exists() and not value:
         raise ForgeError(
@@ -178,7 +174,8 @@ def _executable(home):
     engine = value.get("engine")
     if not isinstance(engine, str) or not Path(engine).is_absolute():
         raise ForgeError(f"Invalid Spack engine path for profile {home.root.name}.")
-    executable = _inside(home, Path(engine) / "bin/spack")
+    from .unified_profiles import base_home
+    executable = _inside(base_home(home), Path(engine) / "bin/spack")
     if not executable.is_file():
         raise ForgeError("Managed Spack is missing.", hint="jforge apt import spack")
     return executable
@@ -335,6 +332,12 @@ def _config(home, repo, python):
     from .parallelism import policy
 
     parallel = policy()
+    marker=home.root/'metadata.json'
+    scope_data=read_json(marker) if marker.is_file() else {}
+    if scope_data.get('stage_mode')=='node':
+        from .unified_profiles import default_stage
+        stage=str(default_stage(home))
+    else:stage=scope_data.get('stage')
     directory = root(home) / "config"
     directory.mkdir(parents=True, exist_ok=True)
     data = {
@@ -343,7 +346,7 @@ def _config(home, repo, python):
             "concurrent_packages": parallel["concurrent_packages"],
             "installer": "new",
             "install_tree": _saved_install_tree(home) or _new_install_tree(home),
-            "build_stage": [str(root(home) / "stage")],
+            "build_stage": [str(stage or home.root / "stage")],
             "stage_name": "{name}",
             "source_cache": str(root(home) / "sources"),
             "environments_root": str(root(home) / "environments"),
@@ -381,21 +384,28 @@ def _config(home, repo, python):
 def _unpack(home, source, directory, op, label):
     from .package_operations import verified_archive
     from .downloads import unpack
-
-    if directory.exists():
-        return
-    archive = verified_archive(home, source, op / label)
-    temporary = object_path(directory.parent / "unpack", label, {"source": source}, create=True)
-    try:
-        unpack(archive, temporary)
-        entries = list(temporary.iterdir())
-        if len(entries) != 1 or not entries[0].is_dir():
-            raise ForgeError("Unexpected Spack archive layout.")
-        directory.parent.mkdir(parents=True, exist_ok=True)
-        entries[0].rename(directory)
-    finally:
-        if temporary.exists():
-            shutil.rmtree(temporary)
+    from .paths import directory_lock
+    with directory_lock(directory.parent,'.unpack.lock'):
+        marker=directory/'metadata.json'
+        record=read_json(marker) if marker.is_file() else {}
+        if record.get('unpacked_sha256')==source['sha256']:
+            return
+        archive=verified_archive(home,source,op/label)
+        temporary=op/'unpack'
+        if temporary.exists():shutil.rmtree(temporary)
+        try:
+            unpack(archive,temporary)
+            entries=list(temporary.iterdir())
+            if len(entries)!=1 or not entries[0].is_dir():raise ForgeError('Unexpected Spack archive layout.')
+            directory.mkdir(parents=True,exist_ok=True)
+            for child in list(directory.iterdir()):
+                if child.name=='metadata.json':continue
+                if child.is_dir() and not child.is_symlink():shutil.rmtree(child)
+                else:child.unlink()
+            for child in entries[0].iterdir():child.rename(directory/child.name)
+            write_json(marker,{**record,'unpacked_sha256':source['sha256']})
+        finally:
+            if temporary.exists():shutil.rmtree(temporary)
 
 
 def _missing_system_pyenv_python(executable):
@@ -469,7 +479,12 @@ def bootstrap(home, *, progress=None, extensions=None):
         if not shutil.which("bash"):
             raise ForgeError("Spack backend requires Bash on PATH.")
         previous = settings(home) if configured(home) else None
-        if previous:
+        from .unified_profiles import record as managed_record, _python
+        managed=managed_record(home)
+        if managed:
+            selected=_python(managed["python"]["executable"])
+            if selected!=managed["python"]:raise ForgeError("The profile external Python changed.")
+        elif previous:
             selected = _probe_external_python(previous["python"]["executable"])
         else:
             python = shutil.which("python")
@@ -483,8 +498,10 @@ def bootstrap(home, *, progress=None, extensions=None):
         _check_python_location(home, selected)
         base = root(home)
         base.mkdir(parents=True, exist_ok=True)
-        engine = object_path(base / "engine", "spack", ENGINE, create=True)
-        repo = object_path(base / "repositories", "builtin", REPOSITORY, create=True)
+        from .unified_profiles import base_home
+        shared = base_home(home).root / "spack"
+        engine = object_path(shared, "spack", ENGINE, create=True, version=ENGINE_VERSION)
+        repo = object_path(shared, "builtin", REPOSITORY, create=True, version="2026.06")
         _unpack(home, ENGINE, engine, op, "engine-download")
         _unpack(home, REPOSITORY, repo, op, "repository-download")
         if previous:
@@ -519,7 +536,7 @@ def bootstrap(home, *, progress=None, extensions=None):
             "extension_recipes": (previous.get("extension_recipes", True) if previous else True)
             if extensions is None else extensions,
         }
-        write_json(home.root / "apt/spack.json", value)
+        write_json(home.root / "spack/backend.json", value)
         version = run(home, ["--version"], op, "version", progress=progress).strip()
         if version != ENGINE_VERSION:
             raise ForgeError(f"Expected Spack {ENGINE_VERSION}; found {version}.")
@@ -650,7 +667,7 @@ def _validate_target(packages, target):
 
 def _generic_host_target(home):
     """Best generic CPU target, matching Spack build-cache binaries."""
-    vendor = root(home) / "engine" / ENGINE_VERSION / "lib/spack/spack/vendor"
+    vendor = Path(settings(home)["engine"]) / "lib/spack/spack/vendor"
     if not (vendor / "archspec/cpu").is_dir():
         return None
     try:
@@ -698,13 +715,15 @@ def _gcc_runtime_target(home):
     layout = _saved_install_tree(home) or _new_install_tree(home)
     if not isinstance(layout, dict) or layout.get("projections", {}).get("all") != INSTALL_PROJECTION:
         return None
-    installed = Path(layout["root"]) / "gcc-runtime" / ".spack" / "spec.json"
+    active=next((row for row in current(home)["packages"] if row["name"]=="gcc-runtime" and not row["external"]),None)
+    matches=list(Path(layout["root"]).glob("gcc-runtime-*/.spack/spec.json"))
+    installed = Path(active["prefix"])/".spack/spec.json" if active else matches[0] if len(matches)==1 else Path(layout["root"])/"missing"
     if installed.is_file():
         return _spec_target(installed)
     return _generic_host_target(home)
 
 
-def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None):
+def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None, expected_packages=None):
     from .recipe_releases import ensure
     from .toolchains import binding, spack_requirements
 
@@ -713,8 +732,8 @@ def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None)
     toolchain = binding(home)
     if profile.get("extension_recipes", True):
         ensure(home, op)
-    directory = root(home) / "environments" / op.name
-    directory.mkdir(parents=True)
+    directory = op / "candidate"
+    directory.mkdir(parents=True, exist_ok=True)
     document = {
         "spack": {
             "specs": roots,
@@ -734,6 +753,12 @@ def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None)
     packages.update(_python_externals(profile["python"]))
     if toolchain:
         spack_requirements(toolchain, packages)
+    if expected_packages is not None:
+        from .profile_exports import constraints
+        for name,requirement in constraints(expected_packages).items():
+            rules=packages.setdefault(name,{}).setdefault('require',[])
+            if isinstance(rules,str):rules=[rules];packages[name]['require']=rules
+            rules.append(requirement)
     if target:
         _require_target(packages, target)
     package_config.write_text(yaml.safe_dump(config, sort_keys=False))
@@ -741,25 +766,6 @@ def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None)
         shutil.copy2(Path(previous) / "spack.lock", directory / "spack.lock")
     return directory
 
-
-def _short_package_names(home, envdir, packages):
-    """Configure literal Spack projections; full package names remain in JSON."""
-    file = envdir / ".jforge-config/config.yaml"
-    if not file.is_file():
-        return
-    config = yaml.safe_load(file.read_text())
-    layout = config.get("config", {}).get("install_tree", {})
-    projections = layout.get("projections", {})
-    if projections.get("all") != "{name}":
-        return
-    changed = False
-    for package in packages:
-        name = package["name"]
-        if not package["external"] and len(name.encode()) > 24 and name not in projections:
-            projections[name] = physical_name(home.root / "pkg", name, {"package": name}, create=True)
-            changed = True
-    if changed:
-        file.write_text(yaml.safe_dump(config, sort_keys=False))
 
 
 def _snapshot(home, envdir, op, label="snapshot", *, cache=None, overwrite=(),
@@ -792,7 +798,7 @@ def _name_only_layout(envdir):
     if not file.is_file():
         return None
     layout = yaml.safe_load(file.read_text()).get("config", {}).get("install_tree", {})
-    if not isinstance(layout, dict) or layout.get("projections", {}).get("all") != "{name}":
+    if not isinstance(layout, dict) or layout.get("projections", {}).get("all") != INSTALL_PROJECTION:
         return None
     return layout
 
@@ -805,7 +811,10 @@ def _pin_installed_gcc_runtime(plan, envdir, *, expected_target=None):
         package["hash"] for package in plan["packages"]
         if package["name"] == "gcc-runtime" and not package["external"]
     }
-    spec_file = Path(layout["root"]) / "gcc-runtime/.spack/spec.json"
+    matches=list(Path(layout["root"]).glob("gcc-runtime-*/.spack/spec.json"))
+    state=Path(layout['root']).parent/'packages.json'
+    active=next((row for row in read_json(state).get('spack',{}).get('packages',[]) if row['name']=='gcc-runtime' and not row['external']),None) if state.is_file() else None
+    spec_file=Path(active['prefix'])/'.spack/spec.json' if active else matches[0] if len(matches)==1 else Path(layout['root'])/'missing'
     if not runtime_hashes or not spec_file.is_file():
         return None
     node = _spec_node(spec_file)
@@ -928,11 +937,8 @@ def _validate_name_only_plan(plan, envdir):
         if package["external"]:
             continue
         prefix = Path(package["prefix"])
-        if prefix != store / layout["projections"].get(package["name"], package["name"]):
+        if prefix != store / semantic_name(package["name"],package["version"]):
             raise ForgeError(f"Spack returned an unexpected name-only prefix: {prefix}", code=1)
-        if (prefix.exists() or prefix.is_symlink()) and not package["installed"] and not package.get("prefix_matches"):
-            raise ForgeError(f"{package['name']} already occupies {prefix} with another build; its metadata and files are preserved.",
-                             code=1, hint="Run jforge apt profile <new-name> --create, then install the requested packages there.")
 
 
 def _validate_external_python(home, packages):
@@ -1128,12 +1134,17 @@ def _publish(home, op, envdir, roots, snapshot):
                         )
                     break
 
-    revision = home.root / "environments/apt/revisions" / op.name
+    revision = root(home) / "runtime"
     revision.mkdir(parents=True, exist_ok=True)
-    if snapshot["packages"]:
-        config = profile_fonts.write_config(home, store_root(home), revision, snapshot["packages"])
-        if config:
-            modifications.append({"type": "SetEnv", "name": "FONTCONFIG_FILE", "value": str(config)})
+    if envdir != root(home):
+        for name in ('spack.yaml','spack.lock'):
+            if (envdir/name).is_file():shutil.copy2(envdir/name, root(home)/name)
+            elif (root(home)/name).exists():(root(home)/name).unlink()
+        shutil.copytree(envdir/'.jforge-config', root(home)/'.jforge-config', dirs_exist_ok=True)
+    envdir=root(home)
+    config = profile_fonts.write_config(home, store_root(home), revision, snapshot["packages"])
+    if config:
+        modifications.append({"type": "SetEnv", "name": "FONTCONFIG_FILE", "value": str(config)})
     bridge = revision / "spack_bridge.py"
     shutil.copy2(Path(__file__).with_name("spack_bridge.py"), bridge)
     mods = revision / "modifications.json"
@@ -1170,14 +1181,10 @@ def _publish(home, op, envdir, roots, snapshot):
                 "external": row["external"],
             },
         }
-        from .package_operations import _inside
 
-        receipt = object_path(_inside(home, home.root / "packages"), row["name"],
-                              {"name": row["name"], "version": row["version"], "hash": row["hash"]}, create=True)
-        file = receipt / "manifest.json"
-        record["manifest_key"] = str(file.relative_to(home.root / "packages"))
-        if not file.exists():
-            write_json(file, record)
+        record['manifest_key']=semantic_name(row['name'],row['version'])
+        if not row['external']:
+            metadata(Path(row['prefix']),'package',row['name'],version=row['version'],identity={'dag_hash':row['hash']},**{key:value for key,value in record.items() if key not in {'name','version','schema_version'}})
         records.append(record)
         key = key_for(record)
         active[row["name"]] = key
@@ -1200,25 +1207,31 @@ def _publish(home, op, envdir, roots, snapshot):
             "operation_id": op.name,
         },
     }
-    write_json(home.root / "apt/state.json", state)
+    for row in snapshot.get('inventory',[]):
+        if row['external'] or any(record['hash']==row['hash'] for record in records):continue
+        metadata(Path(row['prefix']),'package',row['name'],version=row['version'],identity={'dag_hash':row['hash']},
+                 **{key:value for key,value in row.items() if key not in {'name','version','schema_version'}},automatic=True,active=False)
+    write_json(home.root / "packages.json", state)
     return records
 
 
 def _requested_roots(before, action, translated):
     if action == "remove":
         names = {name_of(s) for s in translated}
-        missing = names - {name_of(s) for s in before["roots"]}
-        if missing:
-            raise ForgeError(
-                "Packages are not explicit roots: " + ", ".join(sorted(missing))
-            )
-        roots = [s for s in before["roots"] if name_of(s) not in names]
+        missing = names - {row['name'] for row in before['packages']}
+        if missing:raise ForgeError('Packages are not installed: '+', '.join(sorted(missing)))
+        from .package_lifecycle import reverse_dependents
+        names=reverse_dependents(before['packages'],names)
+        roots=[spec for spec in before['roots'] if name_of(spec) not in names]
     elif action in {"upgrade", "full-upgrade"}:
-        if translated:
-            raise ForgeError(
-                "Spack upgrade updates the locked environment; use install SPEC to change a specific root."
-            )
-        roots = before["roots"]
+        names={name_of(spec) for spec in translated}
+        if any(spec!=name_of(spec) for spec in translated):raise ForgeError('Use native package names with upgrade; use install SPEC to change constraints.')
+        if missing:=names-{row['name'] for row in before['packages']}:raise ForgeError('Packages are not installed: '+', '.join(sorted(missing)))
+        if names:
+            from .profile_exports import constraints,package_identity
+            pinned=constraints([package_identity(row) for row in before['packages']])
+            roots=[spec if name_of(spec) in names else name_of(spec)+pinned.get(name_of(spec),'') for spec in before['roots']]
+        else:roots = before["roots"]
     else:
         names = {name_of(s) for s in translated}
         roots = [s for s in before["roots"] if name_of(s) not in names] + translated
@@ -1227,6 +1240,9 @@ def _requested_roots(before, action, translated):
     return roots
 
 
+from .package_operations import profile_write_lock
+
+@profile_write_lock
 def transact(
     home,
     action,
@@ -1241,6 +1257,9 @@ def transact(
     build_stage=None,
     target=None,
     deprecated_versions=None,
+    confirm=None,
+    from_history=None,
+    expected_packages=None,
 ):
     from .package_operations import locked, operation
     from .toolchains import binding, validate_plan as validate_toolchain_plan
@@ -1256,7 +1275,7 @@ def transact(
     # This never changes the profile's persistent Spack configuration.
     requested_permissions = _deprecated_permissions(deprecated_versions) if deprecated_versions is not None else None
 
-    if not dry_run and profile_record(home):
+    if profile_record(home):
         validate_active(home)
 
     if cache not in {"auto", "only", "never"}:
@@ -1268,15 +1287,6 @@ def transact(
         raise ForgeError("Select Python and virtual environments with pyenv before running Forge.")
     before = current(home)
     roots = _requested_roots(before, action, translated)
-    if dry_run:
-        return {
-            "backend": "spack",
-            "dry_run": True,
-            "roots": roots,
-            "requires_concretization": True,
-            "parallelism": parallel,
-            "note": "No downloads or solver execution; use apt check for a concrete dependency plan.",
-        }
     if not configured(home):
         bootstrap(home, progress=progress)
     with (
@@ -1288,8 +1298,24 @@ def transact(
              "deprecated_versions": requested_permissions},
         ) as (op, result),
     ):
+        from .unified_profiles import host
         result["parallelism"] = parallel
+        result["host"] = host()
+        result["python"] = settings(home)["python"]
+        from . import package_lifecycle as lifecycle
+        selected_history=None
+        if from_history is not None:
+            selected_history,saved_history=lifecycle.historical(home,from_history)
+            if saved_history.get('host'):
+                from .unified_profiles import compatible
+                compatible({'id':home.root.name,'preset':'ubuntu24','host':saved_history['host'],'target':saved_history.get('target') or target})
+            if saved_history.get('python') and saved_history['python']!=settings(home)['python']:
+                raise ForgeError('History uses a different external Python; select its original profile.')
+        transaction=None
+        history_dir=None
+        removed=[]
         before = current(home)
+        roots = _requested_roots(before, action, translated)
         toolchain = binding(home)
         allowed = (requested_permissions if requested_permissions is not None
                    else _deprecated_permissions((toolchain or {}).get("deprecated_versions", {})))
@@ -1298,16 +1324,33 @@ def transact(
         if target and bound_target and target != bound_target:
             raise ForgeError(f"Requested CPU target {target} conflicts with profile target {bound_target}.")
         target = target or bound_target
+        result["target"]=target
         roots = _requested_roots(before, action, translated)
+        if selected_history:
+            roots=yaml.safe_load((selected_history/'spack.yaml').read_text())['spack']['specs']
+        if action=='remove':
+            names=lifecycle.reverse_dependents(before['packages'],{name_of(spec) for spec in translated})
+            roots=[spec for spec in before['roots'] if name_of(spec) not in names]
         result["roots"] = roots
         previous = before.get("environment") if action not in {"upgrade", "full-upgrade"} else None
-        envdir = _candidate(home, op, roots, previous, reuse_buildcache=cache != "never", target=target)
+        envdir = _candidate(home, op, roots, previous, reuse_buildcache=cache != "never", target=target,expected_packages=expected_packages)
+        if selected_history:
+            shutil.copy2(selected_history/'spack.lock',envdir/'spack.lock')
+            document=yaml.safe_load((envdir/'spack.yaml').read_text())
+            document['spack']['specs']=roots
+            (envdir/'spack.yaml').write_text(yaml.safe_dump(document,sort_keys=False))
         config_file = envdir / ".jforge-config/config.yaml"
         config = yaml.safe_load(config_file.read_text()) if config_file.is_file() else {}
         config.setdefault("config", {})["deprecated"] = bool(allowed)
         config["config"].update(build_jobs=jobs, concurrent_packages=16, installer="new")
+        if build_stage is None and (scope_data:=profile_record(home)):
+            if scope_data.get('stage_mode')=='node':
+                from .unified_profiles import default_stage
+                build_stage=default_stage(home)
+            else:build_stage=Path(scope_data['stage'])
         if build_stage is not None:
             config["config"]["build_stage"] = [str(build_stage)]
+            result["stage"]=str(build_stage)
         config_file.write_text(yaml.safe_dump(config, sort_keys=False))
         write_json(op / "deprecation-policy.json", {"deprecated_versions": allowed})
         if allowed and progress:
@@ -1330,7 +1373,9 @@ def transact(
                 timeout=timeout, progress=progress, patch_jobs=patch_jobs,
                 planning={"policy": policy, "overwrite": overwrite,
                           "omit_cached_build_deps": omit_cached_build_deps,
-                          "source_if_uncached": cache_first and policy == "only"})
+                          "source_if_uncached": cache_first and policy == "only",
+                          "from_lock":bool(selected_history),
+                          "database_checkpoint":str(op/'database-before.json')})
             from .spack_planning import current as combined_plan
             combined = combined_plan(op, envdir)
             if combined and combined["result"]["policy"] != policy:
@@ -1338,7 +1383,6 @@ def transact(
                 cache_first = False
                 plan_cache = policy
             dag = _snapshot(home, envdir, op, "dag" + suffix)
-            _short_package_names(home, envdir, dag["packages"])
             write_json(op / "dag.json", dag)
             _validate_deprecated_versions(dag["packages"], allowed)
             _validate_target(dag["packages"], target)
@@ -1353,12 +1397,15 @@ def transact(
             write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
             _validate_deprecated_versions(plan["packages"], allowed)
             _validate_external_python(home, plan["packages"])
+            if expected_packages is not None:
+                from .profile_exports import compare
+                compare(expected_packages,read_json(op/'dag.json')['packages'])
             if toolchain and roots:
                 validate_toolchain_plan(toolchain, read_json(op / "dag.json")["packages"])
             try:
                 _validate_name_only_plan(plan, envdir)
             except ForgeError:
-                if runtime_retried or action not in {"install", "check", "reinstall"}:
+                if selected_history or runtime_retried or action not in {"install", "check", "reinstall"}:
                     raise
                 installed = _pin_installed_gcc_runtime(plan, envdir, expected_target=target)
                 if installed is None:
@@ -1401,11 +1448,21 @@ def transact(
                 if progress:
                     progress(f"[2/4] Check installation plan: {len(plan['packages'])} packages")
             else:
-                plan = {"packages": [], "modifications": []}
+                # Native concretization writes a valid empty lock, not the previous DAG.
+                plan = resolve_plan(plan_cache, flags)
             plan = validate_plan(plan, "plan", plan_cache, flags)
-            if action == "check":
+            if action == "check" or dry_run:
+                from .spack_planning import current as combined_plan
+                combined=combined_plan(op,envdir)
+                inventory=combined['result'].get('inventory',[]) if combined else []
+                preview_removed=[row for row in inventory if action=='remove' and row['name'] in names and not row['external']]
+                lifecycle.protect_apps(home,preview_removed)
+                result['changes']={'install':[row for row in plan['packages'] if not row['installed'] and not row['external']],
+                                   'rebuild':[old for old in inventory for row in plan['packages'] if not row['external'] and old['prefix']==row['prefix'] and (old['hash']!=row['hash'] or row['name'] in overwrite)],
+                                   'remove':preview_removed}
                 result.update(
                     backend="spack",
+                    dry_run=dry_run,
                     lockfile=str(op / "candidate-environment/spack.lock")
                     if (envdir / "spack.lock").is_file()
                     else None,
@@ -1416,17 +1473,45 @@ def transact(
                     builds_executed=False,
                     state_committed=False,
                 )
+                history_dir=lifecycle.history(home,action,envdir,{**result,'status':'planned'})
+                result.update(history=history_dir.name.split('-')[0],history_path=str(history_dir))
                 if cache_first:
                     result["note"] = (
                         "Binary-only installation plan; if a cache install fails, "
                         "remaining source dependencies are validated before building."
                     )
                 return result
+            from .spack_planning import current as combined_plan
+            combined=combined_plan(op,envdir)
+            inventory=combined['result'].get('inventory',[]) if combined else []
+            if not (op/'database-before.json').is_file():
+                raw=run(home,['python',str(Path(__file__).with_name('spack_bridge.py')),'inventory',str(op/'database-before.json')],op,'inventory',envdir=envdir)
+                inventory=_json(raw,'native inventory')['packages']
+            def database(options):
+                return run(home,['python',str(Path(__file__).with_name('spack_bridge.py')),'database',json.dumps(options)],op,
+                           'database-'+options['action'],envdir=envdir,timeout=timeout)
+            transaction=lifecycle.Transaction(home,op,inventory,database,op/'database-before.json')
+            replacements=transaction.changes(plan,overwrite)
+            if action=='remove':
+                removed=[row for row in inventory if row['name'] in names and not row['external']]
+                lifecycle.protect_apps(home,removed)
+            change_plan={'install':[p for p in plan['packages'] if not p['installed'] and not p['external']],
+                         'rebuild':replacements,'remove':removed}
+            result['changes']=change_plan
+            if replacements or removed:
+                if confirm is None:raise ForgeError('Package removal or in-place rebuilding requires confirmation.',hint='Repeat with --yes after reviewing the package plan.')
+                confirm(change_plan)
+            elif confirm and (any(not row.get('root') for row in change_plan['install']) or action=='upgrade' and change_plan['install']):
+                confirm(change_plan)
+            history_dir=lifecycle.history(home,action,envdir,{**result,'status':'installing'})
+            result.update(history=history_dir.name.split('-')[0],history_path=str(history_dir))
+            transaction.prepare(plan,overwrite)
+            transaction.move(removed)
             if progress:
                 progress(
                     "[3/4] Install packages"
                     if action != "remove"
-                    else "[3/4] Retain installed store; update selected roots"
+                    else "[3/4] Remove packages and dependents"
                 )
             if roots and action != "remove":
                 show_plan = getattr(progress, "installation_plan", None)
@@ -1460,6 +1545,12 @@ def transact(
                     source_plan = validate_plan(
                         source_plan, "source-plan", "auto", flags, omit_cached_build_deps=not overwrite,
                     )
+                    extra=transaction.changes(source_plan,overwrite)
+                    extra=[row for row in extra if row['prefix'] in transaction.before_prefixes and row['prefix'] not in transaction.moved]
+                    if extra:
+                        if confirm is None:raise ForgeError('Source fallback requires in-place rebuilding; confirm the new plan.')
+                        confirm({'install':[],'rebuild':extra,'remove':[]})
+                    transaction.prepare(source_plan,overwrite)
                     if show_plan is not None:
                         show_plan(source_plan["packages"], overwrite)
                     if overwrite:
@@ -1490,11 +1581,17 @@ def transact(
                             document = yaml.safe_load(manifest.read_text())
                             document["spack"]["concretizer"]["reuse"] = _python_reuse(buildcache=False)
                             manifest.write_text(yaml.safe_dump(document, sort_keys=False))
-                            _restore_candidate_lock(envdir, previous, op / "spack-before-cache-retry.lock")
+                            if not selected_history:
+                                _restore_candidate_lock(envdir, previous, op / "spack-before-cache-retry.lock")
                             # Keep completed binaries eligible for local reuse, even on upgrade.
                             retry_flags = [flag for flag in flags if flag != "--fresh"]
                             source_plan = resolve_plan("never", retry_flags, suffix="-cache-retry")
                             source_plan = validate_plan(source_plan, "source-retry-plan", "never", retry_flags)
+                            extra=[row for row in transaction.changes(source_plan,overwrite) if row['prefix'] in transaction.before_prefixes and row['prefix'] not in transaction.moved]
+                            if extra:
+                                if confirm is None:raise ForgeError('Source retry requires confirmed in-place rebuilding.')
+                                confirm({'install':[],'rebuild':extra,'remove':[]})
+                            transaction.prepare(source_plan,overwrite)
                             if show_plan is not None:
                                 show_plan(source_plan["packages"], overwrite)
                             run(home, _install_args(jobs, "never"), op, "install-source-retry",
@@ -1505,7 +1602,7 @@ def transact(
                                     progress(f"Build {len(source_hashes)} packages from source")
                                 run(home, _install_args(jobs, "auto", source_hashes), op,
                                     "install", envdir=envdir, timeout=timeout, progress=progress)
-            final = _snapshot(home, envdir, op, "installed") if roots else plan
+            final = _snapshot(home, envdir, op, "installed")
             _validate_deprecated_versions(final["packages"], allowed)
             _validate_target(final["packages"], target)
             missing = [
@@ -1520,20 +1617,34 @@ def transact(
             if progress:
                 progress("[4/4] Save environment")
             records = _publish(home, op, envdir, roots, final)
+            from .unified_profiles import refresh_activation,sync_definition
+            refresh_activation(home)
+            sync_definition(home)
             committed = True
+            transaction.finish()
             result.update(
                 backend="spack",
                 packages=records,
                 activation=current(home)["activation"],
-                environment=str(envdir),
-                lockfile=str(envdir / "spack.lock")
+                environment=str(root(home)),
+                lockfile=str(root(home) / "spack.lock")
                 if (envdir / "spack.lock").is_file()
                 else None,
                 state_committed=True,
-                store_retained=action == "remove",
+                store_retained=False,
+                removed=removed,
             )
             return result
         finally:
+            if not committed and transaction is not None:
+                transaction.rollback()
+            if history_dir is not None:
+                for name in ('spack.yaml','spack.lock'):
+                    if (envdir/name).is_file():shutil.copy2(envdir/name,history_dir/name)
+                saved=read_json(history_dir/'result.json')
+                saved.update(manifest_sha256=digest(history_dir/'spack.yaml'),
+                             lock_sha256=digest(history_dir/'spack.lock') if (history_dir/'spack.lock').is_file() else None)
+                write_json(history_dir/'result.json',{**saved,**result,'status':'passed' if committed else 'planned' if dry_run or action=='check' else 'failed'})
             calls = op / "spack-calls.jsonl"
             result["spack_invocations"] = len(calls.read_text().splitlines()) if calls.is_file() else 0
             if not committed and envdir.exists():
@@ -1598,7 +1709,7 @@ def _cache_keys(home, op, envdir, progress):
     else:
         value = settings(home)
         value["official_cache_keys_ready"] = True
-        write_json(home.root / "apt/spack.json", value)
+        write_json(home.root / "spack/backend.json", value)
 
 
 def _prepare_backend(home, op, progress):
@@ -1614,7 +1725,7 @@ def _prepare_backend(home, op, progress):
     _cache_keys(home, op, None, progress)
     value = settings(home)
     value["backend_prepared"] = True
-    write_json(home.root / "apt/spack.json", value)
+    write_json(home.root / "spack/backend.json", value)
 
 
 _CACHE_TRUST_ERROR = re.compile(
@@ -1672,7 +1783,7 @@ def update(home, *, progress=None):
         cached.parent.mkdir(parents=True, exist_ok=True)
         if not cached.exists():
             shutil.copy2(archive, cached)
-        destination = object_path(root(home) / "repositories", "builtin", pin, create=True)
+        destination = object_path(record_path(root(home)/"recipes/history", "update-builtin", pin, create=True), "builtin", pin, create=True, version="2026.06")
         _unpack(home, pin, destination, op, "repository-verified-download")
         value = settings(home)
         from . import recipe_releases
@@ -1695,11 +1806,11 @@ def update(home, *, progress=None):
             else:
                 catalog_file.write_bytes(old_catalog)
             raise
-        write_json(home.root / "apt/recipe-release.json", extension)
+        write_json(home.root / "spack/recipes.json", extension)
         value.update(
             repository=str(repo), repository_commit=head, repository_archive=pin
         )
-        write_json(home.root / "apt/spack.json", value)
+        write_json(home.root / "spack/backend.json", value)
         result.update(
             backend="spack",
             available=len(rows),
@@ -1825,27 +1936,78 @@ def compilers(home, *, find=False, progress=None):
         return result
 
 
-def autoremove(home, *, dry_run=False, progress=None):
-    from .package_operations import locked, operation
-
+@profile_write_lock
+def autoremove(home, *, dry_run=False, progress=None, confirm=None):
+    from . import package_lifecycle as lifecycle
+    from .package_operations import locked,operation
+    def inspect():
+        state=current(home)
+        keep={row['hash'] for row in state['packages']}
+        inventory=[read_json(file) for file in (home.root/'pkg').glob('*/metadata.json') if read_json(file).get('kind')=='package']
+        unused=[row for row in inventory if row['hash'] not in keep and not row.get('external')]
+        lifecycle.protect_apps(home,unused)
+        return state,inventory,unused,{'install':[],'rebuild':[],'remove':unused}
     if dry_run:
-        return {
-            "backend": "spack",
-            "dry_run": True,
-            "note": "Spack will retain all saved environment revisions and their build dependencies.",
-        }
-    with locked(home), operation(home, "spack-autoremove", {}) as (op, result):
-        run(
-            home,
-            [
-                "gc",
-                "--except-any-environment",
-                "--keep-build-dependencies",
-                "--yes-to-all",
-            ],
-            op,
-            "gc",
-            progress=progress,
-        )
-        result.update(backend="spack", historical_environments_retained=True)
-        return result
+        state,inventory,unused,changes=inspect()
+        return {'backend':'spack','dry_run':True,'changes':changes,'unused':unused}
+    with locked(home),operation(home,'autoremove',{}) as (op,result):
+        state,inventory,unused,changes=inspect()
+        if unused:
+            if confirm is None:raise ForgeError('Autoremove requires confirmation.',hint='jforge apt autoremove --yes')
+            confirm(changes)
+        def database(options):
+            return run(home,['python',str(Path(__file__).with_name('spack_bridge.py')),'database',json.dumps(options)],op,'database-'+options['action'],envdir=root(home))
+        run(home,['python',str(Path(__file__).with_name('spack_bridge.py')),'inventory',str(op/'database-before.json')],op,'inventory',envdir=root(home))
+        tx=lifecycle.Transaction(home,op,inventory,database,op/'database-before.json')
+        committed=False
+        try:
+            tx.move(unused)
+            result.update(backend='spack',state_committed=True,removed=unused,changes=changes,activation=state.get('activation'))
+            folder=lifecycle.history(home,'autoremove',root(home),{**result,'status':'passed'})
+            result.update(history=folder.name.split('-')[0],history_path=str(folder))
+            committed=True
+            tx.finish()
+            return result
+        finally:
+            if not committed:tx.rollback()
+
+
+
+def locked_packages(home):
+    """Read the complete concrete DAG without starting or changing Spack."""
+    file=root(home)/'spack.lock'
+    if not file.is_file():return []
+    value=read_json(file)
+    if 'packages' in value:return value['packages']
+    rows=[]
+    for hash,node in value.get('concrete_specs',{}).items():
+        rows.append({'name':node['name'],'version':node['version'],'hash':hash,'external':bool(node.get('external')),
+                     'node':node})
+    return rows
+
+
+def _read_native(home,args):
+    """Native metadata queries do not initialize an environment or operation log."""
+    try:
+        result=subprocess.run(command(home,args,None),env=_process_environment(home),cwd=home.root,
+                              stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=120,start_new_session=True)
+    except (OSError,subprocess.SubprocessError) as exc:raise ForgeError(f'Cannot query the managed Spack engine: {exc}',code=1) from exc
+    if result.returncode:raise ForgeError((result.stderr or result.stdout).strip() or 'Spack metadata query failed.',code=1)
+    return result.stdout
+
+
+def search(home,term):
+    if not configured(home):return catalog(home,query=term)
+    if not term or term.startswith('-') or any(char in term for char in ('\n','\x00')):raise ForgeError('Supply a package search term.')
+    rows=_json(_read_native(home,['list','--search-description','--format','version_json',term]),'package search')
+    if not isinstance(rows,list) or any(not isinstance(row,dict) or not isinstance(row.get('name'),str) for row in rows):raise ForgeError('Spack returned invalid package search records.',code=1)
+    return [{**row,'backend':'spack','status':'available','version':row.get('latest_version','')} for row in rows]
+
+
+def read_details(home,spec):
+    name=name_of(spec)
+    if not configured(home):return {'name':name,'status':'profile-not-initialized','hint':'jforge profile create NAME --platform PRESET'}
+    rows=_json(_read_native(home,['list','--format','version_json',name]),'package details')
+    result=next((row for row in rows if row['name']==name),None)
+    if result is None:raise ForgeError(f'No native Spack package matches {name}.',hint=f'jforge apt search {name}')
+    return result

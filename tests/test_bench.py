@@ -97,11 +97,11 @@ profiles:
 
 
 def _events(home, profile, index):
-    return home.root / "bench" / "data" / "demo" / profile / "demo" / "generate" / f"r{index:03d}" / "events.txt"
+    return home.root / "bench" / "data" / "demo" / profile / "demo" / "generate" / f"{index+1:04d}-repeat" / "events.txt"
 
 
 def _done(home, profile, step, index):
-    path = home.root / "bench" / "data" / "demo" / profile / "demo" / step / f"r{index:03d}" / ".jforge" / "done.json"
+    path = home.root / "bench" / "data" / "demo" / profile / "demo" / step / f"{index+1:04d}-repeat" / ".jforge" / "done.json"
     return read_json(path)
 
 
@@ -170,7 +170,7 @@ def test_section_45_changes(home, tmp_path):
     assert generate["action"] == "reuse"
     assert "4/4" in generate["detail"]
 
-    slot = home.root / "bench/data/demo/smoke/demo/generate/r001"
+    slot = home.root / "bench/data/demo/smoke/demo/generate/0002-repeat"
     # Keep the finished copy out of the way and delete the slot the next run must fill.
     removed = _events(home, "smoke", 1).read_text()
     import shutil

@@ -75,7 +75,7 @@ def test_normal_install_has_three_engine_launches_and_preserves_command_logs(can
 def test_backend_bootstrap_prepares_solver_and_keys_before_marking_ready(tmp_path, monkeypatch):
     home = ForgeHome(tmp_path / "forge")
     op = tmp_path / "operation"
-    write_json(home.root / "apt/spack.json", {"schema_version": 1, "backend": "spack"})
+    write_json(home.root / "spack/backend.json", {"schema_version": 1, "backend": "spack"})
     calls = []
     monkeypatch.setattr(b, "run", lambda *args, **kwargs: calls.append(args[3]))
     def trust(*args):
@@ -91,7 +91,7 @@ def test_backend_bootstrap_prepares_solver_and_keys_before_marking_ready(tmp_pat
 def test_failed_key_preparation_does_not_mark_backend_ready(tmp_path, monkeypatch):
     home = ForgeHome(tmp_path / "forge")
     op = tmp_path / "operation"
-    write_json(home.root / "apt/spack.json", {"schema_version": 1, "backend": "spack"})
+    write_json(home.root / "spack/backend.json", {"schema_version": 1, "backend": "spack"})
     monkeypatch.setattr(b, "run", lambda *args, **kwargs: "")
     def fail(*args):
         raise ForgeError("key import failed", code=1)
@@ -118,6 +118,7 @@ def test_bridge_uses_source_plan_when_no_pending_binary_exists(monkeypatch, caps
         setattr(spack, name, value)
         monkeypatch.setitem(sys.modules, "spack." + name, value)
     monkeypatch.setitem(sys.modules, "spack", spack)
+    monkeypatch.setattr(spack_bridge, "store_inventory", lambda checkpoint=None: [])
     policies = []
     def snapshot(**kwargs):
         policies.append(kwargs.get("policy"))
@@ -234,3 +235,33 @@ def test_cache_trust_hint_is_not_duplicated_at_the_transaction_boundary(tmp_path
         b._reject_cache_security_failure(tmp_path, "install-cache", first.value)
     assert outer.value is first.value
     assert outer.value.hint.count("Binary-cache trust verification failed.") == 1
+
+
+def test_database_checkpoint_is_not_overwritten_by_a_retried_plan(tmp_path,monkeypatch):
+    from contextlib import nullcontext
+    import types
+    class Database:
+        contents='original'
+        def read_transaction(self):return nullcontext()
+        def _write_to_file(self,stream):stream.write(self.contents)
+        def query_local(self):return []
+    db=Database();spack=types.ModuleType('spack');store=types.ModuleType('spack.store');store.STORE=SimpleNamespace(db=db);spack.store=store
+    monkeypatch.setitem(sys.modules,'spack',spack);monkeypatch.setitem(sys.modules,'spack.store',store)
+    checkpoint=tmp_path/'database.json'
+    spack_bridge.store_inventory(checkpoint);db.contents='partially-installed'
+    spack_bridge.store_inventory(checkpoint)
+    assert checkpoint.read_text()=='original'
+
+
+def test_native_description_search_is_read_only_and_adapts_version_metadata(tmp_path,monkeypatch):
+    home=ForgeHome(tmp_path/'absent')
+    monkeypatch.setattr(b,'configured',lambda home:True)
+    calls=[]
+    def query(home,args):
+        calls.append(args);return json.dumps([{'name':'eigen','latest_version':'5.0.1','versions':['5.0.1','3.4.0']}])
+    monkeypatch.setattr(b,'_read_native',query)
+    rows=b.search(home,'linear')
+    assert rows[0]['name']=='eigen' and rows[0]['version']=='5.0.1' and rows[0]['status']=='available'
+    assert '--search-description' in calls[0] and not home.root.exists()
+    details=b.read_details(home,'eigen')
+    assert details['versions']==['5.0.1','3.4.0'] and not home.root.exists()

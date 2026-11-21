@@ -1,8 +1,13 @@
+import {scenarioDefinitions} from './demo-scenarios.js';
+import {coverThemes, currentCoverTheme, setCoverTheme, defaultCoverTheme, configureCoverShelves} from './cover-themes.js?v=1.0.9';
+import {attachProgress, jobProgress} from './progress-model.js';
+import {loadProgress, safeHref} from './test-api.js';
+import {testBrowser, reportReader, progressPanel, pollTestView} from './test-views.js';
 import { apiFetch, demoMode } from "./api.js";
-import {albumCard, albumPreview, breadcrumbs, button, cell, checkbox, designGrid, dialogForm, el, empty, feedback, field, formGrid, grid, gridTable, link, navigation, navigationShortcut,
-  pageHeader, playerCapsule, playerNotice, progress, projectMark, projectShelf, recordCard, runBar, section, shellGuides, sidebarToggle, split, status, table} from "./components.js?v=1.0.0";
+import {alignmentIcon, albumCard, albumPreview, breadcrumbs, button, cell, checkbox, designGrid, dialogForm, el, empty, feedback, field, formGrid, grid, gridTable, link, navigation, navigationShortcut,
+  pageHeader, playerCapsule, playerNotice, progress, projectMark, projectShelf, recordCard, refreshAlbumCovers, runBar, section, shellGuides, sidebarToggle, split, status, table} from "./components.js?v=1.0.9";
 
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.0.9";
 const $ = id => document.getElementById(id);
 const workspace = $("workspace");
 const dialog = $("dialog");
@@ -17,14 +22,16 @@ const shellBars = new ResizeObserver(() => {
   measureRunBar();
   measureShellChrome();
   measureWorkspaceGrid();
+  if (dialog.open) measureWorkspaceGrid(dialog);
 });
 shellBars.observe(topbar);
 shellBars.observe(rail);
 shellBars.observe($("run-bar"));
+shellBars.observe(dialog);
 function measureShellChrome() {
   const size = node => `${Math.round(node.getBoundingClientRect().width)}×${Math.round(node.getBoundingClientRect().height)}`;
   for (const [node, label] of [[$("breadcrumbs"), "4c"], [document.querySelector(".search"), "3c"],
-      [$("refresh"), "1c"], [$("quick-jump"), "2c"], [$("design-toggle"), "2c"]]) {
+      [$("refresh"), "1c"], [$("quick-jump"), "1c"], [$("design-toggle"), "1c"], [$("theme-toggle"), "1c"], [$("cover-theme-toggle"), "1c"]]) {
     node.classList.add("shell-slot");
     node.dataset.measure = `${label} · ${size(node)}`;
   }
@@ -67,6 +74,7 @@ const nav = [["overview", "Home"], ["playlists", "Albums"],
 let toastTimer;
 let generation = 0;
 let refreshing = false;
+let lastCatalogRead = 0;
 const startingAlbums = new Set();
 const artifactCache = new Map();
 let designOn = false;
@@ -83,12 +91,17 @@ function applyDesignMode() {
   document.body.classList.toggle("design-mode", designOn);
   $("design-toggle").setAttribute("aria-checked", String(designOn));
   if ($("design-grid")) $("design-grid").hidden = !designOn;
+  dialog.querySelector("[data-dialog-design]")?.setAttribute("aria-checked", String(designOn));
 }
-$("design-toggle").onclick = () => {
+function toggleDesignMode() {
   designOn = !designOn;
   applyDesignMode();
   try { localStorage.setItem("forge-playlists-design-grid", designOn ? "on" : "off"); } catch { /* Keep session state. */ }
-};
+}
+document.addEventListener('test-layout-change', event => {
+  measureWorkspaceGrid(event.target.closest('dialog') || workspace);
+});
+$("design-toggle").onclick = toggleDesignMode;
 applyDesignMode();
 document.body.classList.toggle("rail-collapsed", railCollapsed);
 
@@ -173,7 +186,7 @@ playerBar.addEventListener("focusout", schedulePlayerCompact);
 dialog.addEventListener("close", () => {
   if (!dialog.open) {
     const wasQueue = dialog.dataset.view === "queue";
-    dialog.classList.remove("album-detail-dialog", "queue-dialog");
+    dialog.classList.remove("album-detail-dialog", "album-simple", "queue-dialog", "cover-theme-dialog");
     delete dialog.dataset.view;
     dialog.removeAttribute("aria-describedby");
     if (wasQueue && state.catalog) render();
@@ -216,14 +229,18 @@ async function refresh(sync = false) {
   refreshing = true;
   $("refresh").disabled = true;
   try {
-    state.catalog = await api(sync ? "/api/sync" : "/api/catalog", sync ? "POST" : "GET");
+    state.catalog = attachProgress(await api(sync ? "/api/sync" : "/api/catalog", sync ? "POST" : "GET"));
+    configureCoverShelves(state.catalog.projects);
+    lastCatalogRead = Date.now();
+    await refreshProgress();
     const current = new Set(state.catalog.cases.map(row => row.id));
     for (const id of state.selected) if (!current.has(id)) state.selected.delete(id);
     render();
   } catch (error) {
     if (state.catalog) toast(error.message);
+    else if (route()[0] === "report") workspace.replaceChildren(reportReader());
     else workspace.replaceChildren(empty("The library could not be loaded", error.message,
-      button("Try again", () => refresh(true))));
+      el("div", {class: "page-actions"}, button("Try again", () => refresh(true)), link("Open independent Demo", "/?mode=demo"))));
   } finally {
     refreshing = false;
     $("refresh").disabled = false;
@@ -231,14 +248,54 @@ async function refresh(sync = false) {
   }
 }
 
+async function refreshProgress() {
+  const [view, id] = route();
+  const latest = new Set(state.catalog.playlists.map(album => latestAlbumJob(state.catalog, album)?.id).filter(Boolean));
+  const jobs = state.catalog.jobs.filter(job => active.has(job.status) || (view === 'job' && job.id === id) ||
+    (!job.progress_snapshot && latest.has(job.id)));
+  try {
+    await Promise.all(jobs.map(async job => { const snapshot = await loadProgress(job); if (snapshot) job.progress_snapshot = snapshot; }));
+    state.connectionError = null;
+  } catch (error) { state.connectionError = error.message; }
+}
+
 async function refreshPlayer() {
   if (refreshing) return;
   refreshing = true;
   try {
     const [view, id] = route();
+    if (Date.now() - lastCatalogRead < 8000 && state.catalog.jobs.some(job => job.progress_snapshot)) {
+      await refreshProgress();
+      updatePlayer(state.catalog);
+      updateAlbumCards(state.catalog);
+      if (view === 'job') {
+        const job = state.catalog.jobs.find(row => row.id === id);
+        if (job) {
+          const panel = document.getElementById('test-run-progress');
+          panel?.replaceChildren(progressPanel(job));
+          if (state.connectionError) panel?.append(feedback([`Disconnected · ${state.connectionError}. Last progress retained.`]));
+          await pollTestView(job);
+          updateStepView(job);
+        }
+      }
+      return;
+    }
     const previous = state.catalog.jobs.find(row => row.id === id);
-    state.catalog = await api("/api/catalog");
+    state.catalog = attachProgress(await api("/api/catalog"));
+    configureCoverShelves(state.catalog.projects);
+    lastCatalogRead = Date.now();
+    await refreshProgress();
     updatePlayer(state.catalog);
+    updateAlbumCards(state.catalog);
+    if (view === "job" && document.querySelector(".test-browser")) {
+      const job = state.catalog.jobs.find(row => row.id === id);
+      if (job) {
+        document.getElementById("test-run-progress")?.replaceChildren(progressPanel(job));
+        await pollTestView(job);
+        updateStepView(job, true);
+      }
+      return;
+    }
     if (view === "job" && !dialog.open) {
       const job = state.catalog.jobs.find(row => row.id === id);
       if (JSON.stringify(previous) !== JSON.stringify(job)) {
@@ -263,7 +320,7 @@ function currentJob(data) {
 }
 
 function shell(data, view, id) {
-  const navState = {project: "library", shelf: "overview", collection: "playlists", playlist: "playlists", job: "runs"};
+  const navState = {project: "library", shelf: "overview", collection: "playlists", playlist: "playlists", job: "runs", report: "runs"};
   const running = data.jobs.filter(row => active.has(row.status)).length;
   const counts = {playlists: data.playlists.filter(row => row.stored).length, library: data.cases.length,
     runs: running || data.jobs.length};
@@ -287,6 +344,7 @@ function shell(data, view, id) {
       href: to("shelf", shelf.id), glyph: "shelf"})), view === "shelf" ? id : null)] : []));
   $("shelves").hidden = !data.shelves.length;
   $("host").replaceChildren(navigationShortcut("Quick jump", openQuickJump),
+    ...(demoMode ? [link("Demo scenarios", "/?mode=demo#demo", {variant: "demo-scenarios-link"})] : []),
     el("div", {class: "rail-demo"}, el("span", {class: "demo-tag", title: `Design Studio V${APP_VERSION}`}, `V${APP_VERSION}`), link(demoMode ? "Demo · Switch to local" : "Local · Open Demo", demoMode ? "/" : "/?mode=demo")));
   $("breadcrumbs").replaceChildren(breadcrumbs(routeBreadcrumbs(data, view, id)));
   $("quick-jump").disabled = false;
@@ -295,6 +353,11 @@ function shell(data, view, id) {
 }
 
 function updatePlayer(data) {
+  const albumProgress = document.getElementById('album-dialog-progress');
+  if (albumProgress && dialog.open) {
+    const albumJob = data.jobs.find(row => row.id === albumProgress.dataset.jobId);
+    if (albumJob) albumProgress.replaceChildren(progressPanel(albumJob, {compact: true}));
+  }
   const job = currentJob(data) || data.jobs.find(row => row.id === state.playerJob);
   const waiting = upcomingJobs(data);
   if (job) state.playerJob = job.id;
@@ -364,7 +427,7 @@ function updateQueueDialog(data) {
     return el("div", {class: `queue-row theme-${project?.theme || "mint"}`, "data-queued-album": job.playlist || ""},
       projectMark(project || {title: "Selected cases", icon: "▦"}),
       el("div", {class: "queue-row-copy"}, el("strong", {}, job.label),
-        el("span", {class: "subtext"}, `${index != null ? `${index === 0 ? "Next" : index + 1} · ` : ""}${project?.title || "Acceptance run"} · ${job.cases.length} cases`)),
+        el("span", {class: "subtext"}, `${index != null ? `${index === 0 ? "Next" : index + 1} · ` : ""}${project?.title || "Acceptance run"} · ${job.cases.length} steps`)),
       remove || status(job.status));
   };
   body.replaceChildren(el("section", {}, el("h3", {}, playing && active.has(playing.status) ? "Now running" : "Last run"),
@@ -384,7 +447,8 @@ async function removeFromQueue(job) {
 
 function routeBreadcrumbs(data, view, id) {
   const home = {label: "Home", href: to("overview")};
-  const pages = {playlists: "Albums", library: "Case library", runs: "Runs"};
+  if (view === "report") return [home, {label: "Runs", href: to("runs")}, {label: "Test report"}];
+  const pages = {playlists: "Albums", library: "Case library", runs: "Runs", demo: "Demo scenarios"};
   if (view === "overview") return [{label: "Home"}];
   if (pages[view]) return [home, {label: pages[view]}];
   if (view === "shelf") return [home, {label: data.shelves.find(row => row.id === id)?.title || "Unavailable shelf"}];
@@ -471,6 +535,62 @@ function openQuickJump() {
 }
 $("quick-jump").onclick = openQuickJump;
 
+function coverThemeSummary() {
+  if (currentCoverTheme() !== 'auto') return `${coverThemes.find(row => row.id === currentCoverTheme()).name} applied to all albums.`;
+  const shelves = (state.catalog?.projects || []).map(project =>
+    `${project.title} · ${coverThemes.find(row => row.id === defaultCoverTheme(project.id)).name}`);
+  return shelves.length ? shelves.join('   /   ') : 'Different styles for each shelf.';
+}
+function updateCoverThemeControls() {
+  const selected = currentCoverTheme();
+  const theme = coverThemes.find(row => row.id === selected);
+  $('cover-theme-toggle').title = `Album cover themes · ${theme?.name || 'Auto by shelf'}`;
+  for (const control of dialog.querySelectorAll('[data-cover-theme-option]')) {
+    const active = control.dataset.coverThemeOption === selected;
+    control.setAttribute('aria-pressed', String(active));
+    control.querySelector('.cover-theme-state').textContent = active ? 'Selected' : control.dataset.coverThemeOption === 'auto' ? 'Use shelf defaults' : 'Use for all albums';
+  }
+  const feedback = dialog.querySelector('#cover-theme-feedback');
+  if (feedback) feedback.textContent = coverThemeSummary();
+}
+function openCoverThemes() {
+  if (dialog.open) return;
+  const close = button('×', () => dialog.close(), {variant: 'subtle dialog-close'});
+  close.setAttribute('aria-label', 'Close cover themes');
+  const automatic = button('', () => setCoverTheme('auto'), {variant: 'cover-theme-option cover-auto-option'});
+  automatic.dataset.coverThemeOption = 'auto'; automatic.setAttribute('aria-label', 'Use automatic shelf cover themes');
+  automatic.setAttribute('aria-pressed', String(currentCoverTheme() === 'auto'));
+  automatic.append(el('span', {class: 'cover-theme-name'}, 'Auto by shelf'),
+    el('span', {class: 'cover-theme-description'}, 'Different styles for each shelf. Ten covers in every set.'),
+    el('span', {class: 'cover-theme-state'}, currentCoverTheme() === 'auto' ? 'Selected' : 'Use shelf defaults'));
+  const choices = coverThemes.map(theme => {
+    const choice = button('', () => setCoverTheme(theme.id), {variant: 'cover-theme-option'});
+    choice.dataset.coverThemeOption = theme.id;
+    choice.setAttribute('aria-label', `Use ${theme.name} cover theme`);
+    choice.setAttribute('aria-pressed', String(currentCoverTheme() === theme.id));
+    choice.append(el('span', {class: 'cover-theme-samples', 'aria-hidden': 'true'}, theme.images.map(src =>
+      el('img', {src, alt: '', width: 768, height: 768, decoding: 'async', loading: 'lazy'}))),
+      el('span', {class: 'cover-theme-name'}, theme.name, el('span', {class: 'cover-theme-count'}, `${theme.images.length} covers`)),
+      el('span', {class: 'cover-theme-description'}, theme.description),
+      el('span', {class: 'cover-theme-state'}, currentCoverTheme() === theme.id ? 'Selected' : 'Use for all albums'));
+    return choice;
+  });
+  dialog.classList.add('cover-theme-dialog');
+  dialog.removeAttribute('aria-describedby');
+  dialog.replaceChildren(el('div', {class: 'dialog-header'}, el('h2', {id: 'dialog-title'}, 'Album cover themes'), close),
+    el('div', {class: 'cover-theme-body'}, el('p', {class: 'cover-theme-intro'}, 'Six built-in sets, sixty original covers. Start with shelf defaults or choose one look for every album.'),
+      automatic, el('div', {class: 'cover-theme-options', role: 'group', 'aria-label': 'Built-in cover themes'}, choices),
+      el('p', {class: 'cover-theme-feedback', id: 'cover-theme-feedback', role: 'status'}, coverThemeSummary())));
+  dialog.setAttribute('aria-labelledby', 'dialog-title');
+  hideRailTooltip();
+  dialog.showModal();
+  dialog.querySelector('[aria-pressed="true"]').focus();
+}
+$('cover-theme-toggle').onclick = openCoverThemes;
+window.addEventListener('cover-theme-change', () => { refreshAlbumCovers(); updateCoverThemeControls(); });
+updateCoverThemeControls();
+
+
 function drawAlbum(data, item, project = null) {
   project ||= data.projects.find(row => row.id === albumProject(data, item)) || {title: "Shared album", theme: "mint"};
   const latest = latestAlbumJob(data, item);
@@ -496,33 +616,60 @@ function openAlbumDialog(item) {
   close.setAttribute("aria-label", "Close album details");
   const play = button(running ? "Running" : queued ? `Queued · ${waiting.indexOf(queued) + 1}` : currentJob(data) ? "Add to queue" : "Play album", () => { dialog.close(); startAlbum(item); },
     {variant: "primary", glyph: "run", disabled: !!running || !!queued || !members.length});
-  const edit = item.stored && button("Add cases", () => { dialog.close(); editDialog({item}); });
-  const manage = link("Manage entries", to("playlist", item.id), {variant: "text-link"});
+  const manage = link("Manage album", to("playlist", item.id), {variant: "text-link"});
   manage.addEventListener("click", () => dialog.close());
-  const result = latest && link("View latest run", to("job", running?.id || latest.id), {variant: "text-link"});
+  const result = latest && link("View run", to("job", running?.id || latest.id), {variant: "text-link"});
   result?.addEventListener("click", () => dialog.close());
+  const overview = el("section", {id: "album-overview", class: "album-dialog-hero", "aria-label": "Album overview"},
+    el("div", {class: "album-cover-cell", "data-grid-span": 2}, albumPreview(item, project)),
+    el("div", {class: "album-dialog-summary", "data-grid-span": 6},
+      el("span", {class: "album-dialog-project"}, project.icon || "📦", " ", project.title),
+      el("p", {id: "album-dialog-description"}, item.description || item.goal || "A saved selection of acceptance steps."),
+      el("div", {class: "album-dialog-facts"}, el("span", {}, `${members.length} execution steps`), el("span", {}, item.engine || "Mixed checks"),
+        !latest && status("not_run")),
+      el("p", {class: "subtext"}, `Environment · ${item.environment || "Project default"}`), result,
+      latest && el("div", {id: "album-dialog-progress", class: "album-progress-summary", "data-job-id": latest.id}, progressPanel(latest, {compact: true}))));
+  const tests = el("section", {id: "album-tests", class: "album-tests-pane", "aria-label": "Album tests", hidden: true});
+  const overviewTab = button("Overview", () => selectPane(false));
+  const testsTab = button("Tests", () => selectPane(true));
+  const dialogDesign = button("", toggleDesignMode, {variant: "secondary design-toggle album-dialog-design"});
+  dialogDesign.setAttribute('role', 'switch'); dialogDesign.setAttribute('aria-label', 'Album design alignment grid');
+  dialogDesign.setAttribute('aria-checked', String(designOn)); dialogDesign.dataset.dialogDesign = ''; dialogDesign.dataset.gridSpan = '1';
+  dialogDesign.title = 'Show alignment grid';
+  dialogDesign.append(alignmentIcon());
+  for (const [control, pane] of [[overviewTab, 'album-overview'], [testsTab, 'album-tests']]) {
+    control.dataset.gridSpan = '2'; control.setAttribute('aria-controls', pane);
+    control.setAttribute('aria-label', control.textContent);
+  }
+  function selectPane(showTests) {
+    overview.hidden = showTests; tests.hidden = !showTests;
+    overviewTab.setAttribute('aria-pressed', String(!showTests));
+    testsTab.setAttribute('aria-pressed', String(showTests));
+    if (showTests && !tests.childNodes.length) tests.append(testBrowser({album: item, compact: true, onNavigate: () => dialog.close()}));
+    measureWorkspaceGrid(dialog);
+  }
+  overviewTab.setAttribute('aria-pressed', 'true'); testsTab.setAttribute('aria-pressed', 'false');
+  close.dataset.gridSpan = '1'; play.dataset.gridSpan = '2'; manage.dataset.gridSpan = '6';
   dialog.classList.remove("queue-dialog");
   delete dialog.dataset.view;
-  dialog.classList.add("album-detail-dialog");
-  dialog.replaceChildren(el("div", {class: "dialog-header"}, el("h2", {id: "dialog-title"}, item.title), close),
+  dialog.classList.add("album-detail-dialog", "album-simple");
+  dialog.replaceChildren(el("div", {class: "album-dialog-layout"},
+    el("div", {class: "dialog-header album-dialog-grid-row"}, el("h2", {id: "dialog-title", "data-grid-span": 7}, item.title), close),
     el("div", {class: "album-dialog-body"},
-      el("div", {class: "album-dialog-hero"}, albumPreview(item, project),
-        el("div", {class: "album-dialog-summary"}, el("span", {class: "album-dialog-project"}, project.icon || "📦", " ", project.title),
-          el("p", {id: "album-dialog-description"}, item.description || item.goal || "A saved selection of acceptance cases."),
-          el("div", {class: "album-dialog-facts"}, el("span", {}, `${members.length} cases`),
-            el("span", {}, item.engine || "Mixed checks"), status(queued ? "queued" : running ? "running" : latest?.status || "not_run")),
-          el("p", {class: "subtext"}, `Environment · ${item.environment || "Project default"}`),
-          result)),
-      el("section", {class: "album-dialog-cases"}, el("h3", {}, "Acceptance cases"),
-        members.length ? table(["Case", "Kind", "Latest status"], members.map(row => [el("span", {}, nameOf(row)), row.kind,
-          status(latest?.cases.find(entry => entry.id === row.id)?.status || row.last?.status)]), "Album acceptance cases") :
-          empty("No cases yet", "Add cases to this album to run acceptance."))),
-    el("div", {class: "album-dialog-footer"}, manage, el("div", {}, edit, play)));
+      el("nav", {class: "album-tabs album-dialog-grid-row", "aria-label": "Album controls"}, overviewTab, testsTab, dialogDesign), overview, tests),
+    el("div", {class: "album-dialog-footer album-dialog-grid-row"}, manage, play),
+    el("div", {class: "album-dialog-guides", "aria-hidden": "true"}, Array.from({length: 8}, () => el("span"))),
+    el("div", {class: "album-dialog-grid-caption", "aria-hidden": "true"}, "8 columns · 16px gutter · 8px baseline")));
   dialog.setAttribute("aria-labelledby", "dialog-title");
   dialog.setAttribute("aria-describedby", "album-dialog-description");
   hideRailTooltip();
   dialog.showModal();
+  measureWorkspaceGrid(dialog);
   close.focus();
+  if (latest) loadProgress(latest).then(snapshot => {
+    const target = document.getElementById('album-dialog-progress');
+    if (snapshot && dialog.open && target?.dataset.jobId === latest.id) {latest.progress_snapshot = snapshot; target.replaceChildren(progressPanel(latest, {compact: true}));}
+  }).catch(error => { const target = document.getElementById('album-dialog-progress'); if (dialog.open && target?.dataset.jobId === latest.id) target.append(el('small', {class: 'subtext'}, `Disconnected · ${error.message}. Last progress retained.`)); });
 }
 
 function albumProject(data, item) {
@@ -634,23 +781,29 @@ function runRow(job) {
   return el("a", {class: "run-grid-row", href: to("job", job.id)},
     el("div", {class: "run-row-copy run-grid-slot", "data-grid-span": 8}, el("strong", {}, job.label),
       el("small", {}, timestamp(job.started_at || job.submitted_at))),
-    el("div", {class: "run-grid-slot", "data-grid-span": 2}, el("div", {class: "grid-value number-slot", "data-grid-content": ""}, count(job.cases.length, "case"))),
+    el("div", {class: "run-grid-slot", "data-grid-span": 2}, el("div", {class: "grid-value number-slot", "data-grid-content": ""}, count(job.cases.length, "step"))),
     el("div", {class: "run-grid-slot", "data-grid-span": 2}, el("div", {class: "grid-value status-slot", "data-grid-content": ""}, status(job.status))));
 }
 
-function measureWorkspaceGrid() {
+function measureWorkspaceGrid(root = workspace) {
   // Give every cell in a row the same 16px-rounded frame so centered 32px values stay on the 8px baseline, including wrapped case names.
-  const rows = [...workspace.querySelectorAll(".grid-table tbody tr")];
+  const rows = [...root.querySelectorAll(".grid-table tbody tr")];
   rows.forEach(row => row.style.removeProperty("--run-row-height"));
   const heights = rows.map(row => Math.ceil(Math.max(...[...row.querySelectorAll(".grid-table-cell")]
     .map(cell => cell.getBoundingClientRect().height)) / 16) * 16);
   rows.forEach((row, index) => row.style.setProperty("--run-row-height", `${heights[index]}px`));
-  for (const node of workspace.querySelectorAll("[data-grid-span]")) {
-    const {width, height} = node.getBoundingClientRect();
-    node.dataset.measure = node.dataset.gridSpan === "1" ? `1c ${Math.round(width)}×${Math.round(height)}` :
-      `${node.dataset.gridSpan}c · ${Math.round(width)}×${Math.round(height)} px`;
+  if (root === dialog && dialog.classList.contains('album-simple')) {
+    const track = parseFloat(getComputedStyle(dialog.querySelector('.album-dialog-grid-row')).gridTemplateColumns);
+    if (Number.isFinite(track)) dialog.style.setProperty('--album-test-column', `${track}px`);
   }
-  for (const node of workspace.querySelectorAll("[data-grid-content]")) {
+  for (const node of root.querySelectorAll("[data-grid-span]")) {
+    const {width, height} = node.getBoundingClientRect();
+    const styles = getComputedStyle(node);
+    const renderedSpan = [styles.gridColumnEnd, styles.gridColumnStart].map(value => value.match(/^span (\d+)$/)?.[1]).find(Boolean) || node.dataset.gridSpan;
+    node.dataset.measure = renderedSpan === "1" ? `1c ${Math.round(width)}×${Math.round(height)}` :
+      `${renderedSpan}c · ${Math.round(width)}×${Math.round(height)} px`;
+  }
+  for (const node of root.querySelectorAll("[data-grid-content]")) {
     const {width, height} = node.getBoundingClientRect();
     node.dataset.measure = node.dataset.contentSpan === "1" ? `1c ${Math.round(width)}×${Math.round(height)}` :
       `${Math.round(width)}×${Math.round(height)} px`;
@@ -681,7 +834,7 @@ function selections() {
 function caseTable(rows, label = "Cases") {
   if (!rows.length) return empty("No matching cases", "Clear the filters or check the project catalog.");
   return gridTable([{label: "Select", span: 1, type: "select"}, {label: "Case", span: 6}, {label: "Kind", span: 2, type: "kind"},
-    {label: "Latest status", span: 2, type: "status"}, {label: "Time", span: 1, type: "number"}], rows.map(row => {
+    {label: "Status", span: 2, type: "status"}, {label: "Time", span: 1, type: "number"}], rows.map(row => {
     const check = checkbox(`Select ${nameOf(row)}`, state.selected.has(row.id), checked => {
       if (checked) state.selected.add(row.id);
       else state.selected.delete(row.id);
@@ -691,7 +844,7 @@ function caseTable(rows, label = "Cases") {
     });
     return [check, el("div", {class: "case-cell"}, el("span", {class: "case-name"}, nameOf(row)),
       el("code", {class: "case-id"}, row.id)), row.kind, row.last?.job ?
-      el("a", {href: to("job", row.last.job), title: "View latest run"}, status(row.last.status)) :
+      el("a", {href: to("job", row.last.job), title: "View run"}, status(row.last.status)) :
       status("not_run"), duration(row.last?.seconds)];
   }), label);
 }
@@ -749,7 +902,8 @@ function playlist(data, id) {
     {variant: "primary", glyph: "run", disabled: !members.length || data.jobs.some(job => job.playlist === item.id && active.has(job.status))})];
   if (item.stored) actions.unshift(button("Add entries", () => editDialog({item}), {glyph: "plus"}));
   const summary = item.shelf ? data.shelves.find(shelf => shelf.id === item.shelf)?.title : null;
-  const entries = item.stored ? section("Saved entries", item.entries.length ? table(["Entry", "Type", "Actions"],
+  const entries = item.stored ? section("Saved entries", item.entries.length ? gridTable([
+    {label: "Entry", span: 5}, {label: "Type", span: 1, type: "kind"}, {label: "Actions", span: 1, type: "action"}],
     item.entries.map(entry => [el("code", {class: "breakable"}, entry.case || entry.profile),
       entry.case ? "Case" : "Profile", button("Remove", () => removeDialog(item, entry), {variant: "subtle"})]), "Playlist entries") :
     empty("No entries", "Add cases or live profiles to this playlist.")) : null;
@@ -759,19 +913,23 @@ function playlist(data, id) {
     ["Storage", item.stored ? "Saved album" : "Derived profile"], ["Shelf", summary || "Library"],
     ["Environment", item.environment || "Project default"], ["Resolved members", members.length],
   ];
-  const details = el("div", {class: "panel"}, metadata.map(([label, value]) =>
-    el("div", {class: "list-row"}, el("span", {class: "subtext"}, label),
-      el("strong", {class: "breakable"}, value))));
-  const resolved = members.length ?
-    table(["Case", "Kind", "Latest status"], members.map(row => [
-      el("div", {class: "case-cell"}, el("span", {}, nameOf(row)), el("code", {class: "case-id"}, row.id)),
-      row.kind, status(row.last?.status),
-    ]), "Resolved cases") : empty("No runnable cases", "Check the project catalog or add entries.");
+  const details = el("dl", {class: "panel album-details-panel"}, metadata.map(([label, value]) =>
+    el("div", {class: "album-details-row"}, el("dt", {class: "subtext"}, label),
+      el("dd", {class: "breakable"}, value))));
+  const resolved = members.length ? gridTable([
+    {label: "Case", span: 5}, {label: "Kind", span: 1, type: "kind"}, {label: "Status", span: 1, type: "status"}],
+    members.map(row => [el("div", {class: "case-cell"}, el("span", {}, nameOf(row)), el("code", {class: "case-id"}, row.id)),
+      row.kind, status(row.last?.status)]), "Execution steps") : empty("No runnable cases", "Check the project catalog or add entries.");
+  const tests = el("details", {class: "album-test-disclosure"}, el("summary", {}, "Tests"), el("div", {class: "album-tests-content"}));
+  tests.addEventListener('toggle', () => {
+    const content = tests.querySelector('.album-tests-content');
+    if (tests.open && !content.childNodes.length) content.append(testBrowser({album: item}));
+  });
   const parent = collectionProject(data, albumProject(data, item) || "shared");
   return [pageHeader(item.title, item.goal || item.id, actions,
     parent ? {label: `${parent.title} albums`, href: to("collection", parent.id)} : {label: "All albums", href: to("playlists")}),
     item.problem ? feedback([item.problem]) : null,
-    split([entries, section("Resolved cases", resolved)], section("Details", details))];
+    el("div", {class: "album-management"}, split([entries, section("Execution steps", resolved)], section("Details", details), 7), tests)];
 }
 
 function runs(data) {
@@ -783,16 +941,29 @@ function runs(data) {
   section("Now running", ongoing.length ? el("div", {class: "run-list"}, ongoing.map(runRow)) :
     empty("Queue is empty", "New runs appear here until they finish.")),
   waiting.length ? section(`Up next · ${waiting.length}`, el("div", {class: "run-list"}, waiting.map(runRow))) : null,
-  section("Run history", finished.length ? gridTable([{label: "Run", span: 6}, {label: "Started", span: 3}, {label: "Cases", span: 1, type: "number"}, {label: "Status", span: 2, type: "status"}],
+  section("Run history", finished.length ? gridTable([{label: "Run", span: 6}, {label: "Started", span: 3}, {label: "Steps", span: 1, type: "number"}, {label: "Status", span: 2, type: "status"}],
     finished.map(job => [link(job.label, to("job", job.id)), timestamp(job.started_at || job.submitted_at),
       job.cases.length, status(job.status)]), "Run history") :
     empty("No finished runs", "Finished runs and their logs appear here."))];
 }
 
+function demoScenarios() {
+  if (!demoMode) return empty('Demo only', 'Open the explicit independent Demo to view frontend acceptance scenarios.');
+  return [pageHeader('Frontend acceptance scenarios', 'Controlled fixtures only. No local test commands are executed.'),
+    el('div', {class:'demo-scenario-grid'}, scenarioDefinitions.map(item=>el('article',{class:'panel demo-scenario-card'},
+      el('h2',{},item.title),el('p',{},item.description),link('Open scenario',`/?mode=demo&scenario=${encodeURIComponent(item.id)}#job/scenario-${encodeURIComponent(item.id)}`,{variant:'button secondary'}))))];
+}
+
 function jobPage(data, id) {
   const job = data.jobs.find(item => item.id === id);
   if (!job) return missing("Run");
-  const complete = job.cases.filter(item => !active.has(item.status)).length;
+  if (!job.progress_snapshot) loadProgress(job).then(snapshot => {
+    if (!snapshot) return;
+    job.progress_snapshot = snapshot;
+    if (route()[0] === 'job' && route()[1] === id) document.getElementById('test-run-progress')?.replaceChildren(progressPanel(job));
+    updatePlayer(state.catalog);
+  }).catch(error => { state.connectionError = error.message; });
+  const complete = jobProgress(job).completed;
   const logId = state.log?.job === id ? state.log.case : (job.cases.find(row => row.status === "running") || job.cases.find(row => !active.has(row.status)) || job.cases[0])?.id;
   const cancel = button("Cancel run", () => confirmDialog("Cancel run?", "This interrupts the active cases.",
     "Cancel run", async () => { await api(`/api/jobs/${encodeURIComponent(id)}/cancel`, "POST"); await refresh(); }),
@@ -806,20 +977,57 @@ function jobPage(data, id) {
   job.reason ? feedback([job.reason]) : null,
   job.warnings?.length ? feedback(job.warnings) : null,
   job.acceptance ? feedback([`Acceptance evidence: ${job.acceptance.status}. ${(job.acceptance.reasons || []).join(" ")}`]) : null,
-  el("div", {class: "run-progress-grid"},
-    el("div", {class: "run-grid-slot", "data-grid-span": 2}, el("div", {class: "grid-value status-slot", "data-grid-content": ""}, status(job.status))),
-    el("div", {class: "run-grid-slot", "data-grid-span": 8}, progress(complete, job.cases.length, "Case completion")),
-    el("div", {class: "run-grid-slot", "data-grid-span": 2}, el("div", {class: "grid-value number-slot", "data-grid-content": ""}, `${complete} / ${job.cases.length} complete`))),
-  split(section("Case results", gridTable([{label: "Case", span: 4}, {label: "Status", span: 2, type: "status"}, {label: "Time", span: 1, type: "number"}, {label: "Log", span: 1}], job.cases.map(row => [
+  el('div', {id: 'test-run-progress'}, progressPanel(job)),
+  state.connectionError && feedback([`Connection interrupted · ${state.connectionError}. Last progress retained.`]),
+  testBrowser({job}),
+  el('details', {class: 'step-results'}, el('summary', {}, `Execution steps & step logs · ${job.cases.length}`),
+  split(el("section", {id:"step-results"}, el("h2", {}, "Step results"), gridTable([{label: "Case", span: 4}, {label: "Status", span: 2, type: "status"}, {label: "Time", span: 1, type: "number"}, {label: "Log", span: 1}], job.cases.map(row => [
     el("div", {class: "case-cell"}, el("span", {}, nameOf(row)), el("code", {class: "case-id"}, row.id),
-      row.reason && el("p", {class: "subtext breakable"}, row.reason),
-      row.counts && el("small", {class: "subtext"}, Object.entries(row.counts).filter(([, value]) => typeof value === "number").map(([key, value]) => `${value} ${key}`).join(" · "))), status(row.status),
+      el("p", {class: "subtext breakable", "data-step-reason":"", hidden:!row.reason}, row.reason || ""),
+      el('a', {class:'text-link', 'data-step-report':'', hidden:!safeHref(job.progress_snapshot?.steps?.find(step=>step.id===row.id)?.report_href), href:safeHref(job.progress_snapshot?.steps?.find(step=>step.id===row.id)?.report_href) || '#', target:'_blank', rel:'noopener'}, 'Step report'),
+      el("small", {class: "subtext", "data-step-counts":"", hidden:!row.counts}, Object.entries(row.counts || {}).filter(([, value]) => typeof value === "number").map(([key, value]) => `${value} ${key}`).join(" · "))), status(row.status),
     duration(row.seconds), button("Log", () => {
       state.log = {job: id, case: row.id, text: ""};
       render();
     }, {variant: "subtle"})]), "Case results")),
-  section("Output", el("div", {class: "panel"}, logs))),
+  section("Step output", el("div", {class: "panel"}, logs)))),
   !demoMode && section("Artifacts", el("div", {class: "panel", id: "job-artifacts"}, artifactCache.has(id) ? artifactGallery(artifactCache.get(id)) : "Loading artifacts…"))];
+}
+
+function updateAlbumCards(data) {
+  for (const card of workspace.querySelectorAll('[data-album-id]')) {
+    const job=data.jobs.find(row=>row.playlist===card.dataset.albumId), item=data.playlists.find(row=>row.id===card.dataset.albumId);
+    if (!job || !item) continue;
+    const count=card.querySelector('.album-case-count'), label=jobProgress(job).label;
+    count.textContent=label;count.title=label;
+    let result=card.querySelector('.album-result');
+    if (!result) {result=link('',to('job',job.id),{variant:'album-result'});card.querySelector('.album-facts > .status')?.replaceWith(result);}
+    result.href=to('job',job.id);result.replaceChildren(status(job.status));result.setAttribute('aria-label',`View ${item.title} ${job.status} result`);
+    const play=card.querySelector('.album-play');play.disabled=active.has(job.status)||startingAlbums.has(item.id)||!item.members.length;
+    play.title=active.has(job.status)?job.status:`Play ${item.title}`;
+    if (play.dataset.runState!==job.status) {
+      play.dataset.runState=job.status;
+      play.replaceChildren(job.status==='running'?el('span',{class:'equalizer','aria-hidden':'true'},el('i'),el('i'),el('i')):el('span',{'aria-hidden':'true'},job.status==='queued'?'≡':'▶'));
+    }
+  }
+}
+
+function updateStepView(job, artifacts = false) {
+  if (route()[0] !== "job" || route()[1] !== job.id) return;
+  const rows = document.querySelectorAll('#step-results tbody tr');
+  job.cases.forEach((step,index) => {
+    const row=rows[index]; if (!row) return;
+    row.cells[1].querySelector('.grid-value').replaceChildren(status(step.status));
+    row.cells[2].querySelector('.grid-value').replaceChildren(duration(step.seconds));
+    const reason=row.querySelector('[data-step-reason]'); reason.hidden=!step.reason; reason.textContent=step.reason || '';
+    const counts=row.querySelector('[data-step-counts]'); counts.hidden=!step.counts; counts.textContent=Object.entries(step.counts || {}).filter(([,value])=>typeof value==='number').map(([key,value])=>`${value} ${key}`).join(' · ');
+    const report=row.querySelector('[data-step-report]'), href=safeHref(job.progress_snapshot?.steps?.find(item=>item.id===step.id)?.report_href);
+    report.hidden=!href; if (href) report.href=href;
+  });
+  const cancel=[...workspace.querySelectorAll('button')].find(node=>node.textContent==='Cancel run'); if (cancel) cancel.disabled=!active.has(job.status);
+  const selected=state.log?.job===job.id ? state.log.case : job.cases[0]?.id;
+  if (selected) updateLog(job.id,selected,generation);
+  if (artifacts && !demoMode) updateArtifacts(job.id,generation);
 }
 
 function artifactGallery(items) {
@@ -836,8 +1044,9 @@ function artifactGallery(items) {
 async function updateArtifacts(job, pass) {
   try {
     const data = await api(`/api/jobs/${encodeURIComponent(job)}/artifacts`);
+    const changed=JSON.stringify(artifactCache.get(job))!==JSON.stringify(data.artifacts);
     artifactCache.set(job, data.artifacts);
-    if (pass !== generation || !$("job-artifacts")) return;
+    if (!changed || pass !== generation || !$("job-artifacts")) return;
     $("job-artifacts").replaceChildren(artifactGallery(data.artifacts));
   } catch (error) {
     if (pass === generation && $("job-artifacts")) $("job-artifacts").textContent = error.message;
@@ -870,17 +1079,17 @@ function render() {
   const [view, id] = route();
   generation += 1;
   shell(data, view, id);
-  const views = {overview: () => overview(data), shelf: () => overview(data, id),
+  const views = {demo: () => demoScenarios(), overview: () => overview(data), shelf: () => overview(data, id),
     library: () => library(data), project: () => library(data, id), playlists: () => playlists(data),
-    playlist: () => playlist(data, id), collection: () => collection(data, id), runs: () => runs(data), job: () => jobPage(data, id)};
+    playlist: () => playlist(data, id), collection: () => collection(data, id), runs: () => runs(data), job: () => jobPage(data, id), report: () => reportReader(id)};
   workspace.classList.toggle("case-library-view", ["library", "project"].includes(view));
-  workspace.classList.toggle("grid-view", ["runs", "job", "library", "project"].includes(view));
+  workspace.classList.toggle("grid-view", ["runs", "job", "library", "project", "playlist"].includes(view));
   workspace.classList.toggle("runs-view", ["runs", "job"].includes(view));
   workspace.classList.toggle("shelf-view", ["overview", "shelf"].includes(view));
   workspace.replaceChildren(...[Object.hasOwn(views, view) ? views[view]() : missing("View")].flat(Infinity).filter(Boolean), designGrid(designOn));
-  if (["runs", "job", "library", "project"].includes(view)) {
+  if (["runs", "job", "library", "project", "playlist"].includes(view)) {
     for (const section of workspace.querySelectorAll(".section")) {
-      const span = section.closest(".span-8") ? 8 : section.closest(".span-4") ? 4 : 12;
+      const span = Number(section.closest(".grid-cell")?.dataset.gridSpan) || 12;
       section.querySelector(".section-head").dataset.gridSpan = span;
       const frame = section.querySelector(".empty, .panel");
       if (frame) frame.dataset.gridSpan = span;
@@ -988,13 +1197,12 @@ document.addEventListener("keydown", event => {
 refresh();
 setInterval(() => {
   if (state.catalog && currentJob(state.catalog)) {
-    if (dialog.open || workspace.contains(document.activeElement)) refreshPlayer();
-    else refresh();
+    refreshPlayer();
   }
 }, 1200);
 setInterval(() => {
   if (state.catalog && !currentJob(state.catalog) && !dialog.open) {
-    if (route()[0] === "job" && workspace.contains(document.activeElement)) refreshPlayer();
+    if (["job", "report"].includes(route()[0])) refreshPlayer();
     else if (!workspace.contains(document.activeElement)) refresh();
   }
 }, 8000);

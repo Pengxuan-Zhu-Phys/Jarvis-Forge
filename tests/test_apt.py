@@ -1,124 +1,62 @@
-"""Public package CLI contracts for the single Spack backend."""
-
+"""Package CLI vocabulary, read-only queries and explicit profile boundaries."""
 import json
 import pytest
 from jarvis_forge.cli import main
 
-pytestmark = pytest.mark.usefixtures("linux_apt")
+pytestmark=pytest.mark.usefixtures('linux_apt')
 
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "",
-        "list",
-        "search",
-        "show",
-        "install",
-        "reinstall",
-        "remove",
-        "autoremove",
-        "update",
-        "upgrade",
-        "full-upgrade",
-        "edit-sources",
-        "satisfy",
-        "env",
-        "import",
-        "switch",
-        "profile",
-        "sources",
-        "check",
-        "compilers",
-        "shell-init",
-    ],
-)
-def test_apt_help(command, capsys):
-    assert main(["apt", *([command] if command else []), "-h"]) == 0
-    out = capsys.readouterr().out
-    assert "Usage: jforge apt" in out and "Show this message and exit." in out
-    assert "\x1b[" not in out
-
-
-def test_apt_help_displays_current_profile_commands(tmp_path, capsys):
-    args = ["--home", str(tmp_path / "forge"), "apt"]
-    assert main([*args, "-h"]) == 0
-    output = capsys.readouterr().out
-    assert "switch" not in output
-    assert main([*args, "--json"]) == 0
-    commands = json.loads(capsys.readouterr().out)["commands"]
-    assert "profile" in commands
-    assert not {"switch", "profiles", "use", "create"}.intersection(commands)
-    assert main([*args, "switch", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["command"] == "apt switch"
-
-
-@pytest.mark.parametrize(
-    "args",
-    [
-        ["list"],
-        ["list", "--available"],
-        ["search", "linear"],
-        ["show", "eigen"],
-        ["edit-sources"],
-        ["install", "eigen", "--dry-run"],
-        ["satisfy", "eigen>=3.4", "--dry-run"],
-        ["switch", "--archived"],
-        ["profile"],
-    ],
-)
-def test_queries_and_dry_runs_are_offline(tmp_path, capsys, args):
-    home = tmp_path / "absent"
-    assert main(["--home", str(home), "apt", *args, "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["ok"]
+@pytest.mark.parametrize('command',['','list','search','show','install','remove','autoremove','update','upgrade','sources'])
+def test_apt_help(command,capsys,tmp_path):
+    home=tmp_path/'absent'
+    assert main(['--home',str(home),'apt',*([command] if command else []),'-h'])==0
+    out=capsys.readouterr().out
+    assert 'Usage: jforge apt' in out and '\x1b[' not in out
     assert not home.exists()
 
+@pytest.mark.parametrize('command,hint',[('reinstall','install'),('full-upgrade','upgrade'),('edit-sources','sources'),
+    ('satisfy','install'),('env','profile show'),('import','profile create'),('switch','profile use'),
+    ('profile','profile'),('check','install'),('compilers','profile show'),('shell-init','shell-init')])
+def test_legacy_commands_error_with_replacement(command,hint,tmp_path,capsys):
+    home=tmp_path/'absent'
+    assert main(['--home',str(home),'--json','apt',command])==2
+    value=json.loads(capsys.readouterr().out)
+    assert hint in value['error']['hint']
+    assert not home.exists()
 
-def test_apt_list_defaults_to_installed_packages(tmp_path, capsys, monkeypatch):
+def test_exact_package_verbs_and_offline_queries(tmp_path,capsys):
+    home=tmp_path/'absent';args=['--home',str(home),'--json','apt']
+    assert main(args)==0
+    assert set(json.loads(capsys.readouterr().out)['commands'])=={'list','search','show','install','remove','autoremove','update','upgrade','sources'}
+    for query in (['list'],['list','--available'],['search','linear']):
+        assert main([*args,*query])==0
+        assert json.loads(capsys.readouterr().out)['ok']
+    assert not home.exists()
+
+def test_list_defaults_to_installed_packages(tmp_path,capsys,monkeypatch):
     from jarvis_forge import spack_backend
+    installed=[{'name':'eigen','version':'5.0.1'},{'name':'gsl','version':'2.8'}]
+    available=[{'name':'eigen','status':'available'},{'name':'root','status':'available'}]
+    monkeypatch.setattr('jarvis_forge.storage.ForgeHome.packages',lambda home:installed)
+    monkeypatch.setattr(spack_backend,'catalog',lambda home,pattern:available)
+    args=['--home',str(tmp_path/'absent'),'--json','apt','list','e*']
+    assert main(args)==0
+    result=json.loads(capsys.readouterr().out)
+    assert result['view']=='installed' and result['packages']==installed[:1]
+    assert main([*args,'--available'])==0
+    result=json.loads(capsys.readouterr().out)
+    assert result['view']=='available' and result['packages']==available[:1]
+    assert not (tmp_path/'absent').exists()
 
-    installed = [{"name": "eigen", "version": "5.0.1"}, {"name": "gsl", "version": "2.8"}]
-    available = [{"name": "eigen", "status": "available"}, {"name": "root", "status": "available"}]
-    monkeypatch.setattr(spack_backend, "current", lambda home: {"packages": installed})
-    monkeypatch.setattr(spack_backend, "catalog", lambda home, pattern: available)
-    args = ["--home", str(tmp_path / "forge"), "apt", "list", "e*", "--json"]
-    for flags in ([], ["--installed"]):
-        assert main([*args, *flags]) == 0
-        result = json.loads(capsys.readouterr().out)
-        assert result["view"] == "installed" and result["packages"] == installed[:1]
-    assert main([*args, "--available"]) == 0
-    result = json.loads(capsys.readouterr().out)
-    assert result["view"] == "available" and result["packages"] == available[:1]
-    assert not (tmp_path / "forge").exists()
+@pytest.mark.parametrize('args',[
+    ['install','gsl','--no-official'],['update','--recipes-only'],['install','gsl','--cache','bad'],
+    ['list','--upgradable'],['install','gsl','--jobs','8']])
+def test_invalid_options_do_not_initialize(tmp_path,capsys,args):
+    home=tmp_path/'absent'
+    assert main(['--home',str(home),'--json','apt',*args])==2
+    assert not json.loads(capsys.readouterr().out)['ok'] and not home.exists()
 
-
-@pytest.mark.parametrize("action", ["import", "switch"])
-@pytest.mark.parametrize("old_source", ["ubuntu", "debian", "legacy"])
-def test_removed_sources_are_rejected_before_mutation(
-    tmp_path, capsys, action, old_source
-):
-    home = tmp_path / "absent"
-    assert main(["--home", str(home), "apt", action, old_source, "--json"]) == 2
-    result = json.loads(capsys.readouterr().out)
-    assert "removed" in result["error"]["message"]
-    assert "apt import spack" in result["error"]["hint"]
-    assert not home.exists()
-
-
-@pytest.mark.parametrize(
-    "args",
-    [
-        ["install", "gsl", "--no-official"],
-        ["import", "spack", "--suite", "noble"],
-        ["update", "--recipes-only"],
-        ["sources", "--add", "bad", "--url", "http://example.org"],
-        ["install", "gsl", "--cache", "bad"],
-        ["profile", "--create"],
-        ["profile", "gambit", "--archived"],
-    ],
-)
-def test_invalid_and_obsolete_options_do_not_initialize(tmp_path, capsys, args):
-    home = tmp_path / "absent"
-    assert main(["--home", str(home), "apt", *args, "--json"]) == 2
-    assert not json.loads(capsys.readouterr().out)["ok"]
+def test_real_dry_run_requires_selected_profile(tmp_path,capsys):
+    home=tmp_path/'absent'
+    assert main(['--home',str(home),'--json','apt','install','gsl','--dry-run'])==2
+    assert 'profile' in json.loads(capsys.readouterr().out)['error']['message']
     assert not home.exists()

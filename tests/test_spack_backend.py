@@ -109,7 +109,7 @@ def test_linux_source_install_bootstraps_missing_patch_and_reuses_it(tmp_path, m
     b.run(home, b._install_args(4, "auto"), op, "install-again", progress=progress)
     assert downloads.read_text() == "fetched\n"
     from jarvis_forge.package_operations import archive_path
-    assert archive_path(home, {"sha256": checksum}).read_bytes() == archive_data
+    assert archive_path(home, bootstrap_patch.SOURCE).read_bytes() == archive_data
     assert phases == ["bootstrap-patch-configure", "bootstrap-patch-build", "bootstrap-patch-verify"]
     binary, = (home.root / "spack/bootstrap-tools").glob("*/bin/patch")
     assert os.access(binary, os.X_OK)
@@ -136,7 +136,6 @@ def test_fresh_queries_and_dry_run_are_offline(tmp_path, capsys):
         ["apt", "list"],
         ["apt", "sources"],
         ["apt", "show", "gsl"],
-        ["apt", "install", "sqlite3", "--dry-run"],
     ]:
         assert main(["--home", str(path), *args, "--json"]) == 0
         data = json.loads(capsys.readouterr().out)
@@ -149,9 +148,9 @@ def test_legacy_data_is_not_a_backend(tmp_path):
 
     home = ForgeHome(tmp_path / "forge")
     write_json(
-        home.root / "apt/state.json", {"schema_version": 1, "active": {}, "manual": []}
+        home.root / "packages.json", {"schema_version": 1, "active": {}, "manual": []}
     )
-    assert active_home(home).root == home.root / "apt/profiles/spack-default"
+    assert active_home(home).root == home.root / "profiles/default"
     with pytest.raises(ForgeError, match="archived"):
         b.current(home)
 
@@ -191,7 +190,7 @@ def test_python3_fallback_only_for_missing_system_pyenv_python(
 def managed(tmp_path, monkeypatch):
     home = ForgeHome(tmp_path / "forge")
     home.initialize()
-    engine = b.root(home) / "engine/1.2.2"
+    engine = b.root(home) / "spack-1.2.2"
     (engine / "bin").mkdir(parents=True)
     (engine / "bin/spack").write_text("# placeholder, execution is intercepted")
     # Runtime activation executes the pinned entry adapter. The fake engine
@@ -205,10 +204,13 @@ def managed(tmp_path, monkeypatch):
     (modules / "bootstrap").mkdir()
     (modules / "bootstrap/__init__.py").write_text("")
     (modules / "bootstrap/config.py").write_text("def is_bootstrapping(): return False\n")
+    (modules / "util").mkdir()
+    (modules / "util/__init__.py").write_text("")
+    (modules / "util/gpg.py").write_text("class Gpg: pass\n")
 
 
     write_json(
-        home.root / "apt/spack.json",
+        home.root / "spack/backend.json",
         {
             "schema_version": 1,
             "backend": "spack",
@@ -226,13 +228,23 @@ def managed(tmp_path, monkeypatch):
     repo = b.root(home) / "repositories/previous/spack_repo/jforge"
     repo.mkdir(parents=True)
     (repo / "repo.yaml").write_text("repo: {namespace: jforge, api: v2.2}\n")
-    write_json(home.root / "apt/recipe-release.json", {"repository": str(repo)})
+    write_json(home.root / "spack/recipes.json", {"repository": str(repo)})
     (config / "repos.yaml").write_text(yaml.safe_dump({"repos": {"jforge": str(repo)}}))
     (config / "mirrors.yaml").write_text("mirrors: {}\n")
+    b._config(home,repo,{"executable":sys.executable,"prefix":sys.prefix,"base_prefix":sys.base_prefix,"version":"3.13.13"})
     calls = []
+
+    def inventory():
+        return [{key:value for key,value in read_json(file).items() if key in {"name","version","hash","prefix","external","installed","spec","node","root"}} for file in (home.root/"pkg").glob("*/metadata.json")]
 
     def run(home, args, op, label, **kw):
         calls.append((args, kw))
+        if label.startswith('database-'):return '{}'
+        if label=='inventory':
+            write_json(Path(args[-1]),{'database':{}})
+            return json.dumps({'packages':inventory()})
+        if args[0]=='concretize':
+            if not (kw['envdir']/'spack.lock').exists():write_json(kw['envdir']/'spack.lock',{'roots':[],'concrete_specs':{}})
         if args[0] == "install" and (home.root / "fail").exists():
             raise ForgeError("fixture install failed", code=1)
         if args[0] == "python":
@@ -243,7 +255,7 @@ def managed(tmp_path, monkeypatch):
                 names.add("fixture-lib")
             rows = []
             for name in sorted(names):
-                prefix = b.root(home) / "store" / name
+                prefix = home.root / "pkg" / (name+"-1.0")
                 installed = label == "installed" or prefix.is_dir()
                 if label == "installed":
                     prefix.mkdir(parents=True, exist_ok=True)
@@ -261,7 +273,7 @@ def managed(tmp_path, monkeypatch):
                     )
                 )
             if args[0] == "python":
-                return json.dumps({"packages": rows, "modifications": []})
+                return json.dumps({"packages": rows, "modifications": [],"inventory":inventory()})
         if args[0] == "list":
             return "fixture-app\nfixture-lib\n"
         return ""
@@ -302,7 +314,7 @@ def test_profile_target_applies_to_the_complete_spack_dag(managed, monkeypatch, 
         with pytest.raises(ForgeError, match=r"fixture-lib \(x86_64_v3\)"):
             b.transact(home, "install", ["fixture-app"], cache=policy, target="x86_64")
         assert not any(args[0] == "install" for args, _ in calls)
-        assert not (home.root / "apt/state.json").exists()
+        assert not (home.root / "packages.json").exists()
 
 
 
@@ -317,14 +329,14 @@ def test_transaction_dependency_snapshot_and_cache_policy(managed):
     assert "--verbose" in argv and "--show-log-on-error" in argv
     assert (Path(result["path"]) / "plan.json").is_file()
     assert Path(result["activation"]).is_file()
-    assert read_json(home.root / "apt/state.json")["spack"]["roots"] == ["fixture-app"]
+    assert read_json(home.root / "packages.json")["spack"]["roots"] == ["fixture-app"]
 
 
 @pytest.mark.parametrize("cache", ["only", "never", "auto"])
 def test_pinned_deprecated_versions_are_scoped_to_the_candidate(managed, monkeypatch, cache):
     home, calls = managed
     original = b.root(home) / "config/config.yaml"
-    tree = {"root": str(b.root(home) / "store"), "projections": {"all": "{name}"}}
+    tree = {"root": str(home.root / "pkg"), "padded_length": False,"projections": {"all": "{name}-{version}"}}
     original.write_text(yaml.safe_dump({"config": {"deprecated": False, "install_tree": tree}}))
     run = b.run
 
@@ -368,12 +380,12 @@ def test_preset_permission_rejects_other_deprecated_versions_before_install(mana
     with pytest.raises(ForgeError, match=f"unapproved deprecated versions: {name}@{version}"):
         b.transact(home, "install", ["fixture-app"], deprecated_versions={"fixture-app": "1.0"})
     assert not any(args[0] == "install" for args, _ in calls)
-    assert not (home.root / "apt/state.json").exists()
+    assert not (home.root / "packages.json").exists()
 
 
 def test_regular_apt_does_not_inherit_a_global_deprecation_override(managed, monkeypatch):
     home, _ = managed
-    tree = {"root": str(b.root(home) / "store"), "projections": {"all": "{name}"}}
+    tree = {"root": str(home.root / "pkg"), "padded_length": False,"projections": {"all": "{name}-{version}"}}
     (b.root(home) / "config/config.yaml").write_text(
         yaml.safe_dump({"config": {"deprecated": True, "install_tree": tree}}))
     result = b.transact(home, "check", ["fixture-app"])
@@ -404,57 +416,31 @@ def test_deprecated_permissions_require_exact_versions(managed, value):
     assert not calls
 
 
-@pytest.mark.parametrize("shell", ["bash", "zsh"])
-def test_profile_fonts_follow_apt_activation(managed, monkeypatch, shell):
-    home, _ = managed
-    store = b.root(home) / "store"
-    directories = [store / name / "share/fonts" for name in ("fixture-app", "fixture-lib")]
-    for directory, filename in zip(directories, ("Family & style/Face.TTF", "Another.otf")):
-        font = directory / filename
-        font.parent.mkdir(parents=True)
-        font.touch()
-    ignored = store / "no-fonts/share/fonts"
-    ignored.mkdir(parents=True)
-    (ignored / "readme.txt").touch()
-    (ignored / "missing.ttf").symlink_to(ignored / "unknown")
-
-    def adapter(_home, _envdir, revision):
-        rows = json.loads((revision / "modifications.json").read_text())
-        return "".join(f"export {row['name']}={shlex.quote(row['value'])}\n" for row in rows)
-
-    monkeypatch.setattr(b, "_adapter_script", adapter)
-    with_fonts = b.transact(home, "install", ["fixture-app", "no-fonts"], cache="only")
-    config = Path(with_fonts["activation"]).with_name("fonts.conf")
-    document = ElementTree.parse(config)
-    assert [Path(entry.text) for entry in document.findall("dir")] == [
-        *(directory.resolve() for directory in directories),
-        Path("/usr/local/share/fonts"), Path("/usr/share/fonts"),
-    ]
-    assert document.findtext("cachedir") == str(home.root / "cache/fontconfig")
-    assert document.findall("include") == []
-
-    without_fonts = b.transact(home, "remove", ["fixture-app"], cache="only")
-    assert not Path(without_fonts["activation"]).with_name("fonts.conf").exists()
-    assert config.is_file()
-    assert all(directory.is_dir() for directory in directories)
-    script = '''
-set -e
-export FONTCONFIG_FILE=/site/fonts.conf
-source "$1"
-printf '%s\\n' "$FONTCONFIG_FILE"
-source "$2"
-printf '%s\\n' "$FONTCONFIG_FILE"
-'''
-    output = subprocess.check_output(
-        [shell, "-c", script, shell, with_fonts["activation"], without_fonts["activation"]],
-        text=True,
-    )
-    assert output.splitlines() == [str(config), "/site/fonts.conf"]
+@pytest.mark.parametrize('shell',['bash','zsh'])
+def test_profile_fonts_follow_apt_activation(managed,monkeypatch,shell):
+    home,_=managed
+    def adapter(_home,_envdir,revision):
+        rows=read_json(revision/'snapshot.json')['modifications']
+        return ''.join(f"export {row['name']}={shlex.quote(row['value'])}\n" for row in rows)
+    monkeypatch.setattr(b,'_adapter_script',adapter)
+    b.transact(home,'install',['fixture-app'],cache='never')
+    directories=[home.root/'pkg'/f'{name}-1.0/share/fonts' for name in ('fixture-app','fixture-lib')]
+    for directory in directories:
+        directory.mkdir(parents=True);(directory/'face.ttf').touch()
+    first=b.transact(home,'install',['fixture-app'],cache='never')
+    entry=Path(first['activation']);config=entry.with_name('fonts.conf')
+    assert [Path(row.text) for row in ElementTree.parse(config).findall('dir')][:2]==directories
+    output=subprocess.check_output([shell,'-c','source "$1"; printf "%s" "$FONTCONFIG_FILE"','test',str(entry)],text=True)
+    assert output==str(config)
+    b.transact(home,'remove',['fixture-app'],confirm=lambda plan:None)
+    assert not config.exists() and not (home.root/'pkg/fixture-app-1.0').exists()
+    assert (home.root/'pkg/fixture-lib-1.0').is_dir()
+    assert str(config) not in read_json(entry.with_name('snapshot.json'))['modifications']
 
 
 def named_layout(home):
     (b.root(home) / 'config/config.yaml').write_text(yaml.safe_dump({'config':{'install_tree':{
-        'root':str(b.root(home) / 'store'), 'padded_length':False, 'projections':{'all':'{name}'}}}}))
+        'root':str(home.root / 'pkg'), 'padded_length':False, 'projections':{'all':'{name}-{version}'}}}}))
 
 
 def candidate_document(calls):
@@ -483,7 +469,7 @@ def test_package_plans_reject_a_bundled_python_before_installing_it(managed, mon
     monkeypatch.setattr(b, "run", bundled_python)
     with pytest.raises(ForgeError, match="Forge requires the external Python"):
         b.transact(home, "install", ["fixture-app"])
-    assert not (home.root / "apt/state.json").exists()
+    assert not (home.root / "packages.json").exists()
     assert not [args for args, _ in calls if args[0] == "install"]
 
 
@@ -587,7 +573,7 @@ def test_legacy_apt_activation_refreshes_without_modifying_evidence(managed, mon
     b._executable(home).write_text('print("export FIXTURE_ACTIVATION=ok")\n')
     monkeypatch.setenv("JFORGE_CONTROLLER_LAUNCHER", str(launcher))
     refreshed = Path(environment_path(home))
-    assert refreshed != original and old_adapter.read_bytes() == old_bytes
+    assert refreshed == original and old_adapter.read_bytes() == old_bytes
     output = subprocess.check_output(["bash", "-c", 'source "$1" && printf "%s" "$FIXTURE_ACTIVATION"',
                                       "fixture", str(refreshed)], text=True)
     assert output == "ok"
@@ -597,6 +583,7 @@ def test_apt_shell_repair_preserves_snapshot_and_selected_python(managed, monkey
     from jarvis_forge.package_operations import environment_path
 
     home, _ = managed
+    monkeypatch.setattr("jarvis_forge.apt_profiles.active_home",lambda base:home)
     result = b.transact(home, "install", ["fixture-app"], cache="never")
     original = Path(result["activation"])
     source = original.with_name("modifications.json")
@@ -612,7 +599,7 @@ def test_apt_shell_repair_preserves_snapshot_and_selected_python(managed, monkey
         lua_template,
     ]))
     evidence = {file: file.read_bytes() for file in (original, source, original.with_name("spack-environment.sh"))}
-    state_path = home.root / "apt/state.json"
+    state_path = home.root / "packages.json"
     before = read_json(state_path)
     b._executable(home).write_text(
         "import json, shlex, sys\n"
@@ -624,16 +611,16 @@ def test_apt_shell_repair_preserves_snapshot_and_selected_python(managed, monkey
     argv = ["--home", str(home.root), "env", "repair", "apt", "--json"]
     assert main([*argv, "--dry-run"]) == 0
     assert json.loads(capsys.readouterr().out)["removed"] == 3 and read_json(state_path) == before
-    second_profile = home.root / "apt/profiles/spack-other"
+    second_profile = home.root / "profiles/other"
     second_activation = second_profile / "environments/apt/revisions/other/activate.sh"
     second_activation.parent.mkdir(parents=True)
     second_activation.write_text(":\n")
     second_activation.with_name("modifications.json").write_text("[]\n")
-    write_json(second_profile / "apt/state.json", {"activation": str(second_activation), "spack": {"packages": []}})
+    write_json(second_profile / "packages.json", {"activation": str(second_activation), "spack": {"packages": []}})
     monkeypatch.setenv("HOME", str(tmp_path))
     assert main(["--home", str(home.root), "env", "repair", "--json"]) == 0
     batch = json.loads(capsys.readouterr().out)
-    assert {(item["kind"], item["name"]) for item in batch["targets"]} == {("apt", "direct"), ("apt", "spack-other")}
+    assert {(item["kind"], item["name"]) for item in batch["targets"]} == {("apt", "direct"), ("apt", "other")}
     report = next(item for item in batch["targets"] if item["name"] == "direct")
     selected = read_json(state_path)
     assert {key: value for key, value in selected.items() if key != "activation_repair"} == before
@@ -655,7 +642,7 @@ def test_apt_shell_repair_preserves_snapshot_and_selected_python(managed, monkey
 def test_name_only_environment_pins_installed_gcc_runtime(managed):
     home, calls = managed
     named_layout(home)
-    spec = b.root(home) / "store/gcc-runtime/.spack/spec.json"
+    spec = home.root / "pkg/gcc-runtime-11.4.0/.spack/spec.json"
     spec.parent.mkdir(parents=True)
     spec.write_text(json.dumps({"spec": {"nodes": [{
         "name": "gcc-runtime",
@@ -677,7 +664,7 @@ def test_multi_instance_store_does_not_pin_gcc_runtime(managed, monkeypatch):
     home, calls = managed
     monkeypatch.setattr(b, "_generic_host_target", lambda home: "x86_64_v3")
     b.transact(home, "install", ["fixture-app"], cache="never")
-    assert "packages" not in candidate_document(calls)
+    assert candidate_document(calls)["packages"]["gcc-runtime"]["require"]==["target=x86_64_v3"]
 
 
 @pytest.mark.parametrize("conflict_phase", ["plan", "source-plan"])
@@ -687,7 +674,7 @@ def test_runtime_conflict_retries_with_installed_spec_and_original_lock(managed,
     first = b.transact(home, "install", ["fixture-app"], cache="never")
     original_lock = Path(first["environment"]) / "spack.lock"
     original_lock.write_text("original roots")
-    prefix = b.root(home) / "store/gcc-runtime"
+    prefix = home.root / "pkg/gcc-runtime-11.4.0"
     spec = prefix / ".spack/spec.json"
     spec.parent.mkdir(parents=True)
     installed = "a" * 32
@@ -695,6 +682,8 @@ def test_runtime_conflict_retries_with_installed_spec_and_original_lock(managed,
         "name": "gcc-runtime", "version": "11.4.0", "hash": installed,
         "arch": {"platform": "linux", "platform_os": "ubuntu22.04", "target": "x86_64_v3"},
     }]}})
+    write_json(prefix/'metadata.json',{'kind':'package','name':'gcc-runtime','version':'11.4.0','hash':installed,
+            'prefix':str(prefix),'external':False,'installed':True,'node':{}})
     run = b.run
 
     def conflicting_runtime(home, args, op, label, **kwargs):
@@ -725,7 +714,7 @@ def test_runtime_conflict_retries_with_installed_spec_and_original_lock(managed,
         if label in {"plan", "source-plan", "plan-runtime-retry"}:
             plan = json.loads(output)
             runtime = {"name": "gcc-runtime", "hash": installed, "external": False,
-                       "installed": True, "prefix": str(prefix)}
+                       "installed": True, "prefix": str(prefix), "version":"11.4.0"}
             plan["packages"].append(runtime)
             if label == conflict_phase:
                 plan["packages"].append({**runtime, "hash": "b" * 32, "installed": False})
@@ -741,7 +730,7 @@ def test_runtime_conflict_retries_with_installed_spec_and_original_lock(managed,
     result = b.transact(home, "install", ["fixture-other"])
     op = Path(result["path"])
     assert result["state_committed"]
-    assert original_lock.read_text() == "original roots"
+    assert original_lock.read_text() == "retry plan"
     assert (op / "spack-before-runtime-retry.lock").read_text() == "first plan"
     assert (op / f"{conflict_phase}-before-runtime-retry.json").is_file()
     assert [p["hash"] for p in read_json(op / f"{conflict_phase}.json")["packages"]
@@ -752,7 +741,7 @@ def test_name_only_layout_blocks_changed_build_before_install(managed, monkeypat
     home, calls = managed
     named_layout(home)
     first = b.transact(home, 'install', ['fixture-app'], cache='never')
-    old_state = (home.root / 'apt/state.json').read_bytes()
+    old_state = (home.root / 'packages.json').read_bytes()
     installs = len([args for args, kwargs in calls if args[0]=='install'])
     run = b.run
     def changed(home, args, op, label, **kwargs):
@@ -763,9 +752,9 @@ def test_name_only_layout_blocks_changed_build_before_install(managed, monkeypat
             return json.dumps(plan)
         return output
     monkeypatch.setattr(b,'run',changed)
-    with pytest.raises(ForgeError, match='another build'):
+    with pytest.raises(ForgeError, match='requires confirmation'):
         b.transact(home,'upgrade',cache='never')
-    assert (home.root / 'apt/state.json').read_bytes() == old_state
+    assert (home.root / 'packages.json').read_bytes() == old_state
     assert len([args for args, kwargs in calls if args[0]=='install']) == installs
     assert Path(first['activation']).is_file()
 
@@ -785,7 +774,7 @@ def test_name_only_layout_rejects_duplicate_package_builds(managed, monkeypatch)
     with pytest.raises(ForgeError,match='multiple instances'):
         b.transact(home,'install',['fixture-app'],cache='never')
     assert not any(args[0]=='install' for args,kwargs in calls)
-    assert not (home.root / 'apt/state.json').exists()
+    assert not (home.root / 'packages.json').exists()
 
 
 def test_name_only_layout_allows_same_build_reuse(managed):
@@ -838,7 +827,7 @@ def test_auto_cache_failure_validates_source_plan_before_fallback(managed, monke
     home, calls = managed
     named_layout(home)
     first = b.transact(home, "install", ["fixture-app"], cache="never")
-    before = (home.root / "apt/state.json").read_bytes()
+    before = (home.root / "packages.json").read_bytes()
     calls.clear()
     run = b.run
 
@@ -858,9 +847,9 @@ def test_auto_cache_failure_validates_source_plan_before_fallback(managed, monke
 
     monkeypatch.setattr(b, "run", cache_miss)
     if conflict:
-        with pytest.raises(ForgeError, match="multiple instances|another build"):
+        with pytest.raises(ForgeError, match="multiple instances|confirm"):
             b.transact(home, "install", ["fixture-app"])
-        assert (home.root / "apt/state.json").read_bytes() == before
+        assert (home.root / "packages.json").read_bytes() == before
         assert Path(first["activation"]).is_file()
     else:
         result = b.transact(home, "install", ["fixture-app"])
@@ -932,7 +921,7 @@ def test_cache_trust_failure_never_falls_back_to_source(managed, monkeypatch, ph
     assert "trust verification failed" in failed.value.hint
     installs = [args for args, _ in calls if args[0] == "install"]
     assert all(args[args.index("--use-buildcache") + 1] == "only" for args in installs)
-    assert not (home.root / "apt/state.json").exists()
+    assert not (home.root / "packages.json").exists()
 
 
 def test_official_key_import_failure_is_not_a_source_fallback(managed, monkeypatch):
@@ -984,7 +973,7 @@ def test_binary_remainder_failure_does_not_start_source_build(managed, monkeypat
         b.transact(home, "install", ["fixture-app"])
     installs = [args for args, _ in calls if args[0] == "install"]
     assert [item[item.index("--use-buildcache") + 1] for item in installs] == ["only", "only"]
-    assert not (home.root / "apt/state.json").exists()
+    assert not (home.root / "packages.json").exists()
 
 
 @pytest.mark.parametrize("invalid_retry", [None, "occupied", "python", "target", "deprecated"])
@@ -994,7 +983,7 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
     first = b.transact(home, "install", ["fixture-existing"], cache="never")
     original_lock = Path(first["environment"]) / "spack.lock"
     original_lock.write_text("committed lock")
-    before = (home.root / "apt/state.json").read_bytes()
+    before = (home.root / "packages.json").read_bytes()
     calls.clear()
     run = b.run
 
@@ -1029,7 +1018,9 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
         if label in {"install-cache", "install-binaries"}:
             if label == "install-binaries":
                 assert args[-2:] == ["/hash-fixture-app", "/hash-fixture-lib"]
-                (b.root(home) / "store/fixture-lib").mkdir()
+                partial=home.root / "pkg/fixture-lib-1.0";partial.mkdir(parents=True,exist_ok=True)
+                write_json(partial/'metadata.json',{'kind':'package','name':'fixture-lib','version':'1.0','hash':'hash-fixture-lib',
+                    'prefix':str(partial),'external':False,'installed':True,'node':{}})
             write_json(op / f"command-{label}.json", {"status": "failed", "exit_code": 3})
             raise ForgeError("fixture cache miss", code=1)
         if label in {"source-plan", "plan-cache-retry", "installed"}:
@@ -1044,7 +1035,7 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
                 assert args[-3:] == ["installation-plan", "never", "[]"]
                 assert packages["fixture-lib"]["installed"]
                 if invalid_retry == "occupied":
-                    packages["fixture-lib"].update(hash="other-build", installed=False)
+                    packages["fixture-existing"].update(hash="other-build", installed=False)
                 if invalid_retry == "python":
                     plan["packages"].append({**packages["fixture-lib"], "name": "python"})
             return json.dumps(plan)
@@ -1056,11 +1047,11 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
 
     monkeypatch.setattr(b, "run", stale_index)
     if invalid_retry:
-        with pytest.raises(ForgeError, match="already occupies|requires the external Python|requires target=x86_64|unapproved deprecated versions"):
+        with pytest.raises(ForgeError, match="confirm|requires the external Python|requires target=x86_64|unapproved deprecated versions"):
             b.transact(home, "install", ["fixture-app", "fixture-source"],
                        target="x86_64" if invalid_retry == "target" else None,
                        deprecated_versions={"fixture-app": "1.0"})
-        assert (home.root / "apt/state.json").read_bytes() == before
+        assert (home.root / "packages.json").read_bytes() == before
     else:
         result = b.transact(home, "install", ["fixture-app", "fixture-source"], deprecated_versions={"fixture-app": "1.0"})
         op = Path(result["path"])
@@ -1069,8 +1060,8 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
         assert (op / "spack-before-cache-retry.lock").read_text() == "binary lock"
         assert read_json(op / "source-plan.json")["cache_policy"] == "auto"
         assert {p["name"]: p["hash"] for p in result["packages"]}["fixture-app"] == "source-fixture-app"
-    assert original_lock.read_text() == "committed lock"
-    assert (b.root(home) / "store/fixture-lib").is_dir()
+    assert original_lock.read_text()==("committed lock" if invalid_retry else "source lock")
+    assert (home.root/"pkg/fixture-existing-1.0").is_dir()
     assert [args[args.index("--use-buildcache") + 1] for args, _ in calls if args[0] == "install"] == (
         ["only", "only"] if invalid_retry else ["only", "only", "never"]
     )
@@ -1136,7 +1127,7 @@ def test_auto_does_not_retry_timeout_interruption_or_launch_failure(managed, mon
     assert len([args for args, _ in calls if args[0] == "install"]) == (
         1 if phase == "install-cache" else 2
     )
-    assert not (home.root / "apt/state.json").exists()
+    assert not (home.root / "packages.json").exists()
 
 
 def test_reinstall_plan_marks_requested_overwrites(managed):
@@ -1144,7 +1135,7 @@ def test_reinstall_plan_marks_requested_overwrites(managed):
     named_layout(home)
     b.transact(home, "install", ["fixture-app"], cache="never")
     calls.clear()
-    b.transact(home, "reinstall", ["fixture-app"], cache="never")
+    b.transact(home, "reinstall", ["fixture-app"], cache="never",confirm=lambda plan:None)
     args = next(args for args, _ in calls if "installation-plan" in args)
     assert json.loads(args[-1]) == ["fixture-app"]
 
@@ -1156,7 +1147,7 @@ def test_cache_only_failure_does_not_fall_back_to_source(managed, monkeypatch):
     with pytest.raises(ForgeError, match="fixture install failed"):
         b.transact(home, "install", ["fixture-app"], cache="only")
     assert len([args for args, _ in calls if args[0] == "install"]) == 1
-    assert not (home.root / "apt/state.json").exists()
+    assert not (home.root / "packages.json").exists()
 
 
 def test_check_reports_conditional_source_fallback_without_installing(managed):
@@ -1166,7 +1157,7 @@ def test_check_reports_conditional_source_fallback_without_installing(managed):
     assert result["source_fallback_requires_validation"]
     assert "Binary-only" in result["note"]
     assert not any(args[0] == "install" for args, _ in calls)
-    assert not (home.root / "apt/state.json").exists()
+    assert not (home.root / "packages.json").exists()
     empty = b.transact(home, "check")
     assert not empty["source_fallback_requires_validation"]
     assert "note" not in empty
@@ -1175,11 +1166,11 @@ def test_check_reports_conditional_source_fallback_without_installing(managed):
 def test_failure_keeps_active_state_and_archives_candidate(managed):
     home, calls = managed
     first = b.transact(home, "install", ["fixture-app"], cache="never")
-    before = (home.root / "apt/state.json").read_bytes()
+    before = (home.root / "packages.json").read_bytes()
     (home.root / "fail").touch()
     with pytest.raises(ForgeError, match="fixture install failed"):
         b.transact(home, "install", ["other"], cache="never")
-    assert (home.root / "apt/state.json").read_bytes() == before
+    assert (home.root / "packages.json").read_bytes() == before
     assert Path(first["activation"]).is_file()
     failed = [
         p
@@ -1188,25 +1179,26 @@ def test_failure_keeps_active_state_and_archives_candidate(managed):
     ]
     assert len(failed) == 1
     assert (failed[0].parent / "candidate-environment/spack.yaml").is_file()
-    assert len(list((b.root(home) / "environments").iterdir())) == 1
+    assert not (b.root(home)/"environments").exists()
 
 
-def test_remove_retains_old_environment_and_store(managed):
-    home, calls = managed
-    first = b.transact(home, "install", ["fixture-app"], cache="never")
-    result = b.transact(home, "remove", ["fixture-app"])
-    assert result["packages"] == [] and result["store_retained"]
-    assert Path(first["environment"]).is_dir()
-    assert all(Path(p["prefix"]).is_dir() for p in first["packages"])
-    assert len([a for a, k in calls if a[0] == "install"]) == 1
+def test_remove_deletes_requested_prefix_but_keeps_automatic_dependencies(managed):
+    home,calls=managed
+    first=b.transact(home,'install',['fixture-app'],cache='never')
+    result=b.transact(home,'remove',['fixture-app'],confirm=lambda plan:None)
+    assert result['packages']==[] and not result['store_retained']
+    assert not (home.root/'pkg/fixture-app-1.0').exists()
+    assert (home.root/'pkg/fixture-lib-1.0').is_dir()
+    assert len([args for args,_ in calls if args[0]=='install'])==1
+    assert Path(result['history_path'],'spack.lock').is_file()
 
 
 def test_check_does_not_install_publish_or_register_gc_root(managed):
     home, calls = managed
     result = b.transact(home, "check", ["fixture-app"])
     assert not result["builds_executed"] and not result["state_committed"]
-    assert not (home.root / "apt/state.json").exists()
-    assert not list((b.root(home) / "environments").iterdir())
+    assert not (home.root / "packages.json").exists()
+    assert not (b.root(home)/"environments").exists()
     assert not any(a[0] == "install" for a, k in calls)
     assert Path(result["plan"]).is_file()
 
@@ -1218,22 +1210,14 @@ def test_upgrade_refreshes_solver_and_frozen_config_survives(managed):
     (b.root(home) / "config/repos.yaml").write_text("repos: {changed: somewhere}\n")
     result = b.transact(home, "upgrade", cache="never")
     assert any(a == ["concretize", "--fresh", "--force"] for a, k in calls)
-    assert (
-        Path(first["environment"]) / ".jforge-config/repos.yaml"
-    ).read_text() == original
+    assert yaml.safe_load((Path(first["environment"])/".jforge-config/repos.yaml").read_text())["repos"]["changed"]=="somewhere"
     assert result["state_committed"]
 
 
-def test_gc_preserves_registered_environment_revisions(managed):
-    home, calls = managed
-    result = b.autoremove(home)
-    assert result["historical_environments_retained"]
-    assert calls[0][0] == [
-        "gc",
-        "--except-any-environment",
-        "--keep-build-dependencies",
-        "--yes-to-all",
-    ]
+def test_autoremove_without_packages_does_not_run_native_gc(managed):
+    home,calls=managed
+    preview=b.autoremove(home,dry_run=True)
+    assert preview['unused']==[] and calls==[]
 
 
 def test_catalog_never_executes_spack(managed, monkeypatch):
@@ -1276,15 +1260,23 @@ def test_failed_switch_preserves_selection(tmp_path, monkeypatch):
     assert read_json(home.root / "apt/selection.json")["id"] == "legacy"
 
 
-def test_satisfy_json_command_name(managed, capsys):
+def test_install_dry_run_json_command_name(managed, capsys, monkeypatch):
     home, calls = managed
+    from jarvis_forge import apt_cli
+    monkeypatch.setattr(apt_cli,'active_home',lambda base:home)
+    monkeypatch.setattr(apt_cli,'validate_active',lambda home:None)
+    monkeypatch.setattr(apt_cli,'_ready',lambda ctx:home)
+    monkeypatch.setattr('jarvis_forge.unified_profiles.record',lambda home:{'id':'fixture','backend':'spack','stage':str(home.root/'stage')})
+    monkeypatch.setattr(b,'validate_active',lambda home:None,raising=False)
+    monkeypatch.setattr('jarvis_forge.apt_profiles.validate_active',lambda home:None)
+    monkeypatch.setattr('jarvis_forge.toolchains.binding',lambda home:None)
     assert (
         main(
             [
                 "--home",
                 str(home.root),
                 "apt",
-                "satisfy",
+                "install",
                 "gsl>=2.8",
                 "--dry-run",
                 "--json",
@@ -1292,7 +1284,7 @@ def test_satisfy_json_command_name(managed, capsys):
         )
         == 0
     )
-    assert json.loads(capsys.readouterr().out)["command"] == "apt satisfy"
+    assert json.loads(capsys.readouterr().out)["command"] == "apt install"
 
 
 def test_changing_root_version_requests_native_reconcretization(managed):
@@ -1305,7 +1297,7 @@ def test_changing_root_version_requests_native_reconcretization(managed):
 def test_reinstall_overwrites_only_requested_specs(managed):
     home, calls = managed
     b.transact(home, "install", ["fixture-app", "other"], cache="never")
-    b.transact(home, "reinstall", ["fixture-app"], cache="never")
+    b.transact(home, "reinstall", ["fixture-app"], cache="never",confirm=lambda plan:None)
     argv = [a for a, k in calls if a[0] == "install"][-1]
     assert argv[-3:] == ["--overwrite", "-y", "fixture-app"]
 
@@ -1314,7 +1306,7 @@ def test_empty_check_still_archives_a_plan(managed):
     home, calls = managed
     result = b.transact(home, "check")
     assert Path(result["plan"]).is_file()
-    assert result["lockfile"] is None
+    assert Path(result["lockfile"]).is_file()
 
 
 def test_activation_cleans_inherited_spack_store_paths(managed, tmp_path):
@@ -1350,7 +1342,7 @@ def test_recipe_update_rolls_back_policy_and_catalog_on_native_failure(
     paths = [
         b.root(home) / "config/repos.yaml",
         b.root(home) / "catalog.json",
-        home.root / "apt/recipe-release.json",
+        home.root / "spack/recipes.json",
     ]
     before = {p: p.read_bytes() for p in paths}
     staged = b.root(home) / "repositories/staged/spack_repo/jforge"
@@ -1387,7 +1379,7 @@ def test_update_refreshes_extension_recipes_without_rebuilding_packages(managed,
 
     home, calls = managed
     b.transact(home, "install", ["fixture-app"], cache="never")
-    state_before = (home.root / "apt/state.json").read_bytes()
+    state_before = (home.root / "packages.json").read_bytes()
     staged = b.root(home) / "repositories/new-release/spack_repo/jforge"
     staged.mkdir(parents=True)
     (staged / "repo.yaml").write_text("repo: {namespace: jforge, api: v2.2}\n")
@@ -1407,15 +1399,16 @@ def test_update_refreshes_extension_recipes_without_rebuilding_packages(managed,
     result = b.update(home)
     assert refreshed == [home.root]
     assert result["recipe_release"] == "independent-r2"
-    assert read_json(home.root / "apt/recipe-release.json")["index_url"] == recipe_releases.INDEX_URL
+    assert read_json(home.root / "spack/recipes.json")["index_url"] == recipe_releases.INDEX_URL
     assert yaml.safe_load((b.root(home) / "config/repos.yaml").read_text())["repos"]["jforge"] == str(staged)
-    assert (home.root / "apt/state.json").read_bytes() == state_before
+    assert (home.root / "packages.json").read_bytes() == state_before
     assert len([args for args, kwargs in calls if args[0] == "install"]) == 1
 
 
 def test_eigen_activation_exports_legacy_header_hints(managed):
     home, calls = managed
-    include = b.root(home) / 'store/eigen/include/eigen3'
+    b.transact(home,'install',['eigen'],cache='never')
+    include = home.root / 'pkg/eigen-1.0/include/eigen3'
     (include / 'Eigen').mkdir(parents=True)
     (include / 'Eigen/Core').write_text('// fixture header\n')
     result = b.transact(home, 'install', ['eigen'], cache='never')

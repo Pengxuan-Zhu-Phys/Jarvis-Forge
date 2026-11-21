@@ -24,14 +24,13 @@ def for_result(ctx, command, values):
     """Commands decide their shell effect after successful execution, never the hook."""
     if not requested() or ctx.obj.as_json or values.get("dry_run") or ctx.params.get("dry_run"):
         return
-    commands = {"env detach", "env switch", "env drop", "env repair", "apt profile apps", "profile use"}
-    apt_change = command.startswith("apt ") and (values.get("state_committed") or (
-        command == "apt profile global" and values.get("status") == "selected"))
-    if command not in commands and not apt_change:
+    commands = {"env detach", "env switch", "env drop", "env repair", "profile use"}
+    apt_change=command.startswith('apt ') and values.get('state_committed')
+    build_change=command in {'build install','build remove','build autoremove','build upgrade'} and values.get('status')=='passed' and not values.get('no_activate')
+    if getattr(ctx.obj,'profile_name',None) and os.environ.get('JFORGE_PROFILE_INSTANCE')!=ctx.obj.profile_name and command!='profile use':return
+    if command not in commands and not apt_change and not build_change:
         return
     if command == "env repair" and (ctx.params.get("name") or ctx.params.get("shell") is not None):
-        return
-    if command == "apt profile apps" and not values.get("changed"):
         return
     base = ctx.obj.user_home or ctx.obj.home
     try:
@@ -45,10 +44,8 @@ def for_result(ctx, command, values):
                 send("source", path)
         elif command == "env repair" and not ctx.params.get("name") and ctx.params.get("shell") is None:
             send("hook", str(base.root))
-        elif command == "apt profile apps" and values.get("changed"):
-            from .env_entries import read_selection
-            if read_selection(base) == "apt":
-                _apt(base, values, only_current=True)
+        elif build_change and values.get('activation'):
+            send('build' if command=='build install' else 'source',values['activation'])
         elif apt_change:
             _apt(base, values)
         elif command == "profile use":
@@ -67,7 +64,7 @@ def _apt(base, values, *, only_current=False):
     send("source", activation)
 
 
-HOOK = r'''# Add eval "$(command jforge apt shell-init)" to your shell startup file.
+HOOK = r'''# Add eval "$(command jforge shell-init)" to your shell startup file.
 jforge() {
     local _jf_file _jf_status _jf_action _jf_value _jf_hook
     case $- in
@@ -100,7 +97,7 @@ jforge() {
                     fi
                     ;;
                 hook)
-                    _jf_hook=$(command jforge --home "$_jf_value" apt shell-init) || _jf_hook=''
+                    _jf_hook=$(command jforge --home "$_jf_value" shell-init) || _jf_hook=''
                     if [ -z "$_jf_hook" ] || ! eval "$_jf_hook"; then
                         printf '%s\n' 'jforge: Could not refresh the shell hook.' >&2
                     fi

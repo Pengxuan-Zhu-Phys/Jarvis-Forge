@@ -1,0 +1,341 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:jarvis-forge:test-metadata:v1",
+  "$defs": {
+    "index": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "test-metadata-index"
+        },
+        "project_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "documents": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "project_id",
+        "documents"
+      ],
+      "additionalProperties": false
+    },
+    "document": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "test-metadata"
+        },
+        "project_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            },
+            "purpose": {
+              "type": "string",
+              "minLength": 1
+            },
+            "owner": {
+              "type": "string",
+              "minLength": 1
+            },
+            "component": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "preconditions": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "definitions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "purpose": {
+                "type": "string",
+                "minLength": 1
+              },
+              "binding": {
+                "type": "object",
+                "properties": {
+                  "adapter": {
+                    "enum": [
+                      "pytest",
+                      "command",
+                      "ctest",
+                      "ci"
+                    ]
+                  },
+                  "selector": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "adapter",
+                  "selector"
+                ],
+                "additionalProperties": false
+              },
+              "component": {
+                "type": "string",
+                "minLength": 1
+              },
+              "owner": {
+                "type": "string",
+                "minLength": 1
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "scenario": {
+                "type": "object",
+                "properties": {
+                  "preconditions": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "inputs": {},
+                  "action": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "inputs",
+                  "action"
+                ],
+                "additionalProperties": false
+              },
+              "criteria": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "expected": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "verification": {
+                      "enum": [
+                        "automated",
+                        "manual"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "expected",
+                    "verification"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "failure_meaning": {
+                "type": "string",
+                "minLength": 1
+              },
+              "limitations": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "expected_evidence": {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "object"
+                    }
+                  ]
+                }
+              },
+              "review": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "draft",
+                      "reviewed"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              "variants": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "scenario": {
+                      "type": "object",
+                      "properties": {
+                        "preconditions": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "inputs": {},
+                        "action": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [],
+                      "additionalProperties": false
+                    },
+                    "limitations": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "criteria": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "expected": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "verification": {
+                            "enum": [
+                              "automated",
+                              "manual"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "expected",
+                          "verification"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "purpose",
+              "binding",
+              "scenario",
+              "criteria",
+              "failure_meaning",
+              "limitations"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "project_id",
+        "definitions"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/index"
+    },
+    {
+      "$ref": "#/$defs/document"
+    }
+  ]
+}

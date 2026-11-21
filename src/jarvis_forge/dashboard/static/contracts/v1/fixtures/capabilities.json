@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "api_version": 1,
+  "features": {
+    "test_cases": true,
+    "test_reports": true
+  },
+  "adapters": [
+    {
+      "adapter": "pytest",
+      "enumeration": "exact",
+      "progress": "case_events",
+      "logs": [
+        "case_captured",
+        "step_only"
+      ],
+      "cancellation": "supported",
+      "artifacts": [
+        "case_bound",
+        "step_bound"
+      ]
+    },
+    {
+      "adapter": "command",
+      "enumeration": "exact",
+      "progress": "final_only",
+      "logs": [
+        "step_only"
+      ],
+      "cancellation": "supported",
+      "artifacts": [
+        "case_bound",
+        "step_bound"
+      ]
+    }
+  ],
+  "inventories": {}
+}

@@ -105,9 +105,12 @@ def _metadata(home, name):
 def load_metadata(home, name):
     """Read one environment's metadata file without rewriting the entry."""
     identifier(name)
+    if name=='apt':
+        from .unified_profiles import record as managed_record
+        if current:=managed_record(_default_environment_home(home)):return current
     record = _metadata(_default_environment_home(home) if name == "apt" else home, name)
     if record is None:
-        hint = "jforge apt env" if name == "apt" else f"jforge env show {name}"
+        hint = "jforge profile show --path" if name == "apt" else f"jforge env show {name}"
         raise ForgeError(f"No metadata for environment {name!r}.", hint=hint)
     return record
 
@@ -226,7 +229,8 @@ _jforge_profile_load() {
     [ -n "$_JFORGE_key" ] || continue
     eval "_JFORGE_ENV_HAD_$_JFORGE_key=x _JFORGE_ENV_OLD_$_JFORGE_key=\${$_JFORGE_key-}"
   done <<< "${_JFORGE_before#*$'\n'}"''',
-            *[f"  [ \"$_JFORGE_status\" != 0 ] || source {shlex.quote(str(script))} || _JFORGE_status=$?" for script in scripts],
+            f'  [ "$_JFORGE_status" != 0 ] || export JFORGE_PROFILE_INSTANCE={shlex.quote(managed["id"])}',
+            *[f'  [ "$_JFORGE_status" != 0 ] || source {shlex.quote(str(script))} || _JFORGE_status=$?' for script in scripts],
             f"  _JFORGE_after=$({names}) || return $?",
             r'''  _JFORGE_ENV_KEYS="${_JFORGE_before#*$'\n'}"$'\n'"${_JFORGE_after#*$'\n'}"
   while IFS= read -r _JFORGE_key; do
@@ -256,7 +260,7 @@ def _write(home, name, *, kind, description, revision, profile, backend, builds,
     activation = home.root / "activate.sh" if managed and name == "apt" else folder / "activate.sh"
     scripts = [Path(backend)] if backend else []
     if managed:
-        scripts.append(home.root / "env/toolchain.sh")
+        scripts.append(Path(managed["platform_metadata"]["activation"]))
     scripts.extend(Path(item["activation"]) for item in builds)
     text = _activation_text(name, scripts, managed=managed, activation=activation)
     if not activation.is_file() or activation.read_text(encoding="utf-8") != text:
@@ -355,7 +359,7 @@ def profile_outputs(base, profile, selector=None, *, enabled=None):
 
     managed = record(profile)
     if not managed:
-        raise ForgeError("Select a built-in profile to manage its apps.", hint="jforge apt profile")
+        raise ForgeError("Select a built-in profile to manage its apps.", hint="jforge profile")
     instance = managed["id"]
     manifests = list(_output_manifests(base, instance))
 
@@ -392,18 +396,18 @@ def _set_profile_output(base, profile, managed, manifests, selector, enabled):
         if enabled:
             if not matches:
                 raise ForgeError(f"No installed output matches {selector!r} in {instance}.",
-                                 hint="jforge apt profile apps")
+                                 hint="jforge build list")
             preferred = choices.get(build_id) or (current and current["artifact_id"])
             value = exact or next((item for item in matches if item["artifact_id"] == preferred), None)
             if value is None and len(matches) == 1 and not preferred:
                 value = matches[0]
             if value is None:
-                raise ForgeError(f"Choose an exact output ID for {build_id}.", hint="jforge apt profile apps")
+                raise ForgeError(f"Choose an exact output ID for {build_id}.", hint="jforge build list")
             value = artifact(base, value["artifact_id"])
             dependencies = _output_dependencies(base, value.get("dependencies", ()))
             if blocked := sorted({app_name(item["build_id"]) for item in dependencies.values()} & set(omitted)):
                 raise ForgeError(f"{build_id} needs disabled output {blocked[0]}.",
-                                 hint=f"jforge apt profile apps {blocked[0]} --on")
+                                 hint=f"jforge build install {blocked[0]}")
             builds = [item for item in builds if app_name(item["build_id"]) != build_id]
             builds.append({"build_id": value["build_id"], "artifact_id": value["artifact_id"],
                            "output": value["output"], "activation": str(artifact_activation(base, value))})
@@ -416,7 +420,7 @@ def _set_profile_output(base, profile, managed, manifests, selector, enabled):
         else:
             if not matches and not current and build_id not in omitted:
                 raise ForgeError(f"No installed output matches {selector!r} in {instance}.",
-                                 hint="jforge apt profile apps")
+                                 hint="jforge build list")
             selected_id = current["artifact_id"] if current else choices.get(build_id)
             disable = (not exact or selected_id == selector
                        or (selected_id is None and len(matches) == 1))
@@ -428,14 +432,14 @@ def _set_profile_output(base, profile, managed, manifests, selector, enabled):
                        for dep in dependencies.values()):
                     dependent = app_name(item["build_id"])
                     raise ForgeError(f"{dependent} still loads {build_id}.",
-                                     hint=f"jforge apt profile apps {dependent} --off")
+                                     hint=f"jforge build list")
             if disable:
                 builds = keep
                 if current or exact:
                     choices[build_id] = current["artifact_id"] if current else exact["artifact_id"]
                 if build_id not in omitted:
                     omitted.append(build_id)
-        state = read_json(profile.root / "apt/state.json")
+        state = read_json(profile.root / "packages.json")
         return _write(profile, "apt", kind="apt", description=_apt_description(builds),
                       revision=state.get("last_operation_id"), profile=instance, backend=environment_path(profile),
                       builds=builds, omitted_builds=omitted, managed=managed, app_choices=choices)
@@ -506,8 +510,9 @@ def prepare_build_environment(base, profile, managed, names, environment, script
     clean = _before_profile(environment, instance)
     require_outputs_off(base, profile, names, clean)
     with _output_lock(profile, managed):
-        apps = _apt_builds(base, profile, instance, _omitted(profile, "apt"))
-        scripts = [environment_path(profile), profile.root / "env/toolchain.sh"]
+        apps = ([row for row in managed.get("apps",[]) if row.get("enabled") and not row.get("external")]
+                if managed.get("schema_version")==3 else _apt_builds(base, profile, instance, _omitted(profile, "apt")))
+        scripts = [environment_path(profile), Path(managed["platform_metadata"]["activation"])]
         suppressed = []
         for app in apps:
             dependencies = _output_dependencies(base, (app["artifact_id"],))
@@ -516,6 +521,7 @@ def prepare_build_environment(base, profile, managed, names, environment, script
             else:
                 scripts.append(app["activation"])
         lines = activation_checks(managed)
+        lines.append("export JFORGE_PROFILE_INSTANCE="+shlex.quote(instance))
         lines.extend("source " + shlex.quote(str(item)) + " || return $?" for item in scripts)
         write_text(script, "\n".join(lines) + "\n")
     result = cmake.capture(script, environment=safe_environment(clean))
@@ -592,9 +598,16 @@ def publish_apt(base, profile, backend, *, profile_record=None):
     from .unified_profiles import record
 
     managed = profile_record or record(profile)
+    if managed and managed.get('schema_version')==3:
+        from .unified_profiles import refresh_activation
+        entry=refresh_activation(profile)
+        state=read_json(profile.root/'packages.json')
+        return {'name':'apt','kind':'apt','description':'Profile '+managed['id'],'revision':state.get('last_operation_id'),
+                'profile':managed['id'],'backend_activation':str(backend),'activation':entry,
+                'builds':managed.get('apps',[])}
     owner = profile if managed else base
     with _output_lock(owner, managed):
-        state_path = profile.root / "apt/state.json"
+        state_path = profile.root / "packages.json"
         state = read_json(state_path) if state_path.is_file() else {}
         omitted = _omitted(owner, "apt")
         builds = _apt_builds(base, owner, managed["id"] if managed else None, omitted)
@@ -632,7 +645,7 @@ def attach_build(base, profile, *, build_id, output, artifact_id, activation):
     if not activation.is_file():
         raise ForgeError(f"Build activation script is missing: {activation}")
     backend = None
-    state_path = profile.root / "apt/state.json"
+    state_path = profile.root / "packages.json"
     if state_path.is_file() and read_json(state_path).get("activation"):
         from .package_operations import environment_path
 
@@ -644,6 +657,20 @@ def attach_build(base, profile, *, build_id, output, artifact_id, activation):
     from .unified_profiles import record
 
     managed = record(profile)
+    if managed and managed.get('schema_version')==3:
+        manifest=base.root/'builds/artifacts'/artifact_id/'manifest.json'
+        output_record=read_json(manifest) if manifest.is_file() else {}
+        app={'name':app_name(build_id),'build_id':build_id,'output':output,'artifact_id':artifact_id,
+             'activation':str(activation),'prefix':output_record.get('prefix'),
+             'packages':output_record.get('runtime_packages',[]),'external':output_record.get('workspace_external',bool(output_record.get('workspace'))),
+             'workspace':output_record.get('workspace'),'in_place':bool(output_record.get('in_place')),
+             'enabled':True,'version':output_record.get('version'),'metadata':str(manifest)}
+        existing=[row for row in managed.get('apps',[]) if row['artifact_id']!=artifact_id and not (row['name']==app['name'] and row['version']==app['version'])]
+        for row in existing:
+            if row['name']==app['name']:row['enabled']=False
+        managed['apps']=existing+[app]
+        write_json(profile.root/'metadata.json',managed)
+        return publish_apt(base,profile,backend)
     owner = profile if managed else base
     name = app_name(build_id)
     with _output_lock(owner, managed):
@@ -675,6 +702,20 @@ def drop_build(base, profile, build_id):
     from .unified_profiles import record
 
     managed = record(profile)
+    if managed and managed.get('schema_version')==3:
+        from .build_apps import installed,_dependent_apps,locked
+        from .unified_profiles import refresh_activation,sync_definition
+        with locked(profile):
+            managed=record(profile)
+            rows=[row for row in installed(base,profile) if row['name']==app_name(build_id) and row.get('enabled')]
+            if not rows:raise ForgeError(f'No enabled app named {app_name(build_id)}.')
+            _dependent_apps(base,profile,rows)
+            for row in managed.get('apps',[]):
+                if row['name']==app_name(build_id):row['enabled']=False
+            write_json(profile.root/'metadata.json',managed)
+            refresh_activation(profile);sync_definition(profile)
+            state=read_json(profile.root/'packages.json')
+            return publish_apt(base,profile,state['activation'])
     if managed:
         manifests = list(_output_manifests(base, managed["id"]))
         return _set_profile_output(base, profile, managed, manifests, build_id, False)
@@ -693,7 +734,7 @@ def drop_build(base, profile, build_id):
     builds = [item for item in builds if app_name(item["build_id"]) != build_id]
     if build_id not in omitted:
         omitted.append(build_id)
-    state_path = profile.root / "apt/state.json"
+    state_path = profile.root / "packages.json"
     state = read_json(state_path) if state_path.is_file() else {}
     recorded = state.get("activation")
     backend = Path(recorded) if isinstance(recorded, str) and Path(recorded).is_file() else None
@@ -705,20 +746,19 @@ def drop_build(base, profile, build_id):
     )
 
 
-def attach_root_build(home, result):
-    """Add ROOT's activation to the apt entry after that build has passed."""
+def attach_build_outputs(home, result):
+    """Register every successfully verified app output in its owning profile."""
     if result.get("status") != "passed":
         return None
     from .apt_profiles import active_home
 
     profile = ForgeHome(Path(result["profile_path"])) if result.get("profile_instance") else active_home(home)
-    supported = {"root", "cbs", "gambit"} if result.get("profile_instance") else {"root"}
     attached = None
     groups = [result.get("outputs") or {}]
     groups.extend(node.get("outputs") or {} for node in (result.get("nodes") or {}).values())
     for group in groups:
         for output in group.values():
-            if app_name(output.get("build_id") or "") in supported and output.get("activation"):
+            if output.get("activation"):
                 entry = attach_build(home, profile, build_id=output["build_id"], output=output.get("output") or "ROOT",
                                      artifact_id=output.get("artifact_id") or "", activation=output["activation"])
                 attached = entry or attached

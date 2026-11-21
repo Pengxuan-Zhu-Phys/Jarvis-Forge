@@ -99,11 +99,11 @@ def repair_managed(home, *, dry_run=False, install_hook=False):
             run("named", name, environment_registry.repair, home, name,
                 workspace_sources=workspace_sources, save_unchanged=False)
 
-    profiles = home.root / "apt/profiles"
+    profiles = home.root / "profiles"
     for profile in (home.root, *(sorted(path for path in profiles.iterdir() if path.is_dir()) if profiles.is_dir() else ())):
         name = "direct" if profile == home.root else profile.name
         try:
-            state = _inside(home, profile / "apt/state.json")
+            state = _inside(home, profile / "packages.json")
             if state.is_file():
                 record = read_json(state)
                 if record.get("homebrew") and record.get("activation"):

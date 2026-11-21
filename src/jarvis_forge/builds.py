@@ -24,7 +24,7 @@ from .downloads import unpack
 from .environment_registry import show as registered_environment
 from .package_operations import run_command, verified_archive
 from .build_names import app_name
-from .paths import object_path, physical_name, named_path
+from .paths import object_path, record_path, named_path, semantic_name
 from .storage import ForgeError, ForgeHome, digest, identifier, new_id, now, read_json, write_json
 from .suite import UniqueLoader, expand
 
@@ -105,6 +105,19 @@ def load(path, *, home=None, library_files=None):
             SpecifierSet(requirement.get("version", ""))
         except InvalidSpecifier as exc:
             raise ForgeError(f"Invalid artifact version constraint: {exc}") from exc
+    for resource in config.get('resources',[]):
+        relative=Path(resource['path']);source=path.parent/relative
+        if relative.is_absolute() or '..' in relative.parts or not source.resolve().is_relative_to(path.parent) or relative.suffix!='.py':
+            raise ForgeError(f'Invalid build resource path: {relative}')
+        if not source.is_file() or digest(source)!=resource['sha256']:raise ForgeError(f'Build resource changed: {source}')
+        card_sources.append({'path':str(relative),'sha256':resource['sha256'],'content':source.read_bytes().decode('utf-8')})
+    from .build_workspace import locate
+    if workspace:=locate(path):
+        workspace_data=read_json(workspace/'metadata.json')
+        original=Path(workspace_data.get('source_root',workspace))
+        for spec in config.get('sources',{}).values():
+            if 'path' in spec and not Path(spec['path']).is_absolute() and not (workspace/spec['path']).exists():
+                spec['path']=str((original/spec['path']).resolve())
     raw_sha = digest(path)
     recipe_sha = fingerprint({"raw": raw_sha, "config": config, "cards": card_sources}) if card_sources else raw_sha
     from .build_workspace import locate
@@ -118,8 +131,18 @@ def graph(home, reference, *, parameters=None):
     from .build_catalog import resolve
     nodes, visiting = {}, set()
 
-    def visit(path):
+    def visit(path, dependency=None):
         item = load(path, home=home)
+        if dependency is not None:
+            from .apt_profiles import active_home
+            from .unified_profiles import record
+            data=record(active_home(home))
+            if data:
+                candidates=[row for row in data.get('apps',[]) if row.get('enabled') and app_name(row['name'])==app_name(item['config']['id'])]
+                if dependency.get('artifact'):candidates=[row for row in data.get('apps',[]) if row['artifact_id']==dependency['artifact']]
+                for row in candidates:
+                    if row.get('workspace') and Version(row['version']) in SpecifierSet(dependency.get('version','')) and (Path(row['workspace'])/'build.yaml').is_file():
+                        item=load(Path(row['workspace'])/'build.yaml',home=home);break
         key = item["sha256"]
         if key in visiting:
             raise ForgeError("Cross-build dependency cycle detected.")
@@ -128,7 +151,7 @@ def graph(home, reference, *, parameters=None):
         visiting.add(key)
         links = {}
         for name, req in item["config"].get("requires", {}).items():
-            links[name] = visit(resolve(home, req.get("build", req.get("workflow")), Path(path).parent))
+            links[name] = visit(resolve(home, req.get("build", req.get("workflow")), Path(item["path"]).parent),req)
         visiting.remove(key)
         selected = {**item["config"].get("parameters", {})}
         for name, value in (parameters or {}).items():
@@ -205,21 +228,7 @@ def file_lock(path, *, blocking=False, message=None):
 
 
 def source_cmake_lock(home, source):
-    """Lock one checkout's shared CMake tree without changing its source identity."""
-    source = Path(source).resolve()
-    git = source / ".git"
-    gitdir = None
-    if git.is_dir():
-        gitdir = git
-    elif git.is_file():
-        for line in git.read_text(errors="replace").splitlines():
-            if line.startswith("gitdir:"):
-                candidate = Path(line.split(":", 1)[1].strip())
-                gitdir = candidate if candidate.is_absolute() else (source / candidate).resolve()
-                break
-    if gitdir is not None:
-        return gitdir / "jforge-cmake.lock"
-    return object_path(home.root / "builds/source-locks", source.name, {"source": str(source)}, create=True) / "cmake.lock"
+    return record_path(home.root/'locks/sources','cmake',{'source':str(source)},create=True)/'operation.lock'
 
 
 def _apply_source_override(selected_graph, source):
@@ -237,16 +246,32 @@ def _apply_source_override(selected_graph, source):
     sources[local[0]] = {"path": str(path)}
 
 
+def _declared_version(config):
+    versions={str(step.get('with',{}).get('export',{}).get('version')) for step in config.get('steps',[])
+              if step.get('with',{}).get('export',{}).get('version')}
+    return versions.pop() if len(versions)==1 else str(config.get('version','dev'))
+
+
 def _instance_directory(base, config, instance, *, installs=None):
-    work = object_path(base, config["id"], {"instance": instance, "build": config["id"]}, create=True)
-    work.mkdir(parents=True, exist_ok=True)
-    write_json(work / ".jforge-instance.json", {"schema_version": 1, "instance": instance, "build": config["id"]})
+    from .build_names import app_name
+    base=Path(base)
+    if (base/'metadata.json').is_file() and read_json(base/'metadata.json').get('kind')=='workspace':
+        data=read_json(base/'metadata.json')
+        if data.get('instance') not in (None,instance):
+            raise ForgeError('Workspace inputs changed; rebuild explicitly in the original workspace.')
+        data['instance']=instance;write_json(base/'metadata.json',data)
+        return base
+    work=object_path(base,app_name(config['id']),{'instance':instance,'build':config['id']},
+                     version=_declared_version(config),create=True)
+    write_json(work/'.jforge-instance.json',{'schema_version':1,'instance':instance,'build':config['id']})
     return work
 
 
 def artifact_key(home, build, instance, output, *, create=False):
-    return physical_name(home.root / "builds/artifacts", build,
-                         {"build": build, "instance": instance, "output": output}, create=create)
+    from .build_names import app_name
+    path=record_path(home.root/'builds/artifacts','publish-'+app_name(build),
+                     {'build':build,'instance':instance,'output':output},create=create)
+    return path.name if path else None
 
 
 def _artifact_exists(home, config, instance, name):
@@ -360,9 +385,14 @@ def find_artifact(home, request, context, *, apt=None):
         if not compatible(result, request, context):
             raise ForgeError("Explicit artifact does not satisfy build requirements.")
         return result
+    from .apt_profiles import active_home
+    from .unified_profiles import record
+    data=record(active_home(home))
+    enabled={row['artifact_id'] for row in data.get('apps',[]) if row.get('enabled')} if data else None
     matches = []
     for path in paths:
         value = read_json(path)
+        if enabled is not None and value.get('artifact_id') not in enabled:continue
         if compatible(value, request, context) and (apt is None or value.get("apt") == apt):
             try:
                 matches.append(artifact(home, value["artifact_id"]))
@@ -487,12 +517,18 @@ def _require_spack_profile(selected, build_id=None):
     if backend_name(selected) != "spack":
         build = f"Build {build_id}" if build_id else "This build"
         raise ForgeError(f"{build} requires a Spack apt profile. Current profile {selected.root.name} uses Homebrew.",
-                         hint="Run jforge apt profile to list profiles, then select a Spack profile.")
+                         hint="Run jforge profile to list profiles, then use jforge profile use NAME.")
 
 
 def _check_host(home, selected_graph, saved_nodes=None, apt_profile=None):
     from .apt_profiles import active_home
 
+    from .unified_profiles import record, verify
+    selected=ForgeHome(Path(apt_profile['path'])) if apt_profile else active_home(home)
+    managed=record(selected)
+    if not managed:raise ForgeError('Builds require a project profile.',hint='jforge profile create default --platform ubuntu24')
+    verify(selected,managed)
+    apt_profile={'backend':managed['backend'],'path':str(selected.root)}
     nodes = selected_graph["nodes"]
     saved_nodes = saved_nodes or {}
     for node in nodes.values():
@@ -537,7 +573,7 @@ def _matches_legacy_configure(saved, requested, argv, logs, source, environment)
     return False
 
 
-def execute(home, reference=None, *, parameters=None, environment_name=None, jobs=None, resume=None, source=None, progress=None, verbose=False, as_json=False):
+def execute(home, reference=None, *, parameters=None, environment_name=None, jobs=None, resume=None, source=None, progress=None, verbose=False, as_json=False, confirm=None):
     from . import toolchains, unified_profiles
     from .apt_profiles import active_home
     from .env_entries import prepare_build_environment, require_outputs_off
@@ -589,6 +625,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
             raise ForgeError("The saved build profile is unavailable or has changed.")
         if resume:
             unified_profiles.verify(managed_home, managed)
+    runtime_profile=managed_home if managed else active_home(home)
     excluded_outputs = {app_name(name) for node in selected_graph["nodes"].values()
                         for name in node["config"].get("environment", {}).get("outputs_off", ())}
     if excluded_outputs:
@@ -642,7 +679,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
             config = node["config"]
             config_env = config.get("environment", {})
             old = state["nodes"].get(key, {})
-            node_dir = object_path(attempts, config["id"], {"node": key}, create=True)
+            node_dir = record_path(attempts, config["id"], {"node": key}, create=True)
             node_dir.mkdir(exist_ok=True)
             (node_dir / "build.yaml").write_text(node["text"])
             if old.get("environment"):
@@ -738,6 +775,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                         "environment": environment, "environment_origin": environment_origin,
                         "requires": {n: a["artifact_id"] for n, a in dependencies.items()}}
             workspace = Path(node["workspace"]) if node.get("workspace") else None
+            workspace_external=bool(workspace and read_json(workspace/'metadata.json').get('external',True))
             if workspace:
                 identity["workspace"] = str(workspace)
             if policy == "rebuild":
@@ -757,7 +795,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
             if old.get("instance") and old["instance"] != instance:
                 raise ForgeError("Build inputs changed; start a new run instead of resuming.")
             work = _instance_directory(
-                workspace / "instances" if workspace else home.root / "builds/work",
+                workspace if workspace else (runtime_profile.root if runtime_profile else active_home(home).root) / "src",
                 config, instance, installs=None if workspace else home.root / "builds/installs",
             )
             if workspace:
@@ -779,7 +817,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                         # A deleted workspace leaves its manifest in Forge home.
                         # Keep it until a successful build replaces the output.
                         if (saved.get("artifact_id") == aid and saved.get("instance") == instance
-                                and prefix.is_absolute() and prefix.resolve().is_relative_to(workspace / "instances")
+                                and prefix.is_absolute() and prefix.resolve().is_relative_to(workspace / "install")
                                 and not prefix.exists() and not prefix.is_symlink()):
                             continue
                     try:
@@ -816,7 +854,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     content = resource["content"].encode("utf-8")
                     if hashlib.sha256(content).hexdigest() != resource["sha256"]:
                         raise ForgeError("Modified companion script snapshot.")
-                    frozen = object_path(work / "check-scripts", "check", {"sha256": resource["sha256"]}, create=True) / Path(resource["path"]).name
+                    frozen = record_path(work / "check-scripts", "freeze-check", {"sha256": resource["sha256"]}, create=True) / Path(resource["path"]).name
                     frozen.parent.mkdir(parents=True, exist_ok=True)
                     frozen.write_bytes(content)
                     archived = node_dir / "scripts" / resource["path"]
@@ -829,7 +867,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     if "path" in item:
                         source_dir = Path(item["path"])
                     else:
-                        target = named_path(work / "sources", name, create=True)
+                        target = named_path(work / "src", name, create=True)
                         pending_archives[name] = (item, target)
                         source_dir = target / item.get("subdir", "")
                         if not source_dir.resolve().is_relative_to(target.resolve()):
@@ -863,12 +901,8 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                                 home, source_spec, log, name,
                                 show_progress=progress is not None and not verbose and not as_json,
                             )
-                            if workspace:
-                                local_archive = object_path(work / "downloads", name, source_spec, create=True) / "archive"
-                                local_archive.parent.mkdir(parents=True, exist_ok=True)
-                                shutil.copyfile(archive, local_archive)
-                                archive = local_archive
                             if target.exists():
+                                if not (target/".jforge-extracted").is_file():raise ForgeError(f"Unregistered source directory is preserved: {target}")
                                 shutil.rmtree(target)
                             target.parent.mkdir(exist_ok=True)
                             event(f"Extract source {name}")
@@ -883,9 +917,9 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     try:
                         record = _step(home, step, options, work, step_dir, environment, observed,
                                        context, records, dependencies, jobs, event, row["steps"].get(step_id),
-                                       workspace=workspace, verbose=verbose, as_json=as_json, apt_profile=node_profile,
+                                       workspace=workspace if workspace_external else None, verbose=verbose, as_json=as_json, apt_profile=apt_profile,
                                        toolchain=toolchain, build_id=config["id"],
-                                       output_exclusions=(runtime_profile, excluded_outputs) if excluded_outputs else None)
+                                       output_exclusions=(runtime_profile, excluded_outputs) if excluded_outputs else None, confirm=confirm)
                         records[step_id] = record
                         row["steps"][step_id] = record
                         if record.get("prefix"):
@@ -926,6 +960,8 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                                  "dependencies": [v["artifact_id"] for v in dependencies.values()],
                                  "evidence": evidence,
                                  "files": producer["files"] if producer.get("in_place") else cmake.manifest(Path(producer["prefix"]))}
+                    if workspace:
+                        installed.update(workspace=str(workspace),workspace_external=workspace_external)
                     if managed:
                         installed["profile_instance"] = managed["id"]
                     if producer.get("in_place"):
@@ -957,13 +993,14 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                 from .build_workspace import publish
                 publish(Path(request["workspace"]), result)
             try:
-                from .env_entries import attach_root_build
+                from .env_entries import attach_build_outputs
 
-                attached = attach_root_build(home, result)
+                attached = attach_build_outputs(home, result)
                 if attached:
                     result["environment_entry"] = attached["activation"]
             except ForgeError as exc:
                 result["environment_entry_error"] = str(exc)
+                raise
         except KeyboardInterrupt:
             result.update(status="interrupted", error="Interrupted.")
         except (ForgeError, OSError, ValueError) as exc:
@@ -983,7 +1020,7 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
 
 def _step(home, step, options, work, logs, environment, observed, context, records, dependencies, jobs, progress,
           previous, *, workspace=None, verbose=False, as_json=False, apt_profile=None, toolchain=None, build_id=None,
-          output_exclusions=None):
+          output_exclusions=None, confirm=None):
     used = []
     for name in options.get("dependencies", []):
         used.append(dependencies[name[9:]] if name.startswith("requires.") else records[name])
@@ -1048,6 +1085,8 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
     if step["uses"] == "apt.install":
         from . import spack_backend as backend
 
+        from .apt_profiles import active_home
+        _require_spack_profile(ForgeHome(Path(apt_profile["path"])) if apt_profile else active_home(home))
         project_python = observed.get("python", {}).get("path", "python3")
         if previous:
             for file, sha in previous["evidence"].items():
@@ -1061,8 +1100,8 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
         from .apt_progress import AptProgress
         from .cli import _console
         from .toolchains import binding
-        # Package dependencies belong in the selected apt profile. By default
-        # that is spack-default, the same store and compilers as `jforge apt`.
+        # Package dependencies belong to the selected project profile and
+        # use the compiler supplied by its shared platform.
         # The screen uses the same phase and package display as `jforge apt install`.
         display = AptProgress(_console(stderr=True), verbose=verbose, as_json=as_json, indent="  ")
         reporter = _AptInstallProgress(progress, display, logs)
@@ -1076,7 +1115,7 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
                                      hint="Start a new build run with the selected toolchain.")
                 installed = backend.transact(target, "install", options["specs"], jobs=jobs,
                                              timeout=step.get("timeout_seconds", 86400), progress=reporter,
-                                             project_python=project_python)
+                                             project_python=project_python, confirm=confirm)
             display.close(success=True)
         finally:
             display.close()
@@ -1124,10 +1163,16 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
             raise ForgeError("binary_dir preset requires configure_preset.")
         build = cmake.preset_binary_dir(source, preset_name)
     else:
-        build = named_path(work / "build", step["id"], create=True)
-    # An in-place artifact is the source tree. CBS writes CBS into that tree.
-    prefix = source if options.get("in_place") else (
-        named_path(work / "install", step["id"], create=True) if workspace else named_path(home.root / "builds/installs", step["id"], create=True) / work.name)
+        owner=ForgeHome(Path(apt_profile['path'])) if apt_profile else None
+        build=(work/'build'/step['id'] if workspace else
+               owner.root/'build'/work.name/step['id'] if owner else work/'build'/step['id'])
+    from .build_names import app_name
+    exported=options.get('export',{})
+    app=app_name(build_id or exported.get('package') or 'app')
+    version=str(exported.get('version') or 'dev')
+    prefix=source if options.get('in_place') else (
+        work/'install' if workspace else
+        (ForgeHome(Path(apt_profile['path'])).root if apt_profile else home.root)/'apps'/semantic_name(app,version))
     lock = file_lock(source_cmake_lock(home, source), blocking=True,
                      message=f"CMake source is busy: {source}") if options.get("lock") == "source" else nullcontext()
     with lock:
@@ -1306,7 +1351,7 @@ def step_path(home, run_id, step_name, *, pending=False):
     for key, node in graph_value["nodes"].items():
         for step in node["ordered"]:
             if step_name in {step["id"], node["config"]["id"] + "." + step["id"]}:
-                node_directory = object_path(attempt, node["config"]["id"], {"node": key})
+                node_directory = record_path(attempt, node["config"]["id"], {"node": key})
                 if node_directory is None:
                     continue
                 candidate = named_path(node_directory, step["id"])

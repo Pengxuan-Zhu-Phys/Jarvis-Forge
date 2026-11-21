@@ -20,7 +20,8 @@ export async function apiFetch(path, options = {}) {
     options = {...options, body: JSON.stringify(body)};
   }
   const response = await fetch(path, {...options, credentials: "same-origin", cache: "no-store"});
-  const data = await response.json();
+  let data;
+  try { data = await response.json(); } catch { data = {ok: false, error: {message: `The service returned HTTP ${response.status} without a JSON response.`}}; }
   if (data.ok && data.cases && data.projects) catalog(data);
   return new Response(JSON.stringify(data), {status: response.status, statusText: response.statusText,
     headers: {"Content-Type": "application/json"}});

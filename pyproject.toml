@@ -43,6 +43,7 @@ jarvis_forge = [
     "bench_projects/*/*/.jarvis-pack/*.json", "bench_projects/*/*/bin/*.yaml",
     "bench_projects/*/*/data/**/*", "bench_projects/*/*/deps/**/*",
     "dashboard/static/*.html", "dashboard/static/*.css", "dashboard/static/*.js",
+    "dashboard/static/*.json", "dashboard/static/*.ts", "dashboard/static/**/*",
 ]
 
 [tool.pytest.ini_options]

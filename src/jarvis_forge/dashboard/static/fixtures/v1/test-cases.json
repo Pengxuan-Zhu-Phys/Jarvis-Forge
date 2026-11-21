@@ -1,0 +1,1086 @@
+{
+  "fixture_version": 1,
+  "contract_status": "Independent frontend Demo fixture; canonical Forge contract is pinned in contracts/v1",
+  "items": [
+    {
+      "case_id": "fixture-01-1",
+      "definition_id": "demo.render.test_axes",
+      "step_id": "jarvis-plot/demo/render::axes",
+      "native_id": "tests/test_layout.py::test_axes[compact]",
+      "title": "Axes and legend layout",
+      "adapter": "pytest",
+      "variant_key": "compact",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "compact"
+      },
+      "file": "tests/test_layout.py",
+      "component": "render",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The axis labels and legend remain within the figure bounds. This protects the render workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "compact",
+        "action": "Exercise test_axes using the compact scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The axis labels and legend remain within the figure bounds.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-01-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_layout.py"
+      }
+    },
+    {
+      "case_id": "fixture-01-2",
+      "definition_id": "demo.render.test_axes",
+      "step_id": "jarvis-plot/demo/render::axes",
+      "native_id": "tests/test_layout.py::test_axes[wide]",
+      "title": "Axes and legend layout",
+      "adapter": "pytest",
+      "variant_key": "wide",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "wide"
+      },
+      "file": "tests/test_layout.py",
+      "component": "render",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The axis labels and legend remain within the figure bounds. This protects the render workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "wide",
+        "action": "Exercise test_axes using the wide scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The axis labels and legend remain within the figure bounds.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-01-2.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_layout.py"
+      }
+    },
+    {
+      "case_id": "fixture-02-1",
+      "definition_id": "demo.render.test_series",
+      "step_id": "jarvis-plot/demo/render::series",
+      "native_id": "tests/test_layout.py::test_series[single]",
+      "title": "Multiple series rendering",
+      "adapter": "pytest",
+      "variant_key": "single",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "single"
+      },
+      "file": "tests/test_layout.py",
+      "component": "render",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: Each input series has a distinct artist and the expected number of points. This protects the render workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "single",
+        "action": "Exercise test_series using the single scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "Each input series has a distinct artist and the expected number of points.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-02-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_layout.py"
+      }
+    },
+    {
+      "case_id": "fixture-02-2",
+      "definition_id": "demo.render.test_series",
+      "step_id": "jarvis-plot/demo/render::series",
+      "native_id": "tests/test_layout.py::test_series[overlay]",
+      "title": "Multiple series rendering",
+      "adapter": "pytest",
+      "variant_key": "overlay",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "overlay"
+      },
+      "file": "tests/test_layout.py",
+      "component": "render",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: Each input series has a distinct artist and the expected number of points. This protects the render workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "overlay",
+        "action": "Exercise test_series using the overlay scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "Each input series has a distinct artist and the expected number of points.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-02-2.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_layout.py"
+      }
+    },
+    {
+      "case_id": "fixture-03-1",
+      "definition_id": "demo.export.test_png",
+      "step_id": "jarvis-plot/demo/export::png",
+      "native_id": "tests/test_savefig.py::test_png[100dpi]",
+      "title": "PNG export dimensions",
+      "adapter": "pytest",
+      "variant_key": "100dpi",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "100dpi"
+      },
+      "file": "tests/test_savefig.py",
+      "component": "export",
+      "tags": [
+        "regression",
+        "export"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The exported PNG width and height match the requested figure size and DPI. This protects the export workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "100dpi",
+        "action": "Exercise test_png using the 100dpi scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The exported PNG width and height match the requested figure size and DPI.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-03-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_savefig.py"
+      }
+    },
+    {
+      "case_id": "fixture-03-2",
+      "definition_id": "demo.export.test_png",
+      "step_id": "jarvis-plot/demo/export::png",
+      "native_id": "tests/test_savefig.py::test_png[200dpi]",
+      "title": "PNG export dimensions",
+      "adapter": "pytest",
+      "variant_key": "200dpi",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "200dpi"
+      },
+      "file": "tests/test_savefig.py",
+      "component": "export",
+      "tags": [
+        "regression",
+        "export"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The exported PNG width and height match the requested figure size and DPI. This protects the export workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "200dpi",
+        "action": "Exercise test_png using the 200dpi scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The exported PNG width and height match the requested figure size and DPI.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-03-2.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_savefig.py"
+      }
+    },
+    {
+      "case_id": "fixture-04-1",
+      "definition_id": "demo.export.test_svg",
+      "step_id": "jarvis-plot/demo/export::svg",
+      "native_id": "tests/test_savefig.py::test_svg[text-labels]",
+      "title": "SVG axis labels",
+      "adapter": "pytest",
+      "variant_key": "text-labels",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "text-labels"
+      },
+      "file": "tests/test_savefig.py",
+      "component": "export",
+      "tags": [
+        "regression",
+        "export"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The exported SVG contains the expected x and y axis labels. This protects the export workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "text-labels",
+        "action": "Exercise test_svg using the text-labels scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The exported SVG contains the expected x and y axis labels.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-04-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_savefig.py"
+      }
+    },
+    {
+      "case_id": "fixture-04-2",
+      "definition_id": "demo.export.test_svg",
+      "step_id": "jarvis-plot/demo/export::svg",
+      "native_id": "tests/test_savefig.py::test_svg[unicode-labels]",
+      "title": "SVG axis labels",
+      "adapter": "pytest",
+      "variant_key": "unicode-labels",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "unicode-labels"
+      },
+      "file": "tests/test_savefig.py",
+      "component": "export",
+      "tags": [
+        "regression",
+        "export"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The exported SVG contains the expected x and y axis labels. This protects the export workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "unicode-labels",
+        "action": "Exercise test_svg using the unicode-labels scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The exported SVG contains the expected x and y axis labels.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "failed",
+      "report_href": "/fixtures/v1/fixture-04-2.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_savefig.py"
+      }
+    },
+    {
+      "case_id": "fixture-05-1",
+      "definition_id": "demo.web.test_routes",
+      "step_id": "jarvis-plot/demo/web::routes",
+      "native_id": "tests/test_preview.py::test_routes[home]",
+      "title": "Preview page navigation",
+      "adapter": "pytest",
+      "variant_key": "home",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "home"
+      },
+      "file": "tests/test_preview.py",
+      "component": "web",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The preview route returns the requested plot without losing navigation context. This protects the web workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "home",
+        "action": "Exercise test_routes using the home scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The preview route returns the requested plot without losing navigation context.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-05-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_preview.py"
+      }
+    },
+    {
+      "case_id": "fixture-05-2",
+      "definition_id": "demo.web.test_routes",
+      "step_id": "jarvis-plot/demo/web::routes",
+      "native_id": "tests/test_preview.py::test_routes[detail]",
+      "title": "Preview page navigation",
+      "adapter": "pytest",
+      "variant_key": "detail",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "detail"
+      },
+      "file": "tests/test_preview.py",
+      "component": "web",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The preview route returns the requested plot without losing navigation context. This protects the web workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "detail",
+        "action": "Exercise test_routes using the detail scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The preview route returns the requested plot without losing navigation context.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-05-2.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_preview.py"
+      }
+    },
+    {
+      "case_id": "fixture-06-1",
+      "definition_id": "demo.web.test_resize",
+      "step_id": "jarvis-plot/demo/web::resize",
+      "native_id": "tests/test_preview.py::test_resize[mobile]",
+      "title": "Responsive plot viewport",
+      "adapter": "pytest",
+      "variant_key": "mobile",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "mobile"
+      },
+      "file": "tests/test_preview.py",
+      "component": "web",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The preview fits the viewport and preserves the plot aspect ratio. This protects the web workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "mobile",
+        "action": "Exercise test_resize using the mobile scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The preview fits the viewport and preserves the plot aspect ratio.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-06-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_preview.py"
+      }
+    },
+    {
+      "case_id": "fixture-06-2",
+      "definition_id": "demo.web.test_resize",
+      "step_id": "jarvis-plot/demo/web::resize",
+      "native_id": "tests/test_preview.py::test_resize[desktop]",
+      "title": "Responsive plot viewport",
+      "adapter": "pytest",
+      "variant_key": "desktop",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "desktop"
+      },
+      "file": "tests/test_preview.py",
+      "component": "web",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The preview fits the viewport and preserves the plot aspect ratio. This protects the web workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "desktop",
+        "action": "Exercise test_resize using the desktop scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The preview fits the viewport and preserves the plot aspect ratio.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-06-2.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_preview.py"
+      }
+    },
+    {
+      "case_id": "fixture-07-1",
+      "definition_id": "demo.arithmetic.sum-product-2-3",
+      "step_id": "sarah/demo/demo.arithmetic::2,3",
+      "native_id": "tests/command-check::sum-product-2-3[default]",
+      "title": "Sum and product · 2 and 3",
+      "adapter": "command",
+      "variant_key": "default",
+      "variant_count": 1,
+      "parameters": {
+        "scenario": "default"
+      },
+      "file": "tests/command-check",
+      "component": "arithmetic",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The check returns sum 5 and product 6. This protects the arithmetic workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "default",
+        "action": "Exercise sum-product-2-3 using the default scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The check returns sum 5 and product 6.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-07-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/command-check"
+      }
+    },
+    {
+      "case_id": "fixture-08-1",
+      "definition_id": "demo.arithmetic.sum-product-5-7",
+      "step_id": "sarah/demo/demo.arithmetic::5,7",
+      "native_id": "tests/command-check::sum-product-5-7[default]",
+      "title": "Sum and product · 5 and 7",
+      "adapter": "command",
+      "variant_key": "default",
+      "variant_count": 1,
+      "parameters": {
+        "scenario": "default"
+      },
+      "file": "tests/command-check",
+      "component": "arithmetic",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The check returns sum 12 and product 35. This protects the arithmetic workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "default",
+        "action": "Exercise sum-product-5-7 using the default scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The check returns sum 12 and product 35.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-08-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/command-check"
+      }
+    },
+    {
+      "case_id": "fixture-09-1",
+      "definition_id": "demo.model.test_parameters",
+      "step_id": "sarah/demo/model::parameters",
+      "native_id": "tests/test_model.py::test_parameters[nominal]",
+      "title": "Model parameter validation",
+      "adapter": "pytest",
+      "variant_key": "nominal",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "nominal"
+      },
+      "file": "tests/test_model.py",
+      "component": "model",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: Parameters satisfy the declared domain constraints. This protects the model workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "nominal",
+        "action": "Exercise test_parameters using the nominal scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "Parameters satisfy the declared domain constraints.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-09-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_model.py"
+      }
+    },
+    {
+      "case_id": "fixture-09-2",
+      "definition_id": "demo.model.test_parameters",
+      "step_id": "sarah/demo/model::parameters",
+      "native_id": "tests/test_model.py::test_parameters[boundary]",
+      "title": "Model parameter validation",
+      "adapter": "pytest",
+      "variant_key": "boundary",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "boundary"
+      },
+      "file": "tests/test_model.py",
+      "component": "model",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: Parameters satisfy the declared domain constraints. This protects the model workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "boundary",
+        "action": "Exercise test_parameters using the boundary scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "Parameters satisfy the declared domain constraints.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-09-2.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_model.py"
+      }
+    },
+    {
+      "case_id": "fixture-10-1",
+      "definition_id": "demo.model.test_constraints",
+      "step_id": "sarah/demo/model::constraints",
+      "native_id": "tests/test_model.py::test_constraints[nominal]",
+      "title": "Physical constraint checks",
+      "adapter": "pytest",
+      "variant_key": "nominal",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "nominal"
+      },
+      "file": "tests/test_model.py",
+      "component": "model",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The model obeys the specified conservation constraints. This protects the model workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "nominal",
+        "action": "Exercise test_constraints using the nominal scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The model obeys the specified conservation constraints.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-10-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_model.py"
+      }
+    },
+    {
+      "case_id": "fixture-10-2",
+      "definition_id": "demo.model.test_constraints",
+      "step_id": "sarah/demo/model::constraints",
+      "native_id": "tests/test_model.py::test_constraints[boundary]",
+      "title": "Physical constraint checks",
+      "adapter": "pytest",
+      "variant_key": "boundary",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "boundary"
+      },
+      "file": "tests/test_model.py",
+      "component": "model",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The model obeys the specified conservation constraints. This protects the model workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "boundary",
+        "action": "Exercise test_constraints using the boundary scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The model obeys the specified conservation constraints.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-10-2.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_model.py"
+      }
+    },
+    {
+      "case_id": "fixture-11-1",
+      "definition_id": "demo.environment.python-selection",
+      "step_id": "jarvis-forge/demo/environment::python",
+      "native_id": "tests/command-check::python-selection[default]",
+      "title": "Selected Python environment",
+      "adapter": "command",
+      "variant_key": "default",
+      "variant_count": 1,
+      "parameters": {
+        "scenario": "default"
+      },
+      "file": "tests/command-check",
+      "component": "environment",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The configured external Python interpreter can be queried. This protects the environment workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "default",
+        "action": "Exercise python-selection using the default scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The configured external Python interpreter can be queried.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-11-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/command-check"
+      }
+    },
+    {
+      "case_id": "fixture-12-1",
+      "definition_id": "demo.environment.dependencies",
+      "step_id": "jarvis-forge/demo/environment::dependencies",
+      "native_id": "tests/command-check::dependencies[default]",
+      "title": "Dependency availability",
+      "adapter": "command",
+      "variant_key": "default",
+      "variant_count": 1,
+      "parameters": {
+        "scenario": "default"
+      },
+      "file": "tests/command-check",
+      "component": "environment",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: All declared dependencies are available to the selected interpreter. This protects the environment workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "default",
+        "action": "Exercise dependencies using the default scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "All declared dependencies are available to the selected interpreter.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-12-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/command-check"
+      }
+    },
+    {
+      "case_id": "fixture-13-1",
+      "definition_id": "demo.build.test_recipe",
+      "step_id": "jarvis-forge/demo/build::recipe",
+      "native_id": "tests/test_build.py::test_recipe[minimal]",
+      "title": "Build recipe validation",
+      "adapter": "pytest",
+      "variant_key": "minimal",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "minimal"
+      },
+      "file": "tests/test_build.py",
+      "component": "build",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The recipe resolves the declared source and build settings. This protects the build workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "minimal",
+        "action": "Exercise test_recipe using the minimal scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The recipe resolves the declared source and build settings.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-13-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_build.py"
+      }
+    },
+    {
+      "case_id": "fixture-13-2",
+      "definition_id": "demo.build.test_recipe",
+      "step_id": "jarvis-forge/demo/build::recipe",
+      "native_id": "tests/test_build.py::test_recipe[release]",
+      "title": "Build recipe validation",
+      "adapter": "pytest",
+      "variant_key": "release",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "release"
+      },
+      "file": "tests/test_build.py",
+      "component": "build",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The recipe resolves the declared source and build settings. This protects the build workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "release",
+        "action": "Exercise test_recipe using the release scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The recipe resolves the declared source and build settings.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-13-2.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_build.py"
+      }
+    },
+    {
+      "case_id": "fixture-14-1",
+      "definition_id": "demo.build.test_artifacts",
+      "step_id": "jarvis-forge/demo/build::artifacts",
+      "native_id": "tests/test_build.py::test_artifacts[library]",
+      "title": "Expected build artifacts",
+      "adapter": "pytest",
+      "variant_key": "library",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "library"
+      },
+      "file": "tests/test_build.py",
+      "component": "build",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The declared output files are registered as build artifacts. This protects the build workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "library",
+        "action": "Exercise test_artifacts using the library scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The declared output files are registered as build artifacts.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-14-1.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_build.py"
+      }
+    },
+    {
+      "case_id": "fixture-14-2",
+      "definition_id": "demo.build.test_artifacts",
+      "step_id": "jarvis-forge/demo/build::artifacts",
+      "native_id": "tests/test_build.py::test_artifacts[executable]",
+      "title": "Expected build artifacts",
+      "adapter": "pytest",
+      "variant_key": "executable",
+      "variant_count": 2,
+      "parameters": {
+        "scenario": "executable"
+      },
+      "file": "tests/test_build.py",
+      "component": "build",
+      "tags": [
+        "regression",
+        "smoke"
+      ],
+      "metadata_status": "complete",
+      "purpose": "Illustrative fixture: The declared output files are registered as build artifacts. This protects the build workflow from regression.",
+      "scenario": {
+        "preconditions": "Isolated, controlled Demo inputs.",
+        "inputs": "executable",
+        "action": "Exercise test_artifacts using the executable scenario and compare the observable result."
+      },
+      "criteria": [
+        {
+          "criterion_id": "observable-result",
+          "expected": "The declared output files are registered as build artifacts.",
+          "verification": "automated",
+          "status": "unobserved",
+          "observed": null,
+          "evidence_refs": []
+        }
+      ],
+      "limitations": [
+        "Illustrative fixture only; this is not evidence from the user’s checkout."
+      ],
+      "fixture_outcome": "passed",
+      "report_href": "/fixtures/v1/fixture-14-2.html",
+      "target_id": "independent-demo",
+      "group": {
+        "file": "tests/test_build.py"
+      }
+    }
+  ]
+}

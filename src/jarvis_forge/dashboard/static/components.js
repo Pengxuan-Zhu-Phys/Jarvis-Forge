@@ -1,3 +1,5 @@
+import {coverVariant, coverImage, coverShelf, resolvedCoverTheme} from './cover-themes.js?v=1.0.9';
+import {jobProgress} from './progress-model.js';
 /* DOM components consume data; all views share the same grid, type, and states. */
 export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -20,6 +22,11 @@ const glyphs = {overview: "◈", library: "▤", playlists: "≡", runs: "↻", 
 
 export function icon(name) {
   return el("span", {class: "icon", "aria-hidden": "true"}, glyphs[name] || "·");
+}
+
+export function alignmentIcon() {
+  return svgNode('svg', {viewBox: '0 0 24 24', class: 'nav-icon design-icon', 'aria-hidden': 'true', focusable: 'false'},
+    ...[[3, 3], [14, 3], [3, 14], [14, 14]].map(([x, y]) => svgNode('rect', {x, y, width: 7, height: 7, rx: 1})));
 }
 
 export function button(text, action, {variant = "secondary", glyph, disabled = false} = {}) {
@@ -102,12 +109,12 @@ export function grid(...children) {
   return el("div", {class: "grid"}, children);
 }
 
-export function split(primary, sidebar) {
-  return el("div", {class: "grid grid-split"}, cell(8, primary), cell(4, sidebar));
+export function split(primary, sidebar, primarySpan = 8) {
+  return el("div", {class: "grid grid-split"}, cell(primarySpan, primary), cell(12 - primarySpan, sidebar));
 }
 
 export function cell(span, ...children) {
-  return el("div", {class: `span-${span} grid-cell`}, children);
+  return el("div", {class: `span-${span} grid-cell`, "data-grid-span": span}, children);
 }
 
 export function pageHeader(title, description, actions = [], parent = null) {
@@ -133,12 +140,13 @@ export function metric(label, value, name, detail) {
 
 const statuses = {passed: ["Passed", "good"], reused: ["Reused", "good"], failed: ["Failed", "bad"],
   running: ["Running", "active"], queued: ["Queued", "active"], interrupted: ["Interrupted", "warning"],
-  skipped: ["Skipped", "neutral"], blocked: ["Blocked", "warning"], ready: ["Ready", "good"],
+  error: ["Error", "bad"], xfailed: ["Expected failure", "neutral"], xpassed: ["Unexpected pass", "warning"], collecting: ["Collecting", "active"], finished: ["Finished", "neutral"], unknown: ["Unknown", "warning"], skipped: ["Skipped", "neutral"], blocked: ["Blocked", "warning"], ready: ["Ready", "good"],
   unavailable: ["Unavailable", "warning"], not_run: ["Not run", "neutral"]};
 
 export function status(kind) {
   const [label, tone] = statuses[kind] || statuses.not_run;
-  return el("span", {class: `status ${tone}`, "data-state": kind || "not_run"}, el("i", {"aria-hidden": "true"}), label);
+  return el("span", {class: `status ${tone}`, "data-state": kind || "not_run", title: label, "aria-label": label},
+    el("i", {"aria-hidden": "true"}), ({xfailed: "XFAIL", xpassed: "XPASS"})[kind] || label);
 }
 
 export function recordCard({title, subtitle, name, href, state, detail, action}) {
@@ -194,7 +202,7 @@ export function checkbox(label, checked, action) {
 }
 
 export function progress(done, total, label) {
-  return el("progress", {max: Math.max(1, total), value: done, "aria-label": label});
+  return el("progress", {max: Math.max(1, total || 1), value: total == null ? null : done, "aria-label": label});
 }
 
 export function dialogForm(dialog, title, fields, submit, work) {
@@ -228,7 +236,8 @@ export function dialogForm(dialog, title, fields, submit, work) {
 }
 
 export function runBar(job, href, replay = null, queue = [], onQueue = null) {
-  const done = job.cases.filter(item => !["queued", "running"].includes(item.status)).length;
+  const model = jobProgress(job);
+  const done = model.completed;
   const again = replay && button("", replay, {glyph: "run"});
   if (again) {
     again.setAttribute("aria-label", "Run again");
@@ -248,7 +257,7 @@ export function runBar(job, href, replay = null, queue = [], onQueue = null) {
         el("span", {class: "player-label"}, ["running", "queued"].includes(job.status) ? `Now running · ${queue.length ? `${queue.length} next` : job.simulated ? "Demo" : "Local"}` : `Last run · ${job.simulated ? "Demo" : "Local"}`),
         el("strong", {title: job.label}, job.label))),
     el("div", {class: "player-progress player-slot", "data-grid-label": "PROGRESS · 3c"},
-      progress(done, job.cases.length, "Job progress"), el("span", {class: "subtext"}, `${done} / ${job.cases.length} cases`)),
+      progress(done, model.total, "Job progress"), el("span", {class: "subtext", title: model.current || model.label}, model.current ? `${model.label} · ${model.current}` : model.label)),
     el("div", {class: "player-state player-slot", "data-grid-label": "STATE · 2c"}, status(job.status)),
     el("div", {class: "player-actions player-slot", "data-grid-label": "ACTIONS · 3c"}, again, queueButton, link("View run", href)),
     el("div", {class: "player-design-grid", "aria-hidden": "true"}, Array.from({length: 12}, () => el("span"))),
@@ -261,17 +270,18 @@ export function playerNotice(job) {
 }
 
 export function playerCapsule(job, expand, project = null, waiting = 0) {
-  const total = job.cases.length;
-  const done = job.cases.filter(item => !["queued", "running"].includes(item.status)).length;
-  const failed = job.cases.filter(item => item.status === "failed").length;
+  const model = jobProgress(job);
+  const total = model.total;
+  const done = model.completed;
+  const failed = model.outcomes ? (model.outcomes.failed || 0) + (model.outcomes.error || 0) : job.cases.filter(item => item.status === "failed").length;
   const label = (statuses[job.status] || statuses.not_run)[0];
   const outcome = job.status === "failed" && failed ? `${failed} failed` : label;
   const projectTitle = project?.title || "Acceptance run";
   const control = button("", expand, {variant: `player-capsule theme-${project?.theme || "mint"}`});
-  control.setAttribute("aria-label", `Expand player: ${job.label}, ${projectTitle}, ${label}, ${done} of ${total} cases${waiting ? `, ${waiting} albums next` : ""}${failed ? `, ${failed} failed` : ""}`);
+  control.setAttribute("aria-label", `Expand player: ${job.label}, ${projectTitle}, ${label}, ${model.label}${waiting ? `, ${waiting} albums next` : ""}${failed ? `, ${failed} failed` : ""}`);
   control.setAttribute("aria-expanded", "false");
   control.setAttribute("aria-controls", "player-full");
-  control.setAttribute("title", `${projectTitle} · ${job.label} · ${outcome} · ${done}/${total} cases${waiting ? ` · ${waiting} next` : ""}`);
+  control.setAttribute("title", `${projectTitle} · ${job.label} · ${outcome} · ${model.label}${waiting ? ` · ${waiting} next` : ""}`);
   control.dataset.state = job.status;
   const percent = total ? Math.round(done / total * 10000) / 100 : 0;
   control.dataset.progress = String(percent);
@@ -284,7 +294,7 @@ export function playerCapsule(job, expand, project = null, waiting = 0) {
       project ? projectMark(project) : el("span", {}, "▷")),
     el("span", {class: "capsule-title"}, el("strong", {}, job.label), el("span", {class: "capsule-project"}, `${projectTitle}${waiting ? ` · +${waiting} next` : ""}`)),
     el("span", {class: "capsule-result"}, el("span", {class: "capsule-outcome"}, outcome),
-      el("span", {class: "capsule-count"}, `${done} / ${total} cases`)),
+      el("span", {class: "capsule-count"}, model.label)),
     svgNode("svg", {viewBox: "0 0 24 24", class: "nav-icon", "aria-hidden": "true"}, svgNode("path", {d: "m6 14 6-6 6 6"})),
     svgNode("svg", {class: "capsule-perimeter", "aria-hidden": "true", focusable: "false", preserveAspectRatio: "none"},
       svgNode("path", {class: "capsule-perimeter-track", pathLength: 100}),
@@ -302,44 +312,37 @@ function svgNode(tag, attrs = {}, ...children) {
   return node;
 }
 
-function albumArt(kind) {
-  const path = d => svgNode('path', {d});
-  const circle = (cx, cy, r) => svgNode('circle', {cx, cy, r});
-  const rect = (x, y, width, height, rx = 4) => svgNode('rect', {x, y, width, height, rx});
-  const drawings = {
-    curves: () => [path('M22 140H180 M32 150V24'), path('M32 126C60 126 57 47 92 47S132 122 180 36'),
-      path('M32 104C79 128 94 83 117 94S155 70 180 78')],
-    frames: () => [rect(28, 25, 100, 100), rect(55, 52, 100, 100), rect(82, 79, 100, 100), path('M110 129h42m-21-21v42')],
-    windows: () => [rect(24, 30, 154, 115, 8), path('M24 54h154 M42 42h2m8 0h2m8 0h2'),
-      rect(113, 77, 62, 95, 8), path('M128 92h32 M128 155h32 M45 83h45m-45 17h30')],
-    orbits: () => [circle(100, 100, 65), circle(100, 100, 42), circle(100, 100, 15),
-      path('M14 100h172 M100 14v172'), circle(145, 53, 7), circle(63, 123, 6)],
-    matrix: () => [rect(35, 35, 130, 130, 10), ...[58, 99, 140].flatMap(x=>[58, 99, 140].map(y=>circle(x,y,9))), path('M58 140 99 99l41-41')],
-    steps: () => [path('M28 146h38v-37h38V72h38V35h34'), circle(28,146,7), circle(104,109,7), circle(176,35,7),
-      path('M28 169h148 M28 27v142')],
-    blocks: () => [rect(30, 100, 60, 60), rect(110, 100, 60, 60), rect(70, 22, 60, 60),
-      path('M60 100V89h40v-7m0 7h40v11 M48 130h24m56 0h24 M88 52h24')]
-  };
-  return svgNode('svg', {viewBox: '0 0 200 200', 'aria-hidden': 'true', focusable: 'false', class: 'album-art'},
-    ...(drawings[kind] || drawings.matrix)());
-}
-
 export function projectMark(project, variant = "") {
   return el("span", {class: `project-icon ${variant}`, title: project.title, "aria-hidden": "true"},
     project.iconUrl ? el("img", {src: project.iconUrl, alt: ""}) : project.icon || "📦");
 }
 
 function coverContents(item, project) {
-  return [albumArt(item.artwork), el("span", {class: "cover-engine"}, item.engine || "Mixed checks"),
-    el("span", {class: "cover-caption"}, item.title), projectMark(project, "cover-project-icon")];
+  const variant = coverVariant(item);
+  const shelf = coverShelf(item, project);
+  return [
+    el('img', {class: 'cover-image', 'data-cover-variant': variant, 'data-cover-shelf': shelf, 'data-cover-theme': resolvedCoverTheme(shelf), src: coverImage(variant, shelf), alt: '', loading: 'lazy', decoding: 'async', width: 768, height: 768}),
+    el('span', {class: 'cover-shade', 'aria-hidden': 'true'}),
+    el('span', {class: 'cover-engine'}, item.engine || 'Mixed checks'),
+    el('span', {class: 'cover-caption'}, item.title),
+    el('span', {class: 'cover-imprint'}, project.title)
+  ];
+}
+
+// Update artwork in place to preserve focus, shelf position, dialogs and active playback.
+export function refreshAlbumCovers() {
+  for (const image of document.querySelectorAll('img[data-cover-variant]')) {
+    image.src = coverImage(Number(image.dataset.coverVariant), image.dataset.coverShelf);
+    image.dataset.coverTheme = resolvedCoverTheme(image.dataset.coverShelf);
+  }
 }
 
 export function albumPreview(item, project) {
-  return el("div", {class: `album-preview theme-${project.theme || "mint"}`, "aria-hidden": "true"}, coverContents(item, project));
+  return el('div', {class: `album-preview theme-${project.theme || 'mint'} cover-study`, 'aria-hidden': 'true'}, coverContents(item, project));
 }
 
 export function albumCard({item, project, latest, running, pending, queued, queuePosition, onOpen, onRun, lastRunHref, summary}) {
-  const cover = button("", onOpen, {variant: "album-cover"});
+  const cover = button("", onOpen, {variant: "album-cover cover-study"});
   cover.setAttribute("aria-label", `View ${item.title} album details`);
   cover.setAttribute("aria-haspopup", "dialog");
   cover.append(...coverContents(item, project));
@@ -357,15 +360,15 @@ export function albumCard({item, project, latest, running, pending, queued, queu
     result.setAttribute("aria-label", `View ${item.title} ${queued ? "queued" : running ? "running" : latest.status} result`);
   }
   const description = summary || item.description || item.goal || item.title;
-  return el("article", {class: `album-card theme-${project.theme || "mint"}`, onclick: event => {
+  return el("article", {class: `album-card theme-${project.theme || "mint"}`, "data-album-id": item.id, onclick: event => {
       if (!event.target.closest("button, a")) onOpen();
     }}, el("h3", {class: "sr-only"}, item.title),
     el("div", {class: "album-cover-wrap"}, cover, play),
     el("div", {class: "album-info"},
       el("button", {class: "album-summary", type: "button", onclick: onOpen, "aria-haspopup": "dialog",
         "aria-label": `View ${item.title} details`, title: description}, description),
-      el("div", {class: "album-facts"}, el("span", {class: "album-case-count"},
-        `${item.members.length} ${item.members.length === 1 ? "case" : "cases"}`), result)));
+      el("div", {class: "album-facts"}, el("span", {class: "album-case-count", title: latest ? jobProgress(latest).label : `${item.members.length} execution steps`},
+        latest ? jobProgress(latest).label : `${item.members.length} execution steps`), result)));
 }
 
 export function projectShelf(project, albums, {

@@ -27,7 +27,7 @@ def test_real_cli_switch_and_detach_use_fd_handoff_and_preserve_python(tmp_path,
     script = tmp_path / "user's environment.sh"
     script.write_text("export FIXTURE_HANDOFF=enabled\n")
     add(home, "example", script)
-    assert main(["--home", str(home.root), "apt", "shell-init"]) == 0
+    assert main(["--home", str(home.root), "shell-init"]) == 0
     hook = capsys.readouterr().out
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

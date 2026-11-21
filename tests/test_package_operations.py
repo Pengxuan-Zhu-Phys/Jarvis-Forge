@@ -159,6 +159,6 @@ def test_archived_shell_is_not_an_active_environment(tmp_path):
     home.initialize()
     script = home.root / "old.sh"
     script.write_text("exit 77\n")
-    write_json(home.root / "apt/state.json", {"activation": str(script)})
+    write_json(home.root / "packages.json", {"activation": str(script)})
     with pytest.raises(ForgeError, match="Spack"):
         environment_path(home)
