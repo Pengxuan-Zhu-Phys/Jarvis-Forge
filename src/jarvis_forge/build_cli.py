@@ -129,7 +129,7 @@ def show(
 
     selected, version = apps.split(name)
     # Recipe inspection does not require an installed app or a usable profile.
-    rows = [] if expanded or apps._local(name) else _rows(ctx)
+    rows = [] if expanded or (not path and apps._local(name)) else _rows(ctx)
     matches = [
         row
         for row in rows
