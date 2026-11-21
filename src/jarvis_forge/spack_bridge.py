@@ -93,7 +93,7 @@ def installation_specs(environment, roots, policy, overwrite, *, omit_cached_bui
     return selected.values()
 
 
-def snapshot(runtime_only=False, policy=None, overwrite=(), omit_cached_build_deps=False):
+def snapshot(runtime_only=False, policy=None, overwrite=(), omit_cached_build_deps=False, *, emit=True, cached_index=False):
     import spack.environment as ev
     import spack.traverse
     import spack.store
@@ -106,7 +106,7 @@ def snapshot(runtime_only=False, policy=None, overwrite=(), omit_cached_build_de
     root_hashes = {s.dag_hash() for s in roots}
     packages = []
     binary_index = None
-    if omit_cached_build_deps:
+    if omit_cached_build_deps or cached_index:
         import spack.binary_distribution as bd
 
         bd.load_buildcache_index()
@@ -163,7 +163,67 @@ def snapshot(runtime_only=False, policy=None, overwrite=(), omit_cached_build_de
     document = {"packages": packages, "modifications": modifications}
     if omit_cached_build_deps:
         document["cached_build_dependencies"] = "omit"
-    print(json.dumps(document))
+    if emit:
+        print(json.dumps(document))
+    return document
+
+
+def resolve_plan(options):
+    """One engine import/solver session supplies DAG, cache status and plan."""
+    import spack.main
+    import spack.environment as ev
+    import spack.spec
+    import spack.traverse
+
+    flags = options['flags']
+    if flags[0] != 'concretize' or set(flags[1:]) - {'--fresh', '--force'}:
+        raise ValueError('Unsupported concretization flags')
+    command = spack.main.SpackCommand('concretize')
+    try:
+        output = command(*flags[1:])
+    except spack.main.SpackCommandError as exc:
+        sys.stderr.write(command.output)
+        raise SystemExit(exc.code) from exc
+    except Exception:
+        # SpackCommand captures descriptors even on failure. Preserve the
+        # actual solver diagnostic instead of showing only its wrapper error.
+        sys.stderr.write(command.output)
+        raise
+    dag = snapshot(emit=False)
+    policy = options['policy']
+    plan = snapshot(policy=policy, overwrite=options['overwrite'],
+                    omit_cached_build_deps=options.get('omit_cached_build_deps', False),
+                    cached_index=options.get('source_if_uncached', False), emit=False)
+    if options.get('source_if_uncached') and not any(
+            row.get('cached') and (not row['installed'] or row['name'] in options['overwrite'])
+            for row in plan['packages']):
+        policy = 'never'
+        plan = snapshot(policy=policy, overwrite=options['overwrite'], emit=False)
+    environment = ev.active_environment()
+    tree = spack.spec.tree(environment.concrete_roots(), hashes=True, hashlen=7,
+                           format=spack.spec.DISPLAY_FORMAT, key=spack.traverse.by_dag_hash)
+    print(json.dumps({'dag':dag, 'plan':plan, 'policy':policy, 'tree':tree, 'concretize_output':output}))
+
+
+def prepare_backend():
+    import spack.bootstrap
+
+    with spack.bootstrap.ensure_bootstrap_configuration():
+        spack.bootstrap.ensure_clingo_importable_or_raise()
+        spack.bootstrap.ensure_gpg_in_path_or_raise()
+    print(json.dumps({"solver": "ready", "signature_verification": "ready"}))
+
+
+def trust_cache_keys(name):
+    """Native key discovery can exit successfully even when no key was fetched."""
+    import spack.binary_distribution as bd
+    import spack.mirrors.mirror
+
+    mirrors = spack.mirrors.mirror.MirrorCollection(binary=True)
+    fingerprints = bd.get_keys(install=True, trust=True, yes_to_all=True, mirrors={name: mirrors[name]})
+    if not fingerprints:
+        raise SystemExit(f"Could not import any trusted signing keys from {name}.")
+    print(json.dumps({"fingerprints": fingerprints, "mirror": name}))
 
 
 def render(path):
@@ -225,7 +285,13 @@ def dependency_tree():
 
 
 if __name__ == "__main__":
-    if sys.argv[1] in {"snapshot", "installed"}:
+    if sys.argv[1] == "resolve-plan":
+        resolve_plan(json.loads(sys.argv[2]))
+    elif sys.argv[1] == "prepare-backend":
+        prepare_backend()
+    elif sys.argv[1] == "trust-cache-keys":
+        trust_cache_keys(sys.argv[2])
+    elif sys.argv[1] in {"snapshot", "installed"}:
         snapshot(runtime_only=sys.argv[1] == "installed")
     elif sys.argv[1] == "installation-plan":
         if len(sys.argv) > 5 or (len(sys.argv) == 5 and sys.argv[4] != "omit-cached-build-deps"):

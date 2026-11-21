@@ -4,7 +4,14 @@
 
 ### Changed
 
+- Choose native build parallelism from process CPU affinity and cgroup limits. Remove manual job flags from apt, build and profile preparation; use Spack's global jobserver and 16 concurrent packages, and cap CMake/Homebrew package builds at 16 CPUs. Save the actual policy in operation results.
+- Prepare the Spack solver and signature tools during backend creation. Combine concretization, dependency-tree rendering and installation planning in one engine process; log actual engine calls and invalidate shared planning results when candidate inputs change.
+- Use native Spack/Homebrew package names without Debian aliases. Route shell changes through one fd 9 handoff protocol and show unknown-command suggestions only once.
 - Align completed package records into stable package, state, phase and timing columns. Narrow terminals place details beneath each package, preserving full names and permanent completion records.
+
+### Fixed
+
+- Stop on binary-cache key import, empty-key and signature failures instead of silently falling back to source. Preserve ordinary missing-archive recovery and the original solver diagnostics.
 
 ## 1.1.17 — 2026-11-21
 ### Fixed

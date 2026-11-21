@@ -25,6 +25,27 @@ def test_root_help_lists_commands_by_group(capsys):
     assert "\x1b[" not in output
 
 
+@pytest.mark.parametrize("args,candidate", [(["list"], "jforge apt list / jforge build list"),
+                                           (["buld"], "jforge build"),
+                                           (["build", "fetc"], "jforge build fetch")])
+@pytest.mark.parametrize("as_json", [False, True])
+def test_unknown_command_has_one_error_and_one_suggestion(tmp_path, capsys, args, candidate, as_json):
+    path = tmp_path / "absent"
+    assert main(["--home", str(path), *args, *(["--json"] if as_json else [])]) == 2
+    captured = capsys.readouterr()
+    if as_json:
+        result = json.loads(captured.out)
+        assert not result["ok"] and not captured.err
+        text = result["error"]["message"] + "\n" + result["error"]["hint"]
+    else:
+        assert not captured.out
+        text = captured.err
+    assert text.count("Unknown command:") == 1
+    assert text.count(candidate) == 1
+    assert text.count("Did you mean") <= 1
+    assert not path.exists()
+
+
 @pytest.mark.parametrize("command", [[], ["init"], ["doctor"], ["history"], ["show"], ["logs"],
     ["apt"], ["env"], ["build"], ["test"], ["bench"], ["suite"],
     ["suite", "example"], ["suite", "validate"], ["suite", "plan"], ["suite", "run"], ["suite", "compare"],

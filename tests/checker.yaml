@@ -62,6 +62,8 @@ groups:
   - src/jarvis_forge/__init__.py
   - tests/test_standard_checks.py
   - tests/test_build_cards.py
+  - src/jarvis_forge/parallelism.py
+  - src/jarvis_forge/shell_handoff.py
   skip_allow: []
 - id: checker-engine
   match:
@@ -98,6 +100,8 @@ groups:
   - tests/test_package_operations.py
   - tests/test_package_terminal.py
   - tests/test_homebrew_backend.py
+  - tests/test_spack_planning.py
+  - tests/test_parallelism.py
   inputs:
   - src/jarvis_forge/spack*.py
   - src/jarvis_forge/bootstrap_patch.py
@@ -122,6 +126,9 @@ groups:
   - tests/test_homebrew_backend.py
   - src/jarvis_forge/homebrew_backend.py
   - src/jarvis_forge/build_catalog.py
+  - src/jarvis_forge/parallelism.py
+  - tests/test_parallelism.py
+  - tests/test_spack_planning.py
   skip_allow: []
 - id: spack-integration
   match:
@@ -139,6 +146,7 @@ groups:
   - tests/test_env_entries.py
   - tests/test_shell_repair.py
   - tests/test_pyenv_setup.py
+  - tests/test_shell_handoff.py
   inputs:
   - src/jarvis_forge/environment*.py
   - src/jarvis_forge/shell_activation.py
@@ -157,6 +165,11 @@ groups:
   - src/jarvis_forge/managed_envs.py
   - tools/jforge-pyenv-setup.sh
   - tests/test_pyenv_setup.py
+  - src/jarvis_forge/shell_handoff.py
+  - tests/test_shell_handoff.py
+  - src/jarvis_forge/apt_cli.py
+  - src/jarvis_forge/build_cli.py
+  - src/jarvis_forge/cli.py
   skip_allow: []
 - id: acceptance-history
   match:

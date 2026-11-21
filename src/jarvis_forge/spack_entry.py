@@ -1,6 +1,8 @@
 """Run the pinned Spack engine with JSON-backed physical stage names."""
 from pathlib import Path
 import inspect
+import json
+import os
 import sys
 
 
@@ -51,6 +53,47 @@ def short_bootstrap_store(store, bootstrap):
     store.use_store = scoped_store
 
 
+def cache_trust_guard(cache):
+    """Spack 1.2 catches ordinary verification errors and treats them as misses.
+
+    A trust failure must escape those ``except Exception`` handlers, including
+    when GnuPG warnings are suppressed. An operation-local record survives the
+    installer worker boundary so the controller can also refuse any retry.
+    """
+    destination = os.environ.get("_JFORGE_CACHE_TRUST_LOG")
+    if not destination:
+        return
+
+    class VerificationFailure(SystemExit):
+        def __init__(self, message):
+            detail = "Binary-cache signature verification failed: " + str(message)
+            try:
+                descriptor = os.open(destination, os.O_CREAT | os.O_APPEND | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+                try:
+                    os.write(descriptor, (json.dumps({"message": detail}) + "\n").encode())
+                finally:
+                    os.close(descriptor)
+            except OSError as exc:
+                # Inability to write evidence must never become a cache miss.
+                detail += f"\nCould not record verification failure: {exc}"
+            # SystemExit bypasses Spack's cache-miss catches, never its actual
+            # signature verification. No --unsigned or skipped GPG checks.
+            super().__init__(detail)
+
+    cache.NoVerifyException = VerificationFailure
+    original_metadata = cache.URLBuildcacheEntryV2.fetch_metadata
+
+    def metadata(self):
+        try:
+            return original_metadata(self)
+        except cache.BuildcacheEntryError as exc:
+            if not self.allow_unsigned and "does not have signed metadata" in str(exc):
+                raise VerificationFailure(str(exc)) from exc
+            raise
+
+    cache.URLBuildcacheEntryV2.fetch_metadata = metadata
+
+
 def main():
     # -I excludes the script directory; explicitly load this installed package
     # and the selected pinned engine, without inheriting user PYTHONPATH.
@@ -65,6 +108,9 @@ def main():
 
     short_stages(spack.stage)
     short_bootstrap_store(spack.store, spack.bootstrap.config)
+    if os.environ.get("_JFORGE_CACHE_TRUST_LOG"):
+        import spack.url_buildcache
+        cache_trust_guard(spack.url_buildcache)
     return spack_main()
 
 

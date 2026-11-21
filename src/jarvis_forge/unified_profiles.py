@@ -347,7 +347,7 @@ def _mac_install(profile, base, preset, jobs, timeout, progress):
     return {"drivers": drivers, "tools": tools}, {path: digest(Path(path)) for path in paths}
 
 
-def build(base, name, *, target=None, stage=None, jobs=1, timeout=14400, cache=None, progress=None):
+def build(base, name, *, target=None, stage=None, jobs=None, timeout=14400, cache=None, progress=None):
     from . import apt_profiles, spack_backend, toolchains
     from .builds import file_lock, fingerprint
     from .env_entries import publish_apt

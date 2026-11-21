@@ -146,12 +146,11 @@ def _handoff_activation(result):
         activation = result.get("environment_entry")
         if not activation:
             return False
-    with open(9, "wb", closefd=False) as handoff:
-        handoff.write(os.fsencode(activation) + b"\0")
-    return True
+    from .shell_handoff import send
+    return send("build", activation)
 
 
-def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directory=None, no_activate=False, source=None):
+def _execute(ctx, build=None, setting=(), env=None, jobs=None, resume=None, directory=None, no_activate=False, source=None):
     from .cli import emit, line, _console
     from .presentation import build_result
     if not resume:
@@ -185,7 +184,7 @@ def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directo
     values = builds.summary(result)
     passed = result["status"] == "passed"
     handed_off = False
-    if passed and not ctx.obj.as_json and not no_activate and os.environ.get("_JFORGE_BUILD_ACTIVATION") == "1":
+    if passed and not ctx.obj.as_json and not no_activate and os.environ.get("_JFORGE_SHELL_HANDOFF") == "1":
         try:
             handed_off = _handoff_activation(result)
         except OSError as exc:
@@ -201,7 +200,7 @@ def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directo
         command = [prog]
         if root.params.get("home") is not None:
             command += ["--home", str(ctx.obj.home.root)]
-        command += ["build", "resume", result["run_id"], "--jobs", str(jobs)]
+        command += ["build", "resume", result["run_id"]]
         build_result(_console() if passed else console, values, prog, shlex.join(command), handed_off=handed_off)
     raise typer.Exit(0 if result["status"] == "passed" else 130 if result["status"] == "interrupted" else 1)
 
@@ -210,19 +209,19 @@ def _execute(ctx, build=None, setting=(), env=None, jobs=1, resume=None, directo
 def run(ctx: typer.Context, build: str = typer.Argument(..., metavar="<app|path>"),
         setting: list[str] = typer.Option([], "--set", help="Override a declared parameter: NAME=VALUE."),
         env: Optional[str] = typer.Option(None, "--env", help="Use this registered compiler/Python environment."),
-        jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Maximum concurrent build jobs."),
         directory: Optional[Path] = typer.Option(None, "--directory", help="Fetch and build in this workspace; reuse its editable recipe on later runs."),
         source: Optional[Path] = typer.Option(None, "--source", help="Use this checkout instead of the card's local source."),
         no_activate: bool = typer.Option(False, "--no-activate", help="Skip activation in the calling interactive shell.")):
     """Build and verify an app. Prefer its local workspace when present."""
+    jobs = None
     _execute(ctx, build, setting, env, jobs, directory=directory, no_activate=no_activate, source=source)
 
 
 @app.command(rich_help_panel="Build and verify")
 def resume(ctx: typer.Context, run_id: str = typer.Argument(..., metavar="<run_id>"),
-           jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Maximum concurrent build jobs."),
            no_activate: bool = typer.Option(False, "--no-activate", help="Skip activation in the calling interactive shell.")):
     """Retry a saved graph with its original recipe and environment snapshots."""
+    jobs = None
     _execute(ctx, jobs=jobs, resume=run_id, no_activate=no_activate)
 
 

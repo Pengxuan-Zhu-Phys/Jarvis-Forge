@@ -29,14 +29,15 @@ def test_real_installer_plans_and_guarded_cache_fallback(tmp_path):
     repos = yaml.safe_load(config.read_text())["repos"]
     config.write_text(yaml.safe_dump({"repos": {"forge_test": str(repo.resolve()), **repos}}))
 
-    # These private fixtures have no binary cache: auto must fail its binary
-    # phase, validate source work, then build both tiny packages successfully.
+    # No indexed binary: the combined plan includes source build tools without
+    # paying for a doomed binary-only install or a second planning process.
     result = b.transact(home, "install", ["forge-builder"], timeout=600)
     op = Path(result["path"])
     assert result["state_committed"]
-    assert {p["name"] for p in read_json(op / "plan.json")["packages"]} == {"forge-builder"}
-    assert {p["name"] for p in read_json(op / "source-plan.json")["packages"]} == {
-        "forge-builder", "forge-lib"}
+    assert {p["name"] for p in read_json(op / "plan.json")["packages"]} == {"forge-builder", "forge-lib"}
+    assert read_json(op / "plan.json")["cache_policy"] == "never"
+    assert not (op / "source-plan.json").exists()
+    assert result["spack_invocations"] == 3
     assert {p["name"] for p in result["packages"]} == {"forge-builder"}
 
     # The installed builder retains its build DAG in the lock, but its tool is

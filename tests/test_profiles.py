@@ -248,8 +248,8 @@ def test_shell_hook_only_refreshes_after_changes(tmp_path, capsys, arguments, ex
     fake = tmp_path / "jforge"
     fake.write_text(
         '#!/bin/bash\n'
-        'if [ "$1 $2 $3" = "apt env --path" ]; then printf "%s\\n" "$ACTIVATION";\n'
-        'elif [[ " $* " == *" --json "* ]]; then printf \'{"ok":true}\\n\'; fi\n'
+        'if [[ " $* " == *" --json "* ]]; then printf \'{"ok":true}\\n\'; fi\n'
+        'if [ "${_JFORGE_SHELL_HANDOFF-}:$HANDOFF" = 1:1 ]; then printf "source\\0%s\\0" "$ACTIVATION" >&9; fi\n'
     )
     fake.chmod(0o755)
     file = tmp_path / "activate.sh"
@@ -257,20 +257,21 @@ def test_shell_hook_only_refreshes_after_changes(tmp_path, capsys, arguments, ex
     result = subprocess.run(
         [
             "bash",
-            "-c",
-            'export PATH="$1:$PATH" ACTIVATION="$2"; eval "$3" >/dev/null 2>&1; jforge '
+            "--noprofile", "--norc", "-ic",
+            'export PATH="$1:$PATH" ACTIVATION="$2" HANDOFF="$4"; eval "$3" >/dev/null 2>&1; jforge '
             + arguments,
             "test",
             str(tmp_path),
             str(file),
             hook,
+            str(int(expected)),
         ],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, result.stderr
     assert ("activated" in result.stderr) == expected
-    assert ("Could not refresh" in result.stderr) == (expected and activation_status != 0)
+    assert ("Could not activate" in result.stderr) == (expected and activation_status != 0)
     assert result.stdout == ('{"ok":true}\n' if "--json" in arguments else "")
 
 
@@ -287,8 +288,8 @@ def test_shell_hook_activates_only_successful_interactive_builds(tmp_path, capsy
         '  "build run"|"build resume") ;;\n'
         '  *) exit 2 ;;\n'
         'esac\n'
-        'if [ "${_JFORGE_BUILD_ACTIVATION-}" = 1 ] && [ "$3" != empty ]; then\n'
-        '    printf "%s\\0" "$ACTIVATION" >&9\n'
+        'if [ "${_JFORGE_SHELL_HANDOFF-}" = 1 ] && [ "$3" != empty ]; then\n'
+        '    case " $* " in *" --json "*|*" --no-activate "*) ;; *) printf "build\\0%s\\0" "$ACTIVATION" >&9 ;; esac\n'
         'fi\n'
         '[ "$3" != failed ] || exit 7\n'
     )
@@ -319,7 +320,7 @@ printf 'optout %s\n' "${FIXTURE_BUILD-unset}"
     assert result.stdout.splitlines() == ["run loaded", "resume loaded", "failed 7 unset",
                                           "empty unset", "json unset", "optout unset"]
     assert result.stderr.count("Build environment activated.") == 2
-    assert not list(tmp_path.glob("jforge-build-activate.*"))
+    assert not list(tmp_path.glob("jforge-shell.*"))
 
     script.write_text("return 9\n")
     check = 'export PATH="$1:$PATH" ACTIVATION="$2"; eval "$3"; jforge build run fixture; echo $?'
@@ -339,14 +340,14 @@ def test_managed_repair_refreshes_the_loaded_hook(tmp_path, capsys, shell):
     hook = capsys.readouterr().out
     fake = tmp_path / "jforge"
     fake.write_text(
-        '#!/bin/sh\ncase "$1 $2" in\n'
+        '#!/bin/sh\n[ "$1" != --home ] || shift 2\ncase "$1 $2" in\n'
         '  "apt shell-init") printf "%s\\n" "export FIXTURE_HOOK=refreshed" ;;\n'
-        '  "env repair") exit 0 ;;\n'
+        '  "env repair") [ "$#" != 2 ] || printf "hook\\0%s\\0" "$FIXTURE_HOME" >&9 ;;\n'
         '  *) exit 2 ;;\nesac\n'
     )
     fake.chmod(0o700)
     args = ["--noprofile", "--norc"] if shell == "bash" else ["-f"]
-    code = ('export PATH="$1:$PATH"; eval "$2"; '
+    code = ('export PATH="$1:$PATH" FIXTURE_HOME="$1"; eval "$2"; '
             'jforge env repair --dry-run; printf "%s\\n" "${FIXTURE_HOOK-unset}"; '
             'jforge env repair --json; printf "%s\\n" "${FIXTURE_HOOK-unset}"; '
             'jforge env repair --shell=other.sh; printf "%s\\n" "${FIXTURE_HOOK-unset}"; '

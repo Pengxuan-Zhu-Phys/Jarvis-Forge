@@ -114,7 +114,7 @@ def test_profile_inventory_selection_and_reversible_shell(setup_brew):
     assert cli("apt", "search", "eigen")["packages"][0]["selected"] is False
     assert cli("apt", "show", "eigen")["installed_instances"][0]["prefix"] == str(prefix / "Cellar/eigen/1.0")
     assert cli("apt", "prefix", "eigen", "--path", as_json=False).strip() == str(prefix / "Cellar/eigen/1.0")
-    installed = cli("apt", "install", "libeigen3-dev")
+    installed = cli("apt", "install", "eigen")
     assert installed["packages"][0]["name"] == "eigen"
     assert installed["environment_activation"] == str(home.root.parents[2] / "env/apt/activate.sh")
     assert Path(installed["environment_activation"]).is_file()
@@ -167,15 +167,17 @@ def test_python_policy_precedes_install(setup_brew, formula, dependency):
     assert not writes()
 
 
-def test_plan_write_failure_retry_and_remove(setup_brew, monkeypatch):
+@pytest.mark.parametrize("cpus", [3, 48])
+def test_plan_write_failure_retry_and_remove(setup_brew, monkeypatch, cpus):
     cli, prefix, home, writes = setup_brew
+    monkeypatch.setattr("jarvis_forge.parallelism.available_cpus", lambda: cpus)
     before = brew.current(home)
     assert cli("apt", "install", "gsl", "--dry-run")["would_install"] == ["gsl"]
     assert cli("apt", "check", "gsl")["audited_dependencies"] == {"gsl": []}
     assert brew.current(home) == before
     assert not writes()
     monkeypatch.setenv("FAKE_BREW_FAIL", "1")
-    error = cli("apt", "install", "gsl", "cmake", "--jobs", "3", status=1)["error"]
+    error = cli("apt", "install", "gsl", "cmake", status=1)["error"]
     assert "simulated install failure" in error["message"]
     assert "Operation logs:" in error["hint"]
     assert brew.current(home) == before
@@ -186,7 +188,7 @@ def test_plan_write_failure_retry_and_remove(setup_brew, monkeypatch):
     assert result["would_install"] == ["cmake"]
     first, retry = writes()
     assert first["args"] == ["install", "--formula", "homebrew/core/gsl", "homebrew/core/cmake"]
-    assert first["env"]["HOMEBREW_MAKE_JOBS"] == "3"
+    assert first["env"]["HOMEBREW_MAKE_JOBS"] == str(min(cpus, 16))
     assert retry["args"] == ["install", "--formula", "homebrew/core/cmake"]
     assert all(first["env"][k] == v for k, v in brew.BREW_ENV.items())
     assert read_json(Path(result["path"]) / "result.json")["state_committed"] is True

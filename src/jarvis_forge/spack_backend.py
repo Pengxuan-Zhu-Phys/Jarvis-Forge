@@ -31,44 +31,6 @@ REPOSITORY = {
     "url": f"https://github.com/spack/spack-packages/archive/{REPO_COMMIT}.tar.gz",
     "sha256": "06f6bbd84f040e1da916c0f81ec1292422d5fc17e352f565459a853f9d3d7361",
 }
-ALIASES = {
-    "libeigen3-dev": "eigen",
-    "libgsl-dev": "gsl",
-    "libboost-dev": "boost",
-    "libboost-filesystem-dev": "boost",
-    "libboost-system-dev": "boost",
-    "libboost-program-options-dev": "boost",
-    "libboost-thread-dev": "boost",
-    "libhdf5-dev": "hdf5",
-    "libyaml-cpp-dev": "yaml-cpp",
-    "libsqlite3-dev": "sqlite",
-    "sqlite3": "sqlite",
-    "liblapack-dev": "netlib-lapack",
-    "libblas-dev": "netlib-lapack",
-    "libopenblas-dev": "openblas",
-    "libfftw3-dev": "fftw",
-    "libfastjet-dev": "fastjet",
-    "libhepmc3-dev": "hepmc3",
-    "liblhapdf-dev": "lhapdf",
-    "libpythia8-dev": "pythia8",
-    "root-system": "root",
-    "libtbb-dev": "intel-tbb",
-    "libvdt-dev": "vdt",
-    "libpcre2-dev": "pcre2",
-    "zlib1g-dev": "zlib",
-    "libbz2-dev": "bzip2",
-    "liblzma-dev": "xz",
-    "liblz4-dev": "lz4",
-    "libzstd-dev": "zstd",
-    "libssl-dev": "openssl",
-    "libxxhash-dev": "xxhash",
-    "nlohmann-json3-dev": "nlohmann-json",
-    "gfortran": "gcc languages=c,c++,fortran",
-    "g++": "gcc languages=c,c++,fortran",
-    "ninja-build": "ninja",
-    "pkg-config": "pkgconf",
-}
-
 
 def root(home):
     from .package_operations import _inside
@@ -129,15 +91,6 @@ def normalize(text):
         raise ForgeError(
             "Supply a package name or a quoted Spack spec, without command options."
         )
-    for alias in sorted(ALIASES, key=len, reverse=True):
-        if text.startswith(alias) and (
-            len(text) == len(alias) or text[len(alias)] in "@=<> %~+"
-        ):
-            replacement = ALIASES[alias].split(" ", 1)
-            text = replacement[0] + text[len(alias) :]
-            if len(replacement) == 2:
-                text += " " + replacement[1]
-            break
     match = re.fullmatch(
         r"([a-z0-9][a-z0-9_-]*)(==|=|>=|<=)([A-Za-z0-9_.-]+)( .*)?", text
     )
@@ -251,12 +204,30 @@ def command(home, args, envdir=None):
     return result + list(args)
 
 
-def run(home, args, op, label, *, envdir=None, timeout=3600, progress=None, patch_jobs=None):
+def run(home, args, op, label, *, envdir=None, timeout=3600, progress=None, patch_jobs=None, planning=None):
     """Reuse Forge's streamed, separately archived stdout/stderr command runner."""
     from .package_operations import run_command
+    from . import spack_planning
+
+    cached = spack_planning.query(op, envdir, args, label)
+    if cached is not None:
+        (op / f"command-{label}.stdout.log").write_text(cached)
+        (op / f"command-{label}.stderr.log").write_text("")
+        write_json(op / f"command-{label}.json", {"status": "passed", "exit_code": 0,
+                   "executed": False, "source": str(op / "planning.json")})
+        if progress:
+            progress("Spack " + label + ": " + shlex.join(args))
+            if output := getattr(progress, "output", None):
+                output("stdout", cached.encode("utf-8"))
+        return cached
+    original_args = args
+    if planning is not None:
+        args = ["python", str(Path(__file__).with_name("spack_bridge.py")), "resolve-plan",
+                json.dumps({**planning, "flags": list(original_args)})]
 
     script = op / "spack-context.sh"
     env = _process_environment(home)
+    env["_JFORGE_CACHE_TRUST_LOG"] = str(op / "cache-trust-failures.jsonl")
     keys = [
         "SPACK_PYTHON",
         "SPACK_COLOR",
@@ -265,6 +236,7 @@ def run(home, args, op, label, *, envdir=None, timeout=3600, progress=None, patc
         "SPACK_SYSTEM_CONFIG_PATH",
         "SPACK_GNUPGHOME",
         "PYTHONDONTWRITEBYTECODE",
+        "_JFORGE_CACHE_TRUST_LOG",
     ]
     if args[0] == "install" and args[args.index("--use-buildcache") + 1] != "only":
         patch_jobs = args[args.index("-j") + 1]
@@ -281,20 +253,36 @@ def run(home, args, op, label, *, envdir=None, timeout=3600, progress=None, patc
         + "\n"
     )
     if progress:
-        progress("Spack " + label + ": " + shlex.join(args))
-    run_command(
-        command(home, args, envdir),
-        home.root,
-        script,
-        op,
-        label,
-        timeout,
-        progress,
-        combined_logs=getattr(progress, "combined_logs", None),
-    )
-    return (op / f"command-{label}.stdout.log").read_text(
+        progress("Spack " + label + ": " + shlex.join(original_args))
+    with (op / "spack-calls.jsonl").open("a") as calls:
+        calls.write(json.dumps({"label": label, "args": args}) + "\n")
+    try:
+        run_command(
+            command(home, args, envdir), home.root, script, op, label, timeout, progress,
+            combined_logs=getattr(progress, "combined_logs", None),
+        )
+    except ForgeError as exc:
+        _reject_cache_security_failure(op, label, exc)
+        lookup_error = re.compile(r"UnknownPackageError|\b(?:Unknown package|No such package)\b|Package .+ not found", re.I)
+        missing = bool(lookup_error.search(str(exc)))
+        for stream in ("stdout", "stderr"):
+            path = op / f"command-{label}.{stream}.log"
+            if path.is_file():
+                with path.open(encoding="utf-8", errors="replace") as lines:
+                    missing = missing or any(lookup_error.search(line) for line in lines)
+        if missing:
+            raise ForgeError(str(exc), code=exc.code,
+                             hint="Use native Spack package names. Run jforge apt search <term>."
+                             + ("\n" + exc.hint if exc.hint else "")) from exc
+        raise
+    if (op / "cache-trust-failures.jsonl").is_file():
+        _reject_cache_security_failure(op, label, ForgeError("Binary-cache trust verification failed.", code=1))
+    output = (op / f"command-{label}.stdout.log").read_text(
         encoding="utf-8", errors="replace"
     )
+    if planning is not None:
+        spack_planning.save(op, envdir, planning, output)
+    return output
 
 
 def _json(text, label):
@@ -344,10 +332,16 @@ def _python_reuse(*, buildcache=True):
 
 
 def _config(home, repo, python):
+    from .parallelism import policy
+
+    parallel = policy()
     directory = root(home) / "config"
     directory.mkdir(parents=True, exist_ok=True)
     data = {
         "config": {
+            "build_jobs": parallel["build_jobs"],
+            "concurrent_packages": parallel["concurrent_packages"],
+            "installer": "new",
             "install_tree": _saved_install_tree(home) or _new_install_tree(home),
             "build_stage": [str(root(home) / "stage")],
             "stage_name": "{name}",
@@ -462,6 +456,7 @@ def bootstrap(home, *, progress=None, extensions=None):
         if configured(home) and current(home).get("environment"):
             value = settings(home)
             _executable(home)
+            _prepare_backend(home, op, progress)
             result.update(
                 backend="spack",
                 engine_version=value["engine_version"],
@@ -543,6 +538,7 @@ def bootstrap(home, *, progress=None, extensions=None):
         if value["extension_recipes"]:
             ensure(home, op)
         _refresh_catalog(home, op)
+        _prepare_backend(home, op, progress)
         if not current(home)["environment"]:
             envdir = _candidate(home, op, [], previous=None)
             _publish(home, op, envdir, [], {"packages": [], "modifications": []})
@@ -904,6 +900,8 @@ def _install_args(jobs, policy, hashes=()):
         "--show-log-on-error",
         "-j",
         str(jobs),
+        "--concurrent-packages",
+        "16",
         "--use-buildcache",
         policy,
         *[f"/{digest}" for digest in hashes],
@@ -1234,7 +1232,7 @@ def transact(
     action,
     specs=(),
     *,
-    jobs=1,
+    jobs=None,
     timeout=3600,
     cache="auto",
     dry_run=False,
@@ -1248,6 +1246,11 @@ def transact(
     from .toolchains import binding, validate_plan as validate_toolchain_plan
     from .unified_profiles import record as profile_record
     from .apt_profiles import validate_active
+    from .parallelism import policy
+
+    parallel = policy()
+    jobs = parallel["build_jobs"] if jobs is None else min(jobs, parallel["build_jobs"])
+    parallel.update(build_jobs=jobs, cmake_jobs=min(jobs, 16), homebrew_make_jobs=min(jobs, 16))
 
     # A binding carries only the exact permissions of its native tool suite.
     # This never changes the profile's persistent Spack configuration.
@@ -1271,6 +1274,7 @@ def transact(
             "dry_run": True,
             "roots": roots,
             "requires_concretization": True,
+            "parallelism": parallel,
             "note": "No downloads or solver execution; use apt check for a concrete dependency plan.",
         }
     if not configured(home):
@@ -1284,6 +1288,7 @@ def transact(
              "deprecated_versions": requested_permissions},
         ) as (op, result),
     ):
+        result["parallelism"] = parallel
         before = current(home)
         toolchain = binding(home)
         allowed = (requested_permissions if requested_permissions is not None
@@ -1300,6 +1305,7 @@ def transact(
         config_file = envdir / ".jforge-config/config.yaml"
         config = yaml.safe_load(config_file.read_text()) if config_file.is_file() else {}
         config.setdefault("config", {})["deprecated"] = bool(allowed)
+        config["config"].update(build_jobs=jobs, concurrent_packages=16, installer="new")
         if build_stage is not None:
             config["config"]["build_stage"] = [str(build_stage)]
         config_file.write_text(yaml.safe_dump(config, sort_keys=False))
@@ -1319,8 +1325,18 @@ def transact(
         patch_jobs = jobs if cache != "only" and action not in {"check", "remove"} else None
 
         def resolve_plan(policy, flags, *, suffix="", omit_cached_build_deps=False):
+            nonlocal cache_first, plan_cache
             run(home, flags, op, "concretize" + suffix, envdir=envdir,
-                timeout=timeout, progress=progress, patch_jobs=patch_jobs)
+                timeout=timeout, progress=progress, patch_jobs=patch_jobs,
+                planning={"policy": policy, "overwrite": overwrite,
+                          "omit_cached_build_deps": omit_cached_build_deps,
+                          "source_if_uncached": cache_first and policy == "only"})
+            from .spack_planning import current as combined_plan
+            combined = combined_plan(op, envdir)
+            if combined and combined["result"]["policy"] != policy:
+                policy = combined["result"]["policy"]
+                cache_first = False
+                plan_cache = policy
             dag = _snapshot(home, envdir, op, "dag" + suffix)
             _short_package_names(home, envdir, dag["packages"])
             write_json(op / "dag.json", dag)
@@ -1426,9 +1442,10 @@ def transact(
                 try:
                     run(home, args, op, label, envdir=envdir,
                         timeout=timeout, progress=progress)
-                except ForgeError:
+                except ForgeError as exc:
                     # Timeouts, interruptions and launch failures must propagate.
                     # Only a completed failed Spack cache attempt can fall back.
+                    _reject_cache_security_failure(op, label, exc)
                     if not cache_first or not _completed_install_failure(op, label):
                         raise
                     if progress:
@@ -1461,7 +1478,8 @@ def transact(
                                     )
                                 run(home, _install_args(jobs, "only", cached_hashes), op,
                                     "install-binaries", envdir=envdir, timeout=timeout, progress=progress)
-                        except ForgeError:
+                        except ForgeError as exc:
+                            _reject_cache_security_failure(op, "install-binaries", exc)
                             if not _completed_install_failure(op, "install-binaries"):
                                 raise
                             if progress:
@@ -1516,6 +1534,8 @@ def transact(
             )
             return result
         finally:
+            calls = op / "spack-calls.jsonl"
+            result["spack_invocations"] = len(calls.read_text().splitlines()) if calls.is_file() else 0
             if not committed and envdir.exists():
                 envdir.rename(op / "candidate-environment")
 
@@ -1541,7 +1561,7 @@ def details(home, spec):
         )
         matching = [row for row in rows if row["name"] == name]
         if not matching:
-            raise ForgeError(f"No Spack package matches {name}.")
+            raise ForgeError(f"No Spack package matches {name}.", hint=f"jforge apt search {shlex.quote(name)}")
         return {**matching[0], "backend": "spack", "requested_spec": translated}
 
 
@@ -1556,14 +1576,11 @@ def _cache_keys(home, op, envdir, progress):
     # Trust only the named official cache here. Arbitrary mirrors require an
     # explicitly supplied signing key through `apt sources --trust-key`.
     try:
-        run(
+        output = run(
             home,
             [
-                "buildcache",
-                "keys",
-                "--install",
-                "--trust",
-                "--yes-to-all",
+                "python", str(Path(__file__).with_name("spack_bridge.py")),
+                "trust-cache-keys",
                 "spack-public-binaries",
             ],
             op,
@@ -1571,19 +1588,64 @@ def _cache_keys(home, op, envdir, progress):
             envdir=envdir,
             progress=progress,
         )
+        imported = _json(output, "binary-cache key import").get("fingerprints")
+        if not isinstance(imported, list) or not imported or any(not isinstance(key, str) or not key for key in imported):
+            raise ForgeError("Binary-cache key import returned no signing keys.", code=1)
     except ForgeError as exc:
-        write_json(
-            op / "binary-cache-warning.json",
-            {"message": str(exc), "source_builds_may_be_needed": True},
-        )
-        if progress:
-            progress(
-                "Official binary cache keys are unavailable; Spack may build from source. Use --cache only to require binaries."
-            )
+        raise ForgeError(str(exc), code=exc.code,
+                         hint="Could not prepare trusted binary-cache keys. Check jforge apt sources and the key-import logs."
+                         + ("\n" + exc.hint if exc.hint else "")) from exc
     else:
         value = settings(home)
         value["official_cache_keys_ready"] = True
         write_json(home.root / "apt/spack.json", value)
+
+
+def _prepare_backend(home, op, progress):
+    """Pay solver and signature-tool bootstrap costs before publishing a profile."""
+    if settings(home).get("backend_prepared"):
+        return
+    from .parallelism import policy
+
+    if progress:
+        progress("Prepare dependency solver and binary-cache verification")
+    run(home, ["python", str(Path(__file__).with_name("spack_bridge.py")), "prepare-backend"],
+        op, "prepare-backend", progress=progress, patch_jobs=policy()["build_jobs"])
+    _cache_keys(home, op, None, progress)
+    value = settings(home)
+    value["backend_prepared"] = True
+    write_json(home.root / "apt/spack.json", value)
+
+
+_CACHE_TRUST_ERROR = re.compile(
+    r"\b(?:SpackGPGError|NoGpgException|NoKeyException|NoVerifyException|SignatureVerificationError|SignatureError|UnsignedPackageException)\b"
+    r"|\[GNUPG:\]\s*(?:BADSIG|ERRSIG|NO_PUBKEY|KEYEXPIRED|SIGEXPIRED|REVKEYSIG)\b"
+    r"|\b(?:bad|invalid|untrusted|expired)\s+(?:[a-z]+\s+)?signature\b"
+    r"|\bsignature\s+(?:verification|check)\s+(?:failed|failure)\b"
+    r"|\b(?:cannot|could not|unable to|failed to)\s+verify\s+(?:the\s+)?signature\b"
+    r"|\bno public key\b|\bgpg(?:2)?:\s*(?:fatal|error)\b",
+    re.IGNORECASE,
+)
+
+
+def _reject_cache_security_failure(op, label, error):
+    # Search the entire separate logs, not just the error tail: the installer
+    # can wrap a verification failure in a generic package-install exception.
+    failed = bool(_CACHE_TRUST_ERROR.search(str(error)))
+    failure_record = op / "cache-trust-failures.jsonl"
+    if failure_record.is_file():
+        failed = True
+    for stream in ("stdout", "stderr"):
+        path = op / f"command-{label}.{stream}.log"
+        if path.is_file():
+            with path.open(encoding="utf-8", errors="replace") as lines:
+                failed = failed or any(_CACHE_TRUST_ERROR.search(line) for line in lines)
+    if failed:
+        hint = "Binary-cache trust verification failed. Check jforge apt sources and its trusted keys."
+        if error.hint and hint in error.hint:
+            raise error
+        raise ForgeError(str(error), code=error.code,
+                         hint=hint + ("\n" + error.hint if error.hint else "")) from error
 
 
 def update(home, *, progress=None):
@@ -1691,7 +1753,6 @@ def sources(home, *, add=None, url=None, remove=None, trust_key=None, progress=N
                         "description": "Spack recipes and explicitly configured build-cache mirrors",
                     }
                 ],
-                "aliases": ALIASES,
             }
     path = root(home) / "config/mirrors.yaml"
     mirrors = yaml.safe_load(path.read_text()).get("mirrors", {})
@@ -1703,7 +1764,6 @@ def sources(home, *, add=None, url=None, remove=None, trust_key=None, progress=N
                 {"name": name, **(value if isinstance(value, dict) else {"url": value})}
                 for name, value in mirrors.items()
             ],
-            "aliases": ALIASES,
         }
     with (
         locked(home),

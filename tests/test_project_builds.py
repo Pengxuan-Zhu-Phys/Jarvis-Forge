@@ -91,6 +91,21 @@ def test_cmake_argv_types_and_literal_values():
     assert commands['build'][-4:] == ['--target', 'CBS', '--config', 'Release']
 
 
+@pytest.mark.parametrize("cpus", [4, 48])
+def test_real_cmake_build_records_automatic_cpu_budget(home, projects, monkeypatch, cpus):
+    monkeypatch.setattr("jarvis_forge.parallelism.available_cpus", lambda: cpus)
+    producer, _ = projects
+    result = builds.execute(home, producer)
+    assert result["status"] == "passed", result
+    assert result["parallelism"]["available_cpus"] == cpus
+    assert result["parallelism"]["cmake_jobs"] == min(cpus, 16)
+    persisted = read_json(Path(result["path"]) / "result.json")
+    assert persisted["parallelism"] == result["parallelism"]
+    commands = [read_json(path)["requested_argv"] for path in Path(result["path"]).rglob("command-*.json")]
+    compile_command, = [argv for argv in commands if "--build" in argv]
+    assert compile_command[compile_command.index("--parallel") + 1] == str(min(cpus, 16))
+
+
 def test_cmake_producer_consumer_and_reuse(home, projects):
     producer, consumer = projects
     first = builds.execute(home, consumer, jobs=2)
@@ -990,7 +1005,7 @@ def test_build_failure_shows_stage_diagnostic_and_resume_once(home, tmp_path, mo
     path = tmp_path / "failure.yaml"
     path.write_text(yaml.safe_dump({"name": "sample-build", "dependencies": ["gsl"],
                                    "checks": {"before": {"python": {"version": ">=3.10"}}}}))
-    argv = ["--home", str(home.root), "build", "run", str(path), "--jobs", "8"]
+    argv = ["--home", str(home.root), "build", "run", str(path)]
     assert main(argv) == 1
     captured = capsys.readouterr()
     log, = (home.root / "runs").glob("*/attempts/*/build.log")
@@ -1003,7 +1018,7 @@ def test_build_failure_shows_stage_diagnostic_and_resume_once(home, tmp_path, mo
     assert captured.err.count(message) == 1
     assert f"Operation logs: {operation}" in captured.err
     assert str(log) in captured.err
-    assert f"jforge --home {home.root} build resume {run_id} --jobs 8" in captured.err
+    assert f"jforge --home {home.root} build resume {run_id}" in captured.err
     assert "[INFO]" not in captured.err and "--request" not in captured.err
     assert "Jarvis-Forge.Checker" in log.read_text() and "--request" in log.read_text()
     raw, = log.parent.glob("*/preflight.command-1/command-1.stdout.log")
@@ -1194,7 +1209,7 @@ def test_release_workspace_keeps_download_source_build_install_and_activation(ho
     assert main(["--home", str(home.root), "build", "fetch", "workspace-tiny", "--json"]) == 2
     assert "already contains" in json.loads(capsys.readouterr().out)["error"]["message"]
     assert "edited workspace script" in script.read_text()
-    assert main(['--home',str(home.root),'build','run','workspace-tiny','--jobs','2','--json']) == 0
+    assert main(['--home',str(home.root),'build','run','workspace-tiny','--json']) == 0
     result = json.loads(capsys.readouterr().out)
     prefix = Path(result['outputs'][0]['prefix'])
     instance = prefix.parent.parent
@@ -1246,7 +1261,7 @@ eval "$4"
 check='import sys; print(sys.executable, sys.prefix, sys.base_prefix)'
 before=$(python3 -c "$check") || exit 11
 flags=$-; options=$SHELLOPTS
-jforge build run workspace-tiny --directory "$3" --jobs 2 || exit 12
+jforge build run workspace-tiny --directory "$3" || exit 12
 test "$flags" = "$-" && test "$options" = "$SHELLOPTS" || exit 13
 test "$before" = "$(python3 -c "$check")" || exit 14
 printf 'AUTO_PREFIX=%s\n' "${CMAKE_PREFIX_PATH%%:*}"

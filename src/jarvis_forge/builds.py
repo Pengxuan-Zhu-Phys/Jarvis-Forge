@@ -537,10 +537,15 @@ def _matches_legacy_configure(saved, requested, argv, logs, source, environment)
     return False
 
 
-def execute(home, reference=None, *, parameters=None, environment_name=None, jobs=1, resume=None, source=None, progress=None, verbose=False, as_json=False):
+def execute(home, reference=None, *, parameters=None, environment_name=None, jobs=None, resume=None, source=None, progress=None, verbose=False, as_json=False):
     from . import toolchains, unified_profiles
     from .apt_profiles import active_home
     from .env_entries import prepare_build_environment, require_outputs_off
+    from .parallelism import policy
+
+    parallel = policy()
+    jobs = parallel["build_jobs"] if jobs is None else min(jobs, parallel["build_jobs"])
+    parallel.update(build_jobs=jobs, cmake_jobs=min(jobs, 16), homebrew_make_jobs=min(jobs, 16))
 
     if jobs < 1:
         raise ForgeError("Jobs must be positive.")
@@ -611,7 +616,8 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
             write_json(directory / "graph.json", selected_graph)
         attempts = directory / "attempts" / new_id("attempt", root=directory / "attempts")
         attempts.mkdir(parents=True)
-        result = {**request, "path": str(directory), "attempt": str(attempts), "status": "running", "nodes": {}}
+        result = {**request, "path": str(directory), "attempt": str(attempts), "status": "running", "nodes": {},
+                  "parallelism": parallel}
         write_json(directory / "result.json", result)
         from .build_logging import ProcessLog
         process_log = ProcessLog(attempts / "build.log", "Jarvis-Forge.Build", progress if verbose else None)
@@ -1172,7 +1178,7 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
         selected_standard = str(cache.get("CMAKE_CXX_STANDARD", {}).get("value", "unspecified"))
         if context["cxx_standard"] != "unspecified" and context["cxx_standard"] != selected_standard:
             raise ForgeError("CMake C++ standard must match the declared cxx_standard parameter.")
-        invocation = cmake.commands(configured, source, build, prefix, jobs=jobs)
+        invocation = cmake.commands(configured, source, build, prefix, jobs=min(jobs, 16))
         marker = build / ".jforge-configure.json"
         for phase in options.get("phases", ["configure", "build", "install"]):
             if phase == "configure":

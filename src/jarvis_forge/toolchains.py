@@ -121,7 +121,7 @@ def _root_package(result, name, version):
     return package
 
 
-def install(home, spec, *, target=None, stage=None, jobs=1, timeout=14400, cache="never", progress=None,
+def install(home, spec, *, target=None, stage=None, jobs=None, timeout=14400, cache="never", progress=None,
             instance=None, tools=None, deprecated_versions=None):
     from . import spack_backend
     from .builds import file_lock

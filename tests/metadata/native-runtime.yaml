@@ -1,0 +1,556 @@
+schema_version: 1
+kind: test-metadata
+project_id: jarvis-forge
+scope:
+  source: tests/test_parallelism.py
+  component: native-package-runtime
+  preconditions: Existing development Python; no remote hosts, package downloads or
+    compiler bootstrap.
+definitions:
+- id: forge.native.cpu-budget-respects-affinity-and-ancestor-cgroup-quota
+  title: Cpu budget respects affinity and ancestor cgroup quota
+  purpose: Cgroup v1 and v2 ancestry and process affinity jointly constrain the CPU
+    budget; malformed quotas do not create zero jobs.
+  binding:
+    adapter: pytest
+    selector: tests/test_parallelism.py::test_cpu_budget_respects_affinity_and_ancestor_cgroup_quota
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: Cgroup v1 and v2 ancestry and process affinity jointly constrain the
+      CPU budget; malformed quotas do not create zero jobs.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review: &id001
+    status: draft
+- id: forge.native.cpu-fallback-and-backend-caps
+  title: Cpu fallback and backend caps
+  purpose: Missing process CPU information falls back to one; Spack gets at most 256
+    global jobs, and CMake/Homebrew at most 16.
+  binding:
+    adapter: pytest
+    selector: tests/test_parallelism.py::test_cpu_fallback_and_backend_caps
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: Missing process CPU information falls back to one; Spack gets at most
+      256 global jobs, and CMake/Homebrew at most 16.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.native-cli-rejects-manual-parallelism-without-creating-data
+  title: Native cli rejects manual parallelism without creating data
+  purpose: Removed parallelism flags fail with usage status before creating the Forge
+    home.
+  binding:
+    adapter: pytest
+    selector: tests/test_parallelism.py::test_native_cli_rejects_manual_parallelism_without_creating_data
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: Removed parallelism flags fail with usage status before creating the
+      Forge home.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.spack-config-uses-new-installer-and-global-tokens
+  title: Spack config uses new installer and global tokens
+  purpose: Spack configuration selects its new installer and records global tokens
+    separately from the concurrent-package limit.
+  binding:
+    adapter: pytest
+    selector: tests/test_parallelism.py::test_spack_config_uses_new_installer_and_global_tokens
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: Spack configuration selects its new installer and records global tokens
+      separately from the concurrent-package limit.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.combined-plan-invalidates-on-every-solver-input
+  title: Combined plan invalidates on every solver input
+  purpose: Changing the manifest, lock or a configuration scope invalidates combined
+    results; installed and source-retry snapshots are never reused.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_combined_plan_invalidates_on_every_solver_input
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: Changing the manifest, lock or a configuration scope invalidates combined
+      results; installed and source-retry snapshots are never reused.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.combined-plan-rejects-malformed-engine-output
+  title: Combined plan rejects malformed engine output
+  purpose: An incomplete combined engine result fails before being saved as a reusable
+    plan.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_combined_plan_rejects_malformed_engine_output
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: An incomplete combined engine result fails before being saved as a reusable
+      plan.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.normal-install-has-three-engine-launches-and-preserves-command-logs
+  title: Normal install has three engine launches and preserves command logs
+  purpose: A normal operation launches resolution, install and final snapshot once
+    each while retaining per-command evidence.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_normal_install_has_three_engine_launches_and_preserves_command_logs
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: A normal operation launches resolution, install and final snapshot once
+      each while retaining per-command evidence.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.backend-bootstrap-prepares-solver-and-keys-before-marking-ready
+  title: Backend bootstrap prepares solver and keys before marking ready
+  purpose: The backend becomes ready only after solver/GnuPG preparation and key import
+    succeed; repeated preparation reuses the ready state.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_backend_bootstrap_prepares_solver_and_keys_before_marking_ready
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: The backend becomes ready only after solver/GnuPG preparation and key
+      import succeed; repeated preparation reuses the ready state.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.failed-key-preparation-does-not-mark-backend-ready
+  title: Failed key preparation does not mark backend ready
+  purpose: A failed key import leaves the backend unprepared.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_failed_key_preparation_does_not_mark_backend_ready
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: A failed key import leaves the backend unprepared.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.bridge-uses-source-plan-when-no-pending-binary-exists
+  title: Bridge uses source plan when no pending binary exists
+  purpose: An empty pending binary set plans real source build tools immediately,
+    while pending or overwritten cached packages keep binary-only planning.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_bridge_uses_source_plan_when_no_pending_binary_exists
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: An empty pending binary set plans real source build tools immediately,
+      while pending or overwritten cached packages keep binary-only planning.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.bridge-preserves-solver-exit-code-and-captured-diagnostic
+  title: Bridge preserves solver exit code and captured diagnostic
+  purpose: The combined bridge preserves the native solver exit code and full captured
+    error.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_bridge_preserves_solver_exit_code_and_captured_diagnostic
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: The combined bridge preserves the native solver exit code and full captured
+      error.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.empty-official-key-download-is-a-failure-not-success
+  title: Empty official key download is a failure not success
+  purpose: An empty key-discovery result fails even when the native discovery call
+    returns normally.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_empty_official_key_download_is_a_failure_not_success
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: An empty key-discovery result fails even when the native discovery call
+      returns normally.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.real-cli-switch-and-detach-use-fd-handoff-and-preserve-python
+  title: Real cli switch and detach use fd handoff and preserve python
+  purpose: Actual local CLI processes activate and detach in both shells through fd
+    9; JSON results do not change the caller interpreter or shell.
+  binding:
+    adapter: pytest
+    selector: tests/test_shell_handoff.py::test_real_cli_switch_and_detach_use_fd_handoff_and_preserve_python
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: Actual local CLI processes activate and detach in both shells through
+      fd 9; JSON results do not change the caller interpreter or shell.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.non-mutating-result-never-resolves-home-or-hands-off
+  title: Non mutating result never resolves home or hands off
+  purpose: JSON, preview and read-only responses never resolve or modify an environment
+    for handoff.
+  binding:
+    adapter: pytest
+    selector: tests/test_shell_handoff.py::test_non_mutating_result_never_resolves_home_or_hands_off
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: JSON, preview and read-only responses never resolve or modify an environment
+      for handoff.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.hook-has-no-argument-interpretation
+  title: Hook has no argument interpretation
+  purpose: The hook contains no native command or option parsing and consumes only
+    the separate handoff protocol.
+  binding:
+    adapter: pytest
+    selector: tests/test_shell_handoff.py::test_hook_has_no_argument_interpretation
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: The hook contains no native command or option parsing and consumes only
+      the separate handoff protocol.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.cache-trust-failure-never-falls-back-to-source
+  title: Cache trust failure never falls back to source
+  purpose: Key and signature errors in either binary phase stop installation even
+    when buried before generic installer failures.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_backend.py::test_cache_trust_failure_never_falls_back_to_source
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: Key and signature errors in either binary phase stop installation even
+      when buried before generic installer failures.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.official-key-import-failure-is-not-a-source-fallback
+  title: Official key import failure is not a source fallback
+  purpose: A key-import command failure stops before any package install or committed
+    environment.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_backend.py::test_official_key_import_failure_is_not_a_source_fallback
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: A key-import command failure stops before any package install or committed
+      environment.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.successful-key-command-without-keys-cannot-mark-trust-ready
+  title: Successful key command without keys cannot mark trust ready
+  purpose: A successful empty key response cannot set the key-readiness marker.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_backend.py::test_successful_key_command_without_keys_cannot_mark_trust_ready
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: A successful empty key response cannot set the key-readiness marker.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.unknown-command-has-one-error-and-one-suggestion
+  title: Unknown command has one error and one suggestion
+  purpose: Unknown root or nested commands return one usage error and one candidate
+    hint, in text and JSON, without creating data.
+  binding:
+    adapter: pytest
+    selector: tests/test_cli.py::test_unknown_command_has_one_error_and_one_suggestion
+  scenario:
+    inputs:
+      environment: temporary local files and isolated fake native backend responses
+    action: Execute the boundary scenario and check its persisted state and visible
+      result.
+  criteria:
+  - id: contract
+    expected: Unknown root or nested commands return one usage error and one candidate
+      hint, in text and JSON, without creating data.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - Does not certify a real HPC compiler installation.
+  review:
+    status: draft
+- id: forge.native.cmake-automatic-budget
+  title: Record the automatic budget in real local CMake builds
+  purpose: Verify the real CMake argv and persisted result against small and larger
+    CPU allocations.
+  binding:
+    adapter: pytest
+    selector: tests/test_project_builds.py::test_real_cmake_build_records_automatic_cpu_budget
+  scenario:
+    inputs:
+      source: tiny locally compiled C++ producer
+      available_cpus:
+      - 4
+      - 48
+    action: Build and install with the existing host CMake and C++ compiler.
+  criteria:
+  - id: budget
+    expected: The real --parallel argument is min(available CPU, 16), and result.json
+      records the same policy.
+    verification: automated
+  failure_meaning: The native package or shell boundary does not follow the documented
+    runtime policy.
+  limitations:
+  - A tiny local C++ build, not a real ROOT or HPC compiler build.
+  review: *id001
+- id: forge.native.verification-guard-escapes-native-cache-miss-catches
+  title: Verification guard escapes native cache miss catches
+  purpose: Invalid or absent required signatures escape native cache-miss catches,
+    even when the operation log cannot be written.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_verification_guard_escapes_native_cache_miss_catches
+  scenario:
+    inputs:
+      backend: pinned Spack cache-error semantics, no external host
+    action: Exercise native catch boundaries and controller verification evidence.
+  criteria:
+  - id: trust
+    expected: Invalid or absent required signatures escape native cache-miss catches,
+      even when the operation log cannot be written.
+    verification: automated
+  failure_meaning: A trust failure could be mistaken for a cache miss or a successful
+    installation.
+  limitations:
+  - Uses isolated native API stand-ins; actual package installations remain target-host
+    acceptance.
+  review:
+    status: draft
+- id: forge.native.native-guard-preserves-missing-archive-fallback
+  title: Native guard preserves missing archive fallback
+  purpose: Missing archives remain ordinary native cache misses; the trust guard does
+    not turn them into signature failures.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_native_guard_preserves_missing_archive_fallback
+  scenario:
+    inputs:
+      backend: pinned Spack cache-error semantics, no external host
+    action: Exercise native catch boundaries and controller verification evidence.
+  criteria:
+  - id: trust
+    expected: Missing archives remain ordinary native cache misses; the trust guard
+      does not turn them into signature failures.
+    verification: automated
+  failure_meaning: A trust failure could be mistaken for a cache miss or a successful
+    installation.
+  limitations:
+  - Uses isolated native API stand-ins; actual package installations remain target-host
+    acceptance.
+  review:
+    status: draft
+- id: forge.native.controller-stops-when-worker-records-failure-but-returns-success
+  title: Controller stops when worker records failure but returns success
+  purpose: The controller refuses success and source retries if a worker has recorded
+    a trust failure.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_controller_stops_when_worker_records_failure_but_returns_success
+  scenario:
+    inputs:
+      backend: pinned Spack cache-error semantics, no external host
+    action: Exercise native catch boundaries and controller verification evidence.
+  criteria:
+  - id: trust
+    expected: The controller refuses success and source retries if a worker has recorded
+      a trust failure.
+    verification: automated
+  failure_meaning: A trust failure could be mistaken for a cache miss or a successful
+    installation.
+  limitations:
+  - Uses isolated native API stand-ins; actual package installations remain target-host
+    acceptance.
+  review:
+    status: draft
+- id: forge.native.cache-trust-error-once
+  title: Show cache trust diagnostics once across worker and transaction boundaries
+  purpose: Keep the verified failure and its repair hint intact when the transaction
+    handles the same exception again.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_planning.py::test_cache_trust_hint_is_not_duplicated_at_the_transaction_boundary
+  scenario:
+    inputs:
+      failure: signature verification failure
+    action: Handle one failure at the worker and transaction boundaries.
+  criteria:
+  - id: once
+    expected: Both handlers propagate the same classified error; the trust hint appears
+      once.
+    verification: automated
+  failure_meaning: The user receives duplicated trust diagnostics.
+  limitations:
+  - No network or native package installation.
+  review:
+    status: draft

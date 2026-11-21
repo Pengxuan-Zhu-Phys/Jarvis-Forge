@@ -17,7 +17,6 @@ from .paths import object_path
 from .storage import ForgeError, digest, new_id, read_json, write_json, write_text
 
 
-ALIASES = {"libeigen3-dev": "eigen", "libgsl-dev": "gsl", "sqlite3": "sqlite", "pkg-config": "pkgconf"}
 FORMULA = re.compile(r"[a-z0-9][a-z0-9+._-]*(?:@[0-9][a-z0-9.+_-]*)?")
 PYTHON = re.compile(r"(?:python|cpython|pypy|micropython)(?:$|[@0-9-])")
 PYTHON_TOOLS = {"pyenv", "pyenv-virtualenv", "pip", "pipx", "pipenv", "uv", "virtualenv",
@@ -140,7 +139,7 @@ def current(home):
 
 def name_of(value):
     value = value.removeprefix("homebrew/core/")
-    return ALIASES.get(value, value)
+    return value
 
 
 def _formula(value):
@@ -157,7 +156,12 @@ def _forbid_python(name, root):
 
 
 def _info(config, args):
-    raw = _invoke(config["brew"], ["info", "--json=v2", *args])
+    try:
+        raw = _invoke(config["brew"], ["info", "--json=v2", *args])
+    except ForgeError as exc:
+        if re.search(r"No (?:available formula|formulae?|similarly named formulae)|Unknown formula", str(exc), re.IGNORECASE):
+            raise ForgeError(str(exc), code=exc.code, hint="jforge apt search <term>") from exc
+        raise
     try:
         document = json.loads(raw)
         rows = document["formulae"]
@@ -384,7 +388,14 @@ def _prefix_lock(config):
         yield
 
 
-def transact(home, action, requests, *, dry_run=False, timeout=3600, jobs=1, cache="auto", progress=None):
+def transact(home, action, requests, *, dry_run=False, timeout=3600, jobs=None, cache="auto", progress=None):
+    from .parallelism import policy
+
+    parallel = policy()
+    jobs = parallel["homebrew_make_jobs"] if jobs is None else min(jobs, parallel["homebrew_make_jobs"])
+    if jobs < 1:
+        raise ForgeError("The internal build budget must be positive.")
+    parallel["homebrew_make_jobs"] = jobs
     if action not in {"install", "remove", "check"}:
         raise ForgeError(f"apt {action} is unavailable for a shared Homebrew profile.")
     if cache != "auto":
@@ -411,7 +422,7 @@ def transact(home, action, requests, *, dry_run=False, timeout=3600, jobs=1, cac
         audited = _audit_install(config, missing)
         return {"backend": "homebrew", "scope": "shared", "roots": roots, "packages": packages,
                 "would_install": missing, "audited_dependencies": audited, "deferred_roots": deferred or {},
-                "dry_run": dry_run or action == "check"}
+                "dry_run": dry_run or action == "check", "parallelism": parallel}
 
     if preview:
         return prepare()

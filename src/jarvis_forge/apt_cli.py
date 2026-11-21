@@ -87,7 +87,7 @@ def _transact(
     ctx,
     action,
     packages,
-    jobs=1,
+    jobs=None,
     timeout=3600,
     cache="auto",
     dry_run=False,
@@ -307,7 +307,6 @@ def install_packages(
     packages: list[str] = typer.Argument(
         ..., help="Package names or quoted Spack specs.", metavar="<packages>"
     ),
-    jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Parallel build jobs."),
     timeout: float = typer.Option(
         3600, "--timeout", min=0.1, help="Installation command timeout, in seconds."
     ),
@@ -319,6 +318,7 @@ def install_packages(
     ),
 ):
     """Install or select packages and their dependencies."""
+    jobs = None
     _transact(ctx, "install", packages, jobs, timeout, cache, dry_run)
 
 
@@ -328,7 +328,6 @@ def reinstall(
     packages: list[str] = typer.Argument(
         ..., help="Packages to overwrite through Spack.", metavar="<packages>"
     ),
-    jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Parallel build jobs."),
     timeout: float = typer.Option(
         3600, "--timeout", min=0.1, help="Timeout per Spack command, in seconds."
     ),
@@ -340,6 +339,7 @@ def reinstall(
     ),
 ):
     """Reinstall selected specs using Spack overwrite semantics."""
+    jobs = None
     _transact(ctx, "reinstall", packages, jobs, timeout, cache, dry_run)
 
 
@@ -351,7 +351,6 @@ def upgrade(
         help="Omit to re-solve all roots; change a root with install SPEC.",
         metavar="<packages>",
     ),
-    jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Parallel build jobs."),
     timeout: float = typer.Option(
         3600, "--timeout", min=0.1, help="Timeout per Spack command, in seconds."
     ),
@@ -363,13 +362,13 @@ def upgrade(
     ),
 ):
     """Re-solve and upgrade the complete Spack environment."""
+    jobs = None
     _transact(ctx, "upgrade", packages or [], jobs, timeout, cache, dry_run)
 
 
 @app.command("full-upgrade")
 def full_upgrade(
     ctx: typer.Context,
-    jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Parallel build jobs."),
     timeout: float = typer.Option(
         3600, "--timeout", min=0.1, help="Timeout per Spack command, in seconds."
     ),
@@ -381,6 +380,7 @@ def full_upgrade(
     ),
 ):
     """Re-solve and upgrade all explicit roots and dependencies."""
+    jobs = None
     _transact(ctx, "full-upgrade", [], jobs, timeout, cache, dry_run)
 
 
@@ -390,7 +390,6 @@ def satisfy(
     constraints: list[str] = typer.Argument(
         ..., help="Version constraints or quoted Spack specs.", metavar="<constraints>"
     ),
-    jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Parallel build jobs."),
     timeout: float = typer.Option(
         3600, "--timeout", min=0.1, help="Timeout per Spack command, in seconds."
     ),
@@ -402,6 +401,7 @@ def satisfy(
     ),
 ):
     """Install specs satisfying explicit Spack constraints."""
+    jobs = None
     _transact(
         ctx, "install", constraints, jobs, timeout, cache, dry_run, command="satisfy"
     )
@@ -546,17 +546,17 @@ def manage_profile(
                                                    help="Backend for a new profile. Defaults to spack."),
     target: Optional[str] = typer.Option(None, "--target", help="CPU target for a Linux profile build."),
     stage: Optional[Path] = typer.Option(None, "--stage", help="Existing scratch directory for a Linux profile build."),
-    jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="Parallel jobs for a profile build."),
     timeout: float = typer.Option(14400, "--timeout", min=1, help="Timeout per backend command in seconds."),
     cache: Optional[str] = typer.Option(None, "--cache", help="Linux binary cache policy: auto, only or never."),
     on: bool = typer.Option(False, "--on", help="Enable an app in this profile."),
     off: bool = typer.Option(False, "--off", help="Disable an app in this profile."),
 ):
     """List profiles, check host support, build a preset, or manage apps and defaults."""
+    jobs = None
     from . import unified_profiles
 
     home = ctx.obj.user_home
-    build_options = target is not None or stage is not None or cache is not None or jobs != 1 or timeout != 14400
+    build_options = target is not None or stage is not None or cache is not None or timeout != 14400
     if name == "apps":
         if create or archived or profile_backend is not None or build_options or (on and off) or bool(preset) != (on or off):
             raise ForgeError("List apps, or select one with exactly one of --on and --off.",
@@ -741,127 +741,9 @@ def shell_init(ctx: typer.Context):
         raise ForgeError("shell-init cannot be used with --json.")
     explicit_home = ctx.find_root().params.get("home")
     home_args = " " + shlex.join(["--home", explicit_home]) if explicit_home is not None else ""
-    print(r"""# Add eval "$(command jforge apt shell-init)" to your shell startup file.
-jforge() {
-    local _jf_arg _jf_next=0 _jf_home='' _jf_change=0 _jf_path _jf_command='' _jf_action='' _jf_skip=0 _jf_target=0
-    local _jf_no_activate=0 _jf_handoff _jf_status _jf_hook _jf_env_switch=0 _jf_env_detach=0 _jf_env_reload=0 _jf_profile_action='' _jf_app_switch=0
-    for _jf_arg in "$@"; do
-        if [ "$_jf_next" = 1 ]; then _jf_home=$_jf_arg; _jf_next=0; continue; fi
-        case "$_jf_arg" in
-            --) break ;;
-            --home) _jf_next=1 ;;
-            --home=*) _jf_home=${_jf_arg#--home=} ;;
-            --help|-h|--dry-run|-s|--version|-v|-V|--json) _jf_skip=1 ;;
-            --no-activate) _jf_no_activate=1 ;;
-            --on|--off) _jf_app_switch=1 ;;
-            --shell|--shell=*) _jf_target=1 ;;
-            --debug|-d) ;;
-            --*) ;;
+    from .shell_handoff import HOOK
+    print(HOOK.replace("__JFORGE_HOME_ARGS__", home_args))
 
-            *)
-                if [ -z "$_jf_command" ]; then _jf_command=$_jf_arg
-                elif [ -z "$_jf_action" ]; then _jf_action=$_jf_arg
-                else
-                    if [ "$_jf_target" = 0 ]; then _jf_profile_action=$_jf_arg; fi
-                    _jf_target=1
-                fi ;;
-
-        esac
-    done
-    if [ "$_jf_command" = apt ]; then
-        case "$_jf_action" in install|reinstall|upgrade|full-upgrade|satisfy|switch|profile|import|remove|autoremove|update) _jf_change=1 ;; esac
-    fi
-    if [ "$_jf_skip" = 1 ]; then _jf_change=0; fi
-    case "$_jf_action:$_jf_target" in switch:0|profile:0) _jf_change=0 ;; esac
-    case "$_jf_action:$_jf_profile_action" in profile:check|profile:build) _jf_change=0 ;; esac
-    if [ "$_jf_action:$_jf_profile_action" = profile:apps ]; then _jf_change=0; else _jf_app_switch=0; fi
-    if [ "$_jf_skip" = 0 ] && [ "$_jf_command" = env ]; then
-        case "$_jf_action" in
-            switch) _jf_env_switch=1 ;;
-            detach) _jf_env_detach=1 ;;
-            drop) _jf_env_reload=1 ;;
-        esac
-    fi
-    case "$-:$_jf_command:$_jf_action:$_jf_skip:$_jf_no_activate" in
-        *i*:build:run:0:0|*i*:build:resume:0:0)
-            if _jf_handoff=$(mktemp "${TMPDIR:-/tmp}/jforge-build-activate.XXXXXXXX"); then
-                if _JFORGE_BUILD_ACTIVATION=1 command jforge "$@" 9>"$_jf_handoff"; then
-                    _jf_path=''
-                    IFS= read -r -d '' _jf_path < "$_jf_handoff" || _jf_path=''
-                    command rm -- "$_jf_handoff" 2>/dev/null || :
-                    if [ -n "$_jf_path" ]; then
-                        if source "$_jf_path" >&2; then
-                            printf '%s\n' 'jforge: Build environment activated.' >&2
-                        else
-                            printf 'jforge: Build passed. Could not activate %s\n' "$_jf_path" >&2
-                        fi
-                    fi
-                    return 0
-                else
-                    _jf_status=$?
-                    command rm -- "$_jf_handoff" 2>/dev/null || :
-                    return "$_jf_status"
-                fi
-            fi
-            ;;
-    esac
-    if command jforge "$@"; then
-        case "$-:$_jf_command:$_jf_action:$_jf_skip:$_jf_target" in
-            *i*:env:repair:0:0)
-                if [ -n "$_jf_home" ]; then
-                    _jf_hook=$(command jforge --home "$_jf_home" apt shell-init) || _jf_hook=''
-                else
-                    _jf_hook=$(command jforge apt shell-init) || _jf_hook=''
-                fi
-                if [ -n "$_jf_hook" ] && ! eval "$_jf_hook"; then
-                    printf '%s\n' 'jforge: Could not refresh the shell hook.' >&2
-                fi
-                ;;
-        esac
-        if [ "$_jf_env_detach" = 1 ]; then
-            if typeset -f _jforge_env_restore >/dev/null 2>&1; then
-                _jforge_env_restore || printf '%s\n' 'jforge: Could not unload the selected environment.' >&2
-            elif typeset -f _jforge_apt_restore >/dev/null 2>&1; then
-                _jforge_apt_restore || printf '%s\n' 'jforge: Could not unload the selected environment.' >&2
-            fi
-        elif [ "$_jf_skip:$_jf_app_switch" = 0:1 ] && [ -n "${_JFORGE_ACTIVE_APT_ENTRY-}" ]; then
-            if [ -n "$_jf_home" ]; then
-                _jf_path=$(command jforge --home "$_jf_home" env current --path) || _jf_path=''
-            else
-                _jf_path=$(command jforge env current --path) || _jf_path=''
-            fi
-            if [ "$_jf_path" = "$_JFORGE_ACTIVE_APT_ENTRY" ] && ! source "$_jf_path" >&2; then
-                printf '%s\n' 'jforge: Command succeeded. Could not refresh the shell environment.' >&2
-            fi
-        elif [ "$_jf_env_switch" = 1 ] || [ "$_jf_env_reload" = 1 ] || [ "$_jf_change" = 1 ]; then
-            if [ -n "$_jf_home" ]; then
-                if [ "$_jf_env_switch" = 1 ] || [ "$_jf_env_reload" = 1 ]; then
-                    _jf_path=$(command jforge --home "$_jf_home" env current --path) || _jf_path=''
-                else
-                    _jf_path=$(command jforge --home "$_jf_home" apt env --path) || _jf_path=''
-                fi
-            elif [ "$_jf_env_switch" = 1 ] || [ "$_jf_env_reload" = 1 ]; then
-                _jf_path=$(command jforge env current --path) || _jf_path=''
-            else
-                _jf_path=$(command jforge apt env --path) || _jf_path=''
-            fi
-            if [ "$_jf_env_reload" = 1 ] && [ -z "$_jf_path" ]; then
-                :
-            elif [ -z "$_jf_path" ] || ! source "$_jf_path" >&2; then
-                printf '%s\n' 'jforge: Command succeeded. Could not refresh the shell environment.' >&2
-            fi
-        fi
-    else
-        return $?
-    fi
-}
-_jforge_env_initial=$(command jforge__JFORGE_HOME_ARGS__ env current --path 2>/dev/null) || _jforge_env_initial=''
-if [ -n "$_jforge_env_initial" ] && ! source "$_jforge_env_initial" >&2; then
-    printf '%s\n' 'jforge: Could not load the selected environment.' >&2
-fi
-unset _jforge_env_initial
-export _JFORGE_HOOK_LOADED=1
-""".replace("__JFORGE_HOME_ARGS__", home_args))
 
 from .toolchain_cli import app as toolchain_app
 

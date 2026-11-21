@@ -233,7 +233,7 @@ def test_shell_hook_reloads_after_dropping_a_build(home, capsys):
         'case "$1 $2${3:+ $3}" in\n'
         '  "env current --path")\n'
         '    if [ -f "$MARKER" ]; then printf "%s\\n" "$AFTER"; else printf "%s\\n" "$BEFORE"; fi ;;\n'
-        '  "env drop root-build") touch "$MARKER"; exit 0 ;;\n'
+        '  "env drop root-build") touch "$MARKER"; printf "source\\0%s\\0" "$AFTER" >&9 ;;\n'
         "  *) exit 2 ;;\n"
         "esac\n"
     )
@@ -287,7 +287,8 @@ def test_shell_hook_switches_and_detaches_the_current_shell(home, capsys):
         "#!/bin/bash\n"
         'case "$1 $2${3:+ $3}" in\n'
         '  "env current --path") printf "%s\\n" "$ACTIVATION" ;;\n'
-        '  "env switch cbs"|"env detach") exit 0 ;;\n'
+        '  "env switch cbs") printf "source\\0%s\\0" "$ACTIVATION" >&9 ;;\n'
+        '  "env detach") printf "detach\\0\\0" >&9 ;;\n'
         "  *) exit 2 ;;\n"
         "esac\n"
     )

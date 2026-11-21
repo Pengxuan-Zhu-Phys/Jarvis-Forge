@@ -136,7 +136,7 @@ Existing environments retain their original layout and multi-instance policy, in
 ```bash
 jforge apt profile
 jforge apt profile root-env --create
-jforge apt install libeigen3-dev libgsl-dev sqlite3
+jforge apt install eigen gsl sqlite
 jforge apt prefix eigen --path
 ```
 
@@ -167,6 +167,10 @@ Run `jforge env repair` from any directory to discover and repair Forge-managed 
 
 Literal references to a known build workspace's `activate.sh` are skipped while it is missing and used again when the workspace is rebuilt. Use `--shell PATH`, a registered environment name, or `apt` to target a single file, named environment, or active package profile. Repair checks literal paths without executing activation scripts.
 
+Native apt/build/profile operations choose parallelism from process CPU affinity and cgroup quotas; there is no `--jobs` option on these commands. Spack uses a global jobserver with up to 16 concurrent packages; CMake and Homebrew use at most 16 CPUs per package. Operation results record the actual budget. Signed-cache key or signature failures stop installation; ordinary missing archives can still fall back to validated source builds.
+
+The interactive Bash/Zsh hook consumes successful CLI handoffs on fd 9. It does not interpret command arguments. JSON, preview and failed calls leave the current shell unchanged.
+
 ## User-local packages with Spack
 
 Spack is the default package backend on Linux. Native Spack extension recipes are downloaded from a dedicated recipe Release and refreshed with apt update, independently of Python package releases. Existing source installations are retained as read-only history. The first Spack write prepares the default profile:
@@ -179,11 +183,11 @@ jforge apt compilers
 jforge apt compilers --find
 jforge apt list --available
 jforge apt search eigen
-jforge apt show libgsl-dev
-jforge apt check sqlite3 libgsl-dev libeigen3-dev
-jforge apt install sqlite3 libgsl-dev libeigen3-dev --jobs 4
+jforge apt show gsl
+jforge apt check sqlite gsl eigen
+jforge apt install sqlite gsl eigen
 jforge apt list
-jforge apt prefix libgsl-dev --path
+jforge apt prefix gsl --path
 ```
 
 Maintainers publish all package recipes, project build YAMLs, library cards and companion scripts with `./jfrecipes <recipe-revision>`. Use `--dry` to prepare and check both catalogs without network access. The fixed `recipes/recipes.json` and `builds/builds.json` entries keep their independent release cycles. `jforge apt update` refreshes the selected package backend and the build recipes supported by this OS. Use `jforge build update` to refresh just the build catalog. The current build catalog requires Jarvis-Forge 1.1.11 or newer; upgrade the client before refreshing the catalog. See the [recipe publishing guide](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/RELEASING.md#%E7%8B%AC%E7%AB%8B%E5%8F%91%E5%B8%83%E6%89%A9%E5%B1%95%E9%85%8D%E6%96%B9).
@@ -192,7 +196,7 @@ Maintainers publish all package recipes, project build YAMLs, library cards and 
 
 ```bash
 jforge apt install 'gsl@2.8 %gcc@13' 'hdf5~mpi' 'root +python'
-jforge apt install sqlite3 --cache only
+jforge apt install sqlite --cache only
 jforge apt sources
 jforge apt sources --add site --url https://example.org/spack-cache
 jforge apt sources --trust-key /path/to/site-signing-key.asc
@@ -202,7 +206,7 @@ jforge apt remove sqlite3 --yes
 jforge apt profile default
 ```
 
-Common Debian development names are aliases to Spack names, for example `libgsl-dev` → `gsl`, `libeigen3-dev` → `eigen`, and `sqlite3` → `sqlite`. Native Spack specs and `name=version` are accepted. This does not import Ubuntu/Debian binary packages: Spack owns the dependency graph and uses its own recipes and signed build caches. Search/list use cached package names; show fetches detailed metadata from the managed local Spack installation.
+Package names are native Spack or Homebrew names. Forge does not translate Debian development package names; use `jforge apt search <term>` to find a package. Native Spack specs and `name=version` are accepted. This does not import Ubuntu/Debian binary packages: Spack owns the dependency graph and uses its own recipes and signed build caches. Search/list use cached package names; show fetches detailed metadata from the managed local Spack installation.
 
 On Linux, install fonts in the selected Spack profile with `jforge apt install font-fira-code font-liberation-sans font-inter font-noto-sans-sc`. Forge discovers TrueType and OpenType fonts under installed packages' `share/fonts` directories and configures Fontconfig when the profile is activated. The generated `fonts.conf` stays with the activation revision and Fontconfig's cache lives at `cache/fontconfig` under the profile. The standard Linux system font directories are still available. A profile on shared storage makes its fonts available to activated jobs on each node without requiring root access or user font directories. Verify with `fc-list 'Fira Code' family file` in the active shell.
 
@@ -262,7 +266,7 @@ Current build recipes with `apt.install` use Spack. See the [Homebrew profile de
 ```bash
 jforge apt profile
 jforge apt profile check
-jforge apt profile build ubuntu-24.04 --jobs 8
+jforge apt profile build ubuntu-24.04
 jforge apt profile global ubuntu-24.04
 jforge apt profile apps
 jforge apt profile apps rivet --off
@@ -284,8 +288,8 @@ Existing standalone GCC installations and bindings remain accessible with `apt t
 ```bash
 jforge build validate builds/root.yaml
 jforge build plan builds/root.yaml --env hep
-jforge build run builds/root.yaml --env hep --jobs 8
-jforge build resume <run-id> --jobs 8
+jforge build run builds/root.yaml --env hep
+jforge build resume <run-id>
 jforge build list
 source "$(jforge build env <artifact-id> --path)"
 ```
@@ -296,7 +300,7 @@ For a published app, start in the directory where you want to keep the workspace
 jforge build list --available
 jforge build fetch root        # Creates ./root/build.yaml and its companion scripts
 jforge build plan root         # Shows dependencies and steps without running them
-jforge build run root --jobs 8 # Uses ./root, including any edits you made
+jforge build run root # Uses ./root, including any edits you made
 jforge build list             # Shows installations in the current profile
 ```
 
@@ -305,7 +309,7 @@ Use `build show root` to read the recipe and `build plan root --verbose` for the
 Use `--directory` to choose another workspace path, or fetch and build it in one command:
 
 ```bash
-jforge build run root --directory "$HOME/workshops/root-forge" --jobs 8
+jforge build run root --directory "$HOME/workshops/root-forge"
 source "$HOME/workshops/root-forge/activate.sh"
 ```
 
@@ -313,7 +317,7 @@ To fetch without building into a custom workspace:
 
 ```bash
 jforge build fetch root --directory "$HOME/workshops/root-forge"
-jforge build run "$HOME/workshops/root-forge" --jobs 8
+jforge build run "$HOME/workshops/root-forge"
 ```
 
 The directory contains `build.yaml`, companion scripts and `instances/<name>/{downloads,sources,build,install}`. A build with one exported package uses its package and version as the instance name, for example `ROOT-6.40.04`. Other builds use the recipe ID. Distinct build identities with the same name get a numbered suffix. Each new instance records its full identity in `.jforge-instance.json`. Resume and reuse also support existing directories named by their full hash.

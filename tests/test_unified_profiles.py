@@ -499,9 +499,12 @@ def test_app_switch_refreshes_only_the_profile_loaded_in_this_shell(fake_spack, 
     hook = capsys.readouterr().out
     command(tmp_path / "jforge", r'''case "$*" in
   'env current --path') printf '%s\n' "${SELECTED-}" ;;
-  'apt profile apps my-app --off') cp "$REPLACEMENT" "$PROFILE" ;;
+  'apt profile apps my-app --off')
+    cp "$REPLACEMENT" "$PROFILE"
+    if [ "${_JFORGE_SHELL_ENTRY-}" = "$PROFILE" ]; then printf 'source\0%s\0' "$PROFILE" >&9; fi ;;
+
   'apt profile apps') : ;;
-  'env detach') : ;;
+  'env detach') printf 'detach\0\0' >&9 ;;
   *) exit 2 ;;
 esac''')
     probe = r'''
@@ -527,7 +530,8 @@ jforge apt profile apps my-app --off || exit 20
     for shell in ("bash", "zsh"):
         if executable := shutil.which(shell):
             entry.write_text(before)
-            result = subprocess.run([executable, "-c", probe, "test", tmp_path, entry, replacement, hook,
+            options = ["--noprofile", "--norc"] if shell == "bash" else ["-f"]
+            result = subprocess.run([executable, *options, "-ic", probe, "test", tmp_path, entry, replacement, hook,
                                      named["entry"]], capture_output=True, text=True)
             assert result.returncode == 0, result
 

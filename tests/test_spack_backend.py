@@ -27,10 +27,10 @@ pytestmark = pytest.mark.usefixtures("linux_apt")
 @pytest.mark.parametrize(
     "requested,expected",
     [
-        ("libgsl-dev", "gsl"),
-        ("sqlite3=3.46", "sqlite@=3.46"),
-        ("gfortran=15", "gcc@=15 languages=c,c++,fortran"),
-        ("libeigen3-dev>=3.4", "eigen@3.4:"),
+        ("libgsl-dev", "libgsl-dev"),
+        ("sqlite3=3.46", "sqlite3@=3.46"),
+        ("gfortran=15", "gfortran@=15"),
+        ("libeigen3-dev>=3.4", "libeigen3-dev@3.4:"),
         ("gsl<=2.8", "gsl@:2.8"),
         ("root@6.36 +python ^python@3.13", "root@6.36 +python ^python@3.13"),
     ],
@@ -903,6 +903,61 @@ def test_source_fallback_installs_binaries_before_source_builds(managed, monkeyp
     assert "/hash-fixture-app" not in installs[1]
     assert installs[2][-1:] == ["/hash-fixture-app"]
     assert "/hash-fixture-lib" not in installs[2]
+
+
+@pytest.mark.parametrize("phase", ["install-cache", "install-binaries"])
+@pytest.mark.parametrize("diagnostic", ["gpg: Can't check signature: No public key",
+                                        "[GNUPG:] BADSIG ABCDEF public cache",
+                                        "Signature verification failed for archive"])
+def test_cache_trust_failure_never_falls_back_to_source(managed, monkeypatch, phase, diagnostic):
+    home, calls = managed
+    named_layout(home)
+    run = b.run
+    def failure(home, args, op, label, **kwargs):
+        output = run(home, args, op, label, **kwargs)
+        if label == "source-plan":
+            plan = json.loads(output)
+            for package in plan["packages"]:
+                package["cached"] = True
+            return json.dumps(plan)
+        if label == phase or (phase == "install-binaries" and label == "install-cache"):
+            write_json(op / f"command-{label}.json", {"status": "failed", "exit_code": 3})
+            if label == phase:
+                (op / f"command-{label}.stderr.log").write_text(diagnostic + "\n" + "installer wrapper\n" * 100)
+            raise ForgeError("Expected InstallError to include the associated package", code=1)
+        return output
+    monkeypatch.setattr(b, "run", failure)
+    with pytest.raises(ForgeError, match="Expected InstallError") as failed:
+        b.transact(home, "install", ["fixture-app"])
+    assert "trust verification failed" in failed.value.hint
+    installs = [args for args, _ in calls if args[0] == "install"]
+    assert all(args[args.index("--use-buildcache") + 1] == "only" for args in installs)
+    assert not (home.root / "apt/state.json").exists()
+
+
+def test_official_key_import_failure_is_not_a_source_fallback(managed, monkeypatch):
+    home, calls = managed
+    (b.root(home) / "config/mirrors.yaml").write_text("mirrors: {spack-public-binaries: 'https://example.invalid'}\n")
+    run = b.run
+    def failure(home, args, op, label, **kwargs):
+        if label == "official-cache-keys":
+            raise ForgeError("key import failed", code=1)
+        return run(home, args, op, label, **kwargs)
+    monkeypatch.setattr(b, "run", failure)
+    with pytest.raises(ForgeError, match="key import failed") as failed:
+        b.transact(home, "install", ["fixture-app"])
+    assert "trusted binary-cache keys" in failed.value.hint
+    assert not any(args[0] == "install" for args, _ in calls)
+    assert not b.settings(home).get("official_cache_keys_ready")
+
+
+def test_successful_key_command_without_keys_cannot_mark_trust_ready(managed, monkeypatch, tmp_path):
+    home, _ = managed
+    (b.root(home) / "config/mirrors.yaml").write_text("mirrors: {spack-public-binaries: 'https://example.invalid'}\n")
+    monkeypatch.setattr(b, "run", lambda *args, **kwargs: '{"fingerprints": []}')
+    with pytest.raises(ForgeError, match="no signing keys"):
+        b._cache_keys(home, tmp_path, None, None)
+    assert not b.settings(home).get("official_cache_keys_ready")
 
 
 def test_binary_remainder_failure_does_not_start_source_build(managed, monkeypatch):

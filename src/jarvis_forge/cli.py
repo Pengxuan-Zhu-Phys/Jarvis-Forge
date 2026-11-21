@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from difflib import get_close_matches
 from functools import cached_property
 from importlib.resources import files
 import json
@@ -73,6 +74,9 @@ def emit(ctx: typer.Context, command: str, *, ok=True, **values):
         print(json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False))
     else:
         render(_console(), command, values)
+    if ok:
+        from .shell_handoff import for_result
+        for_result(ctx, command, values)
     return result
 
 
@@ -371,7 +375,7 @@ def main(argv: Optional[list[str]] = None, prog: str = "jforge") -> int:
     except ForgeError as error:
         exc = error
     except ClickException as error:
-        exc = ForgeError(error.format_message(), hint=f"{prog} -h")
+        exc = _usage_error(error, prog)
     except OSError as error:
         exc = ForgeError(str(error), code=1)
     except Exception as error:
@@ -384,4 +388,25 @@ def main(argv: Optional[list[str]] = None, prog: str = "jforge") -> int:
     else:
         render_error(_console(stderr=True), prog, str(exc), exc.hint)
     return exc.code
+
+
+def _usage_error(error, prog):
+    """Own unknown-command suggestions; some Typer versions append theirs twice."""
+    import re
+
+    message = error.format_message()
+    unknown = re.match(r"No such command ['\"](.+?)['\"]\.", message)
+    if not unknown:
+        return ForgeError(message, hint=f"{prog} -h")
+    name = unknown[1]
+    context = getattr(error, "ctx", None)
+    prefix = context.command_path if context is not None else prog
+    commands = getattr(getattr(context, "command", None), "commands", {})
+    choices = [key for key, command in commands.items() if not command.hidden]
+    if prefix == prog and name == "list":
+        hint = f"{prog} apt list / {prog} build list"
+    else:
+        matches = get_close_matches(name, choices, n=1, cutoff=0.45)
+        hint = f"Did you mean: {prefix} {matches[0]}?" if matches else f"{prefix} -h"
+    return ForgeError(f"Unknown command: {prefix} {name}.", hint=hint)
 
