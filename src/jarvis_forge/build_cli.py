@@ -128,9 +128,11 @@ def show(
     from .presentation import show_build
 
     selected, version = apps.split(name)
+    # Recipe inspection does not require an installed app or a usable profile.
+    rows = [] if expanded or apps._local(name) else _rows(ctx)
     matches = [
         row
-        for row in _rows(ctx)
+        for row in rows
         if row["name"] == selected
         and (version is None and row.get("enabled") or version == row["version"])
     ]

@@ -104,6 +104,21 @@ def test_build_list_defaults_to_profile_registry(tmp_path,capsys):
     assert 'Installed apps (1)' in output and 'ON' in output and str(prefix) in output
 
 
+@pytest.mark.parametrize("expanded", [False, True])
+def test_local_build_show_does_not_require_a_compatible_profile(tmp_path, capsys, expanded):
+    home = tmp_path / "old-home"
+    write_json(home / "config.json", {"schema_version": 1, "layout_version": 2,
+                                      "host_id": "old-home"})
+    before = (home / "config.json").read_bytes()
+    recipe = Path(__file__).resolve().parents[1] / "builds/root.yaml"
+    args = ["--home", str(home), "--json", "build", "show", str(recipe)]
+    assert main([*args, *(["--expanded"] if expanded else [])]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["build"]["id" if expanded else "name"] == "root"
+    assert (home / "config.json").read_bytes() == before
+    assert sorted(item.name for item in home.iterdir()) == ["config.json"]
+
+
 def test_workflow_is_reserved(capsys):
     assert main(['workflow', '--json']) == 2
     assert json.loads(capsys.readouterr().out)['ok'] is False

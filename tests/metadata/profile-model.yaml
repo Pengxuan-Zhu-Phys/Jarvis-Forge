@@ -5,6 +5,25 @@ scope:
   component: platform-profile-model
   preconditions: Local development interpreter and CMake; no remote hosts.
 definitions:
+- id: forge.profiles.local-recipe-inspection-is-independent-of-profile-layout
+  title: Inspect local recipes independently of the selected profile
+  purpose: Permit read-only recipe inspection before preparing a compatible Forge home.
+  binding:
+    adapter: pytest
+    selector: tests/test_cli.py::test_local_build_show_does_not_require_a_compatible_profile
+  scenario:
+    inputs:
+      environment: A disposable home with unsupported layout metadata and a local ROOT recipe.
+    action: Inspect the original recipe and its expanded steps as JSON.
+  criteria:
+  - id: read-only
+    expected: Both views succeed without changing any home files or requiring a profile.
+    verification: automated
+  failure_meaning: Read-only local inspection is coupled to installed profile state.
+  limitations:
+  - Does not install or certify ROOT or a native toolchain.
+  review:
+    status: draft
 - id: forge.profiles.software-names-preserve-name-and-version-without-length-limit
   title: Software names preserve name and version without length limit
   purpose: Software names preserve name and version without length limit.
