@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.2 — 2026-11-23
+
+### Changed
+
+- List all native packages in a profile, including base tools and bootstrap dependencies. Label their origins, merge references to the same physical installation, and preserve distinct builds at different prefixes. Base-only packages also support show and prefix lookup.
+- Reuse installed executable build tools from the profile bootstrap store when the dependency graph keeps them outside application link/runtime closures. Verify exact package inputs and private runtime dependencies, re-resolve and validate the resulting graph, and fall back to native builds when optional reuse is unsuitable. Preserve exact history and binary-cache trust rules.
+
+### Fixed
+
+- Merge compiler runtime paths with typed CMake RPATH lists without converting lists to Python string representations. Preserve scalar CMake syntax and list escaping, preventing malformed linker arguments in ROOT and other CMake builds.
+
 ## 1.2.1 — 2026-11-22
 
 ### Changed

@@ -315,7 +315,10 @@ def dependency_tree():
 
 
 if __name__ == "__main__":
-    if sys.argv[1] == "resolve-plan":
+    if sys.argv[1] == "build-tool-candidates":
+        from jarvis_forge.build_tool_reuse import candidates
+        print(json.dumps(candidates(json.loads(sys.argv[2]))))
+    elif sys.argv[1] == "resolve-plan":
         resolve_plan(json.loads(sys.argv[2]))
     elif sys.argv[1] == "database":
         database_change(json.loads(sys.argv[2]))

@@ -8,7 +8,7 @@ from .storage import ForgeError, digest, read_json, write_json
 
 def stamp(envdir):
     directory = Path(envdir)
-    paths = [directory / "spack.yaml", directory / "spack.lock"]
+    paths = [directory / "spack.yaml", directory / "spack.lock", directory / "build-tool-reuse.json"]
     paths += sorted((directory / ".jforge-config").glob("*.yaml"))
     return {str(path.relative_to(directory)): digest(path) for path in paths if path.is_file()}
 

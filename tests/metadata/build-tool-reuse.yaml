@@ -1,0 +1,233 @@
+schema_version: 1
+kind: test-metadata
+project_id: jarvis-forge
+scope:
+  component: native-build-tool-reuse
+definitions:
+- id: forge.build-tools.tool-eligibility-uses-the-complete-dependency-graph
+  title: Complete graph tool eligibility
+  purpose: Exclude roots, link/run closures, incoming link edges and compiler providers.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_tool_eligibility_uses_the_complete_dependency_graph
+  scenario:
+    inputs:
+      environment: Disposable stores, fake native engine boundaries and local executable
+        fixtures.
+    action: Inspect the dependency graph, validate source tools, and plan or reject
+      reuse.
+  criteria:
+  - id: contract
+    expected: Exclude roots, link/run closures, incoming link edges and compiler providers.
+    verification: automated
+  failure_meaning: Build-tool reuse crosses a runtime/identity boundary or changes
+    exact replay and cache guarantees.
+  limitations:
+  - Does not certify a real compiler bootstrap or ROOT build on HPC.
+  review:
+    status: draft
+- id: forge.build-tools.tool-reuse-requires-exact-noncompiler-inputs
+  title: Exact reusable tool inputs
+  purpose: Version, recipe, variants, flags and architecture differences prevent reuse.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_tool_reuse_requires_exact_noncompiler_inputs
+  scenario:
+    inputs:
+      environment: Disposable stores, fake native engine boundaries and local executable
+        fixtures.
+    action: Inspect the dependency graph, validate source tools, and plan or reject
+      reuse.
+  criteria:
+  - id: contract
+    expected: Version, recipe, variants, flags and architecture differences prevent
+      reuse.
+    verification: automated
+  failure_meaning: Build-tool reuse crosses a runtime/identity boundary or changes
+    exact replay and cache guarantees.
+  limitations:
+  - Does not certify a real compiler bootstrap or ROOT build on HPC.
+  review:
+    status: draft
+- id: forge.build-tools.native-source-registry-and-runtime-files-are-checked
+  title: Native source identity and runtime checks
+  purpose: Read installed tools from their native store and fingerprint their executable/runtime
+    identities.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_native_source_registry_and_runtime_files_are_checked
+  scenario:
+    inputs:
+      environment: Disposable stores, fake native engine boundaries and local executable
+        fixtures.
+    action: Inspect the dependency graph, validate source tools, and plan or reject
+      reuse.
+  criteria:
+  - id: contract
+    expected: Read installed tools from their native store and fingerprint their executable/runtime
+      identities.
+    verification: automated
+  failure_meaning: Build-tool reuse crosses a runtime/identity boundary or changes
+    exact replay and cache guarantees.
+  limitations:
+  - Does not certify a real compiler bootstrap or ROOT build on HPC.
+  review:
+    status: draft
+- id: forge.build-tools.unusable-or-unneeded-source-tools-are-not-borrowed
+  title: Unusable tools retain native installation
+  purpose: Missing libraries, interpreters, invalid specs or unneeded packages are
+    not borrowed.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_unusable_or_unneeded_source_tools_are_not_borrowed
+  scenario:
+    inputs:
+      environment: Disposable stores, fake native engine boundaries and local executable
+        fixtures.
+    action: Inspect the dependency graph, validate source tools, and plan or reject
+      reuse.
+  criteria:
+  - id: contract
+    expected: Missing libraries, interpreters, invalid specs or unneeded packages
+      are not borrowed.
+    verification: automated
+  failure_meaning: Build-tool reuse crosses a runtime/identity boundary or changes
+    exact replay and cache guarantees.
+  limitations:
+  - Does not certify a real compiler bootstrap or ROOT build on HPC.
+  review:
+    status: draft
+- id: forge.build-tools.planner-resolves-again-and-rolls-back-unsafe-optional-externals
+  title: Optional external planning and fallback
+  purpose: Re-solve under optional externals; revert unsafe/failed optional plans
+    and preserve timeouts/signature errors.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_planner_resolves_again_and_rolls_back_unsafe_optional_externals
+  scenario:
+    inputs:
+      environment: Disposable stores, fake native engine boundaries and local executable
+        fixtures.
+    action: Inspect the dependency graph, validate source tools, and plan or reject
+      reuse.
+  criteria:
+  - id: contract
+    expected: Re-solve under optional externals; revert unsafe/failed optional plans
+      and preserve timeouts/signature errors.
+    verification: automated
+  failure_meaning: Build-tool reuse crosses a runtime/identity boundary or changes
+    exact replay and cache guarantees.
+  limitations:
+  - Does not certify a real compiler bootstrap or ROOT build on HPC.
+  review:
+    status: draft
+- id: forge.build-tools.historical-build-edges-do-not-require-a-deleted-unused-tool
+  title: Unused historical build edges
+  purpose: Old build-only references do not invalidate installed consumers until needed
+    again.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_historical_build_edges_do_not_require_a_deleted_unused_tool
+  scenario:
+    inputs:
+      environment: Disposable stores, fake native engine boundaries and local executable
+        fixtures.
+    action: Inspect the dependency graph, validate source tools, and plan or reject
+      reuse.
+  criteria:
+  - id: contract
+    expected: Old build-only references do not invalidate installed consumers until
+      needed again.
+    verification: automated
+  failure_meaning: Build-tool reuse crosses a runtime/identity boundary or changes
+    exact replay and cache guarantees.
+  limitations:
+  - Does not certify a real compiler bootstrap or ROOT build on HPC.
+  review:
+    status: draft
+- id: forge.build-tools.replay-refuses-missing-source-store-without-rewriting-the-lock
+  title: Exact history source protection
+  purpose: Reject a missing historical tool source without altering the lock.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_replay_refuses_missing_source_store_without_rewriting_the_lock
+  scenario:
+    inputs:
+      environment: Disposable stores, fake native engine boundaries and local executable
+        fixtures.
+    action: Inspect the dependency graph, validate source tools, and plan or reject
+      reuse.
+  criteria:
+  - id: contract
+    expected: Reject a missing historical tool source without altering the lock.
+    verification: automated
+  failure_meaning: Build-tool reuse crosses a runtime/identity boundary or changes
+    exact replay and cache guarantees.
+  limitations:
+  - Does not certify a real compiler bootstrap or ROOT build on HPC.
+  review:
+    status: draft
+- id: forge.build-tools.resolved-loader-libraries-are-fingerprinted
+  title: Loader runtime identity
+  purpose: Changes in dynamically resolved runtime libraries invalidate reuse evidence.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_resolved_loader_libraries_are_fingerprinted
+  scenario:
+    inputs:
+      environment: Disposable stores, fake native engine boundaries and local executable
+        fixtures.
+    action: Inspect the dependency graph, validate source tools, and plan or reject
+      reuse.
+  criteria:
+  - id: contract
+    expected: Changes in dynamically resolved runtime libraries invalidate reuse evidence.
+    verification: automated
+  failure_meaning: Build-tool reuse crosses a runtime/identity boundary or changes
+    exact replay and cache guarantees.
+  limitations:
+  - Does not certify a real compiler bootstrap or ROOT build on HPC.
+  review:
+    status: draft
+- id: forge.build-tools.build-tool-reuse-is-applied-in-native-transactions-and-cache-fallback
+  title: Transaction and cache fallback tool reuse
+  purpose: Native install and cache fallback use graph-qualified tools; future requests
+    reassess optional external identities.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_backend.py::test_build_tool_reuse_is_applied_in_native_transactions_and_cache_fallback
+  scenario:
+    inputs:
+      environment: Disposable stores, fake native engine boundaries and local executable
+        fixtures.
+    action: Inspect the dependency graph, validate source tools, and plan or reject
+      reuse.
+  criteria:
+  - id: contract
+    expected: Native install and cache fallback use graph-qualified tools; future
+      requests reassess optional external identities.
+    verification: automated
+  failure_meaning: Build-tool reuse crosses a runtime/identity boundary or changes
+    exact replay and cache guarantees.
+  limitations: &id001
+  - Does not certify a real compiler bootstrap or ROOT build on HPC.
+  review: &id002
+    status: draft
+- id: forge.build-tools.executable-symlink-retargeting-invalidates-source-identity
+  title: Executable symlink identity
+  purpose: A tool symlink cannot silently retarget to another executable.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_executable_symlink_retargeting_invalidates_source_identity
+  scenario:
+    inputs:
+      environment: Disposable executable symlinks and a fake source store.
+    action: Retarget an executable symlink while preserving file contents.
+  criteria:
+  - id: identity
+    expected: Reuse evidence becomes invalid when the executable target changes.
+    verification: automated
+  failure_meaning: Build-tool reuse crosses a runtime/identity boundary or changes
+    exact replay and cache guarantees.
+  limitations: *id001
+  review: *id002

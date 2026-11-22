@@ -20,6 +20,8 @@ The built-in profiles are `ubuntu22`, `ubuntu24`, `ubuntu26` and `macos`. Each o
 
 The five commands are `profile check [NAME]`, `create NAME`, `use NAME`, `show [NAME]` and `remove NAME`. No platform selection or custom profile names are required. Native operations display their plan and run directly; use `--dry-run` to preview changes.
 
+`jforge apt list` includes base tools, bootstrap dependencies and application packages in the selected profile. Its Source column identifies their roles; references to one physical installation are shown once.
+
 The standalone `tools/jforge-pyenv-setup.sh` prepares pyenv and installs Forge from PyPI into its base interpreter. Forge itself never creates a Python environment. Select Python before creating a profile; use a separate Forge home when a preset needs another Python identity.
 
 ## Packages and applications

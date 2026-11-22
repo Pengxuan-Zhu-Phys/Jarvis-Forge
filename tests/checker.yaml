@@ -43,6 +43,7 @@ groups:
   - tests/test_standard_checks.py
   - tests/test_build_cards.py
   inputs:
+  - src/jarvis_forge/toolchains.py
   - src/jarvis_forge/cmake.py
   - src/jarvis_forge/build*.py
   - src/jarvis_forge/schemas/build.schema.json
@@ -95,6 +96,7 @@ groups:
   skip_allow: []
 - id: apt-backend
   match:
+  - tests/test_build_tool_reuse.py
   - tests/test_spack_backend.py
   - tests/test_paths.py
   - tests/test_spack_layout.py
@@ -107,6 +109,12 @@ groups:
   - tests/test_spack_planning.py
   - tests/test_parallelism.py
   inputs:
+  - src/jarvis_forge/build_tool_reuse.py
+  - tests/test_build_tool_reuse.py
+  - src/jarvis_forge/unified_profiles.py
+  - src/jarvis_forge/presentation.py
+  - src/jarvis_forge/build_apps.py
+  - src/jarvis_forge/scope_locks.py
   - src/jarvis_forge/spack*.py
   - src/jarvis_forge/bootstrap_patch.py
   - src/jarvis_forge/profile_fonts.py
@@ -282,6 +290,7 @@ groups:
   - tests/test_profile_exports.py
   - tests/test_build_apps.py
   inputs:
+  - src/jarvis_forge/cmake.py
   - src/jarvis_forge/toolchain*.py
   - src/jarvis_forge/unified_profiles.py
   - src/jarvis_forge/card/apt_profiles.json

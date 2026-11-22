@@ -6,3 +6,5 @@ documents:
 - native-runtime.yaml
 - profile-model.yaml
 - profile-lifecycle.yaml
+- build-tool-reuse.yaml
+- rpath.yaml

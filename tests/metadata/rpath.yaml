@@ -1,0 +1,100 @@
+schema_version: 1
+kind: test-metadata
+project_id: jarvis-forge
+scope:
+  component: cmake-runtime-paths
+definitions:
+- id: forge.cmake.cmake-rpath-merging-preserves-typed-values
+  title: Typed RPATH merge
+  purpose: Merge list and scalar cache entries without Python repr, preserve escapes/expressions
+    and keep merging idempotent.
+  binding:
+    adapter: pytest
+    selector: tests/test_toolchains.py::test_cmake_rpath_merging_preserves_typed_values
+  scenario:
+    inputs:
+      environment: Disposable local cache entries; the real link test needs local
+        CMake and a C compiler.
+    action: Merge compiler runtime paths and inspect generated arguments or build
+      a tiny local program.
+  criteria:
+  - id: rpath
+    expected: Merge list and scalar cache entries without Python repr, preserve escapes/expressions
+      and keep merging idempotent.
+    verification: automated
+  failure_meaning: RPATH merging corrupts typed values, linker arguments or same-directory
+    reconfiguration.
+  limitations:
+  - Does not certify a complete ROOT build on HPC.
+  review:
+    status: draft
+- id: forge.cmake.invalid-rpath-values-fail-before-cmake
+  title: Invalid RPATH types
+  purpose: Reject non-string RPATH values before invoking CMake.
+  binding:
+    adapter: pytest
+    selector: tests/test_toolchains.py::test_invalid_rpath_values_fail_before_cmake
+  scenario:
+    inputs:
+      environment: Disposable local cache entries; the real link test needs local
+        CMake and a C compiler.
+    action: Merge compiler runtime paths and inspect generated arguments or build
+      a tiny local program.
+  criteria:
+  - id: rpath
+    expected: Reject non-string RPATH values before invoking CMake.
+    verification: automated
+  failure_meaning: RPATH merging corrupts typed values, linker arguments or same-directory
+    reconfiguration.
+  limitations:
+  - Does not certify a complete ROOT build on HPC.
+  review:
+    status: draft
+- id: forge.cmake.cmake-rpath-reconfigure-replaces-malformed-cache-and-links
+  title: Real CMake cache repair and linking
+  purpose: Reconfigure a malformed cache in the existing build directory, link, install
+    and run a tiny executable without clearing the build tree.
+  binding:
+    adapter: pytest
+    selector: tests/test_toolchains.py::test_cmake_rpath_reconfigure_replaces_malformed_cache_and_links
+  scenario:
+    inputs:
+      environment: Disposable local cache entries; the real link test needs local
+        CMake and a C compiler.
+    action: Merge compiler runtime paths and inspect generated arguments or build
+      a tiny local program.
+  criteria:
+  - id: rpath
+    expected: Reconfigure a malformed cache in the existing build directory, link,
+      install and run a tiny executable without clearing the build tree.
+    verification: automated
+  failure_meaning: RPATH merging corrupts typed values, linker arguments or same-directory
+    reconfiguration.
+  limitations:
+  - Does not certify a complete ROOT build on HPC.
+  review:
+    status: draft
+- id: forge.cmake.compiler-runtime-directory-with-literal-semicolon-is-escaped-once
+  title: Runtime directory escaping
+  purpose: Escape a literal semicolon in compiler runtime paths exactly once for both
+    input representations.
+  binding:
+    adapter: pytest
+    selector: tests/test_toolchains.py::test_compiler_runtime_directory_with_literal_semicolon_is_escaped_once
+  scenario:
+    inputs:
+      environment: Disposable local cache entries; the real link test needs local
+        CMake and a C compiler.
+    action: Merge compiler runtime paths and inspect generated arguments or build
+      a tiny local program.
+  criteria:
+  - id: rpath
+    expected: Escape a literal semicolon in compiler runtime paths exactly once for
+      both input representations.
+    verification: automated
+  failure_meaning: RPATH merging corrupts typed values, linker arguments or same-directory
+    reconfiguration.
+  limitations:
+  - Does not certify a complete ROOT build on HPC.
+  review:
+    status: draft

@@ -134,22 +134,27 @@ def _columns(console, headers, rows):
 
 def package_rows(console, packages, *, planned=False):
     """One row per instance; never fold or crop a package name or version."""
+    categories = {"base-tool": "base tool", "bootstrap-dependency": "bootstrap dep", "application": "application"}
+    categorized = any(item.get("category") for item in packages)
+    headers = ["Package", "Version", *(["Source"] if categorized else []), "Kind", "State"]
     rows = []
-    for item in sorted(packages, key=lambda p: (package_kind(p) == "dependency", p["name"], str(p.get("version", "")))):
+    for item in sorted(packages, key=lambda p: (package_kind(p) == "dependency", p["name"], str(p.get("version", "")), str(p.get("prefix", "")))):
         state = ("archived" if item.get("archived") else "active" if item.get("active")
                  else "installed" if item.get("installed") else "planned" if planned
                  else item.get("status", "available"))
         if item.get("external") or item.get("provenance", {}).get("external"):
             state += ", external"
-        rows.append([str(item["name"]), str(item.get("version") or "—"), package_kind(item) or "—", state])
+        row = [str(item["name"]), str(item.get("version") or "—")]
+        if categorized:
+            row.append(categories.get(item.get("category"), "—"))
+        rows.append([*row, package_kind(item) or "—", state])
     if not rows:
         line(console, "  No matching packages.")
         return
-    if not _columns(console, ["Package", "Version", "Kind", "State"], rows):
-        # Narrow SSH terminals retain complete identifiers on a single logical
-        # line; terminal wrapping stays visual, so copying still works.
-        for name, version, kind, state in rows:
-            tags = "; ".join(v for v in (kind, state) if v != "—")
+    if not _columns(console, headers, rows):
+        # Preserve full identifiers and category labels on narrow terminals.
+        for name, version, *labels in rows:
+            tags = "; ".join(v for v in labels if v != "—")
             line(console, f"  {name} {version} [{tags}]")
 
 

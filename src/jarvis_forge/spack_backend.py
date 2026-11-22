@@ -734,11 +734,16 @@ def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None,
         ensure(home, op)
     directory = op / "candidate"
     directory.mkdir(parents=True, exist_ok=True)
+    reuse = _python_reuse(buildcache=reuse_buildcache and not toolchain)
+    old_reuse = Path(previous) / "build-tool-reuse.json" if previous else None
+    prior_tools = read_json(old_reuse).get("selected", []) if old_reuse and old_reuse.is_file() else []
+    for source in reuse["from"]:
+        source.setdefault("exclude", []).extend("/" + h for row in prior_tools for h in row.get("external_hashes", []))
     document = {
         "spack": {
             "specs": roots,
             "view": False,
-            "concretizer": {"unify": True, "reuse": _python_reuse(buildcache=reuse_buildcache and not toolchain)},
+            "concretizer": {"unify": True, "reuse": reuse},
         }
     }
     target = target or (toolchain and toolchain.get("target"))
@@ -762,7 +767,7 @@ def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None,
     if target:
         _require_target(packages, target)
     package_config.write_text(yaml.safe_dump(config, sort_keys=False))
-    if previous and (Path(previous) / "spack.lock").is_file():
+    if previous and not prior_tools and (Path(previous) / "spack.lock").is_file():
         shutil.copy2(Path(previous) / "spack.lock", directory / "spack.lock")
     return directory
 
@@ -1141,6 +1146,11 @@ def _publish(home, op, envdir, roots, snapshot):
             if (envdir/name).is_file():shutil.copy2(envdir/name, root(home)/name)
             elif (root(home)/name).exists():(root(home)/name).unlink()
         shutil.copytree(envdir/'.jforge-config', root(home)/'.jforge-config', dirs_exist_ok=True)
+        reuse = envdir / 'build-tool-reuse.json'
+        if reuse.is_file():
+            shutil.copy2(reuse, root(home) / reuse.name)
+        else:
+            (root(home) / 'build-tool-reuse.json').unlink(missing_ok=True)
     envdir=root(home)
     config = profile_fonts.write_config(home, store_root(home), revision, snapshot["packages"])
     if config:
@@ -1392,8 +1402,18 @@ def transact(
             return _snapshot(home, envdir, op, "plan" + suffix, cache=policy,
                              overwrite=overwrite, omit_cached_build_deps=omit_cached_build_deps)
 
+        from .build_tool_reuse import Planner
+        def tool_candidates(options, label):
+            return _json(run(home, ["python", str(Path(__file__).with_name("spack_bridge.py")),
+                                   "build-tool-candidates", json.dumps(options)], op, label,
+                             envdir=envdir, timeout=timeout), "build-tool candidates")
+        tool_reuse = Planner(home, envdir, op, tool_candidates, resolve_plan, progress=progress,
+                             replay=bool(selected_history), enabled=bool(toolchain) and action != "remove",
+                             allow_new=cache != "only")
+
         def validate_plan(plan, label, policy, flags, *, omit_cached_build_deps=False):
             nonlocal runtime_retried
+            plan = tool_reuse.apply(plan, policy, flags, omit_cached_build_deps=omit_cached_build_deps)
             write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
             _validate_deprecated_versions(plan["packages"], allowed)
             _validate_external_python(home, plan["packages"])
@@ -1417,6 +1437,7 @@ def transact(
                 _restore_candidate_lock(envdir, previous, op / "spack-before-runtime-retry.lock")
                 plan = resolve_plan(policy, flags, suffix="-runtime-retry",
                                     omit_cached_build_deps=omit_cached_build_deps)
+                plan = tool_reuse.apply(plan, policy, flags, omit_cached_build_deps=omit_cached_build_deps)
                 write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
                 _validate_deprecated_versions(plan["packages"], allowed)
                 _validate_external_python(home, plan["packages"])
@@ -1426,6 +1447,12 @@ def transact(
                 if any(p["name"] == "gcc-runtime" and not p["external"] and p["hash"] != installed
                        for p in plan["packages"]):
                     raise ForgeError("Spack could not reuse the installed gcc-runtime.", code=1)
+            tool_reuse.validate(read_json(op / "dag.json")["packages"])
+            evidence = envdir / "build-tool-reuse.json"
+            if evidence.is_file():
+                result["reused_build_tools"] = [
+                    {key: row[key] for key in ("name", "version", "prefix", "source_hash")}
+                    for row in read_json(evidence)["selected"]]
             if project_python is not None and translated:
                 validate_project_python(home, read_json(op / "dag.json")["packages"], translated, project_python)
             return plan

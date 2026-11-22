@@ -158,16 +158,12 @@ def list_packages(
     driver = _driver(ctx.obj.home)
     if available:
         rows = driver.catalog(ctx.obj.home, pattern=pattern)
-    elif driver is homebrew_backend:
-        rows = (
-            driver.current(ctx.obj.home)["packages"]
-            if driver.configured(ctx.obj.home)
-            else []
-        )
     else:
-        rows = ctx.obj.home.packages()
+        from .unified_profiles import package_inventory
+        rows = package_inventory(ctx.obj.home)
     rows = [row for row in rows if fnmatch.fnmatchcase(row["name"], pattern)]
-    _emit(ctx, "list", view="available" if available else "installed", packages=rows)
+    _emit(ctx, "list", view="available" if available else "installed",
+          backend=backend_name(ctx.obj.home), packages=rows)
 
 
 @app.command("search")
@@ -194,6 +190,13 @@ def show(
         else {"packages": []}
     )
     rows = [row for row in state["packages"] if row["name"] == name]
+    if not rows:
+        from .unified_profiles import package_inventory
+        rows = [row for row in package_inventory(ctx.obj.home)
+                if row["name"] == name and row.get("active", True)]
+        if rows and not path:
+            _emit(ctx, "show", package={"name": name}, installed_instances=rows)
+            return
     if path:
         if len(rows) != 1 or not Path(rows[0]["prefix"]).is_dir():
             raise ForgeError(

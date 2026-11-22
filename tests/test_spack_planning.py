@@ -27,7 +27,7 @@ def candidate(tmp_path):
     return op, env, request, result
 
 
-@pytest.mark.parametrize("changed", ["spack.yaml", "spack.lock", ".jforge-config/config.yaml", ".jforge-config/packages.yaml"])
+@pytest.mark.parametrize("changed", ["spack.yaml", "spack.lock", "build-tool-reuse.json", ".jforge-config/config.yaml", ".jforge-config/packages.yaml"])
 def test_combined_plan_invalidates_on_every_solver_input(candidate, changed):
     op, env, request, result = candidate
     spack_planning.save(op, env, request, json.dumps(result))

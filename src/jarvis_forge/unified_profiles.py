@@ -886,3 +886,44 @@ def remove(base, name, *, dry_run=False, confirm=None):
             if index is not None:
                 write_json(file, index)
     return {"name": name, "path": str(target.root), "dry_run": dry_run}
+
+
+def package_inventory(profile):
+    """Read a profile-wide inventory without changing native stores or reuse."""
+    def packages(scope, backend):
+        if backend == "homebrew":
+            from . import homebrew_backend
+            return homebrew_backend.current(scope)["packages"] if homebrew_backend.configured(scope) else []
+        return scope.packages()
+
+    data = record(profile)
+    if not data:
+        from .apt_profiles import backend_name
+        return packages(profile, backend_name(profile))
+    from .build_apps import reading
+    with reading(profile):
+        tools = ForgeHome(profile.root / "tools")
+        inventory = {}
+        for source, scope in (("tools", tools), ("apt", profile)):
+            for index, package in enumerate(packages(scope, data["backend"])):
+                prefix = package.get("prefix")
+                # Deduplicate references to one physical installation only.
+                # Equal names/versions in different stores remain separate.
+                key = (package["name"], str(package.get("version", "")),
+                       str(Path(prefix).resolve()) if prefix else (source, index))
+                category = ("base-tool" if package.get("root") or package.get("automatic") is False
+                            else "bootstrap-dependency") if source == "tools" else "application"
+                reference = {"source": source, **{key: package[key] for key in
+                             ("hash", "install_id", "external", "root", "active") if key in package}}
+                if key not in inventory:
+                    inventory[key] = {**package, "category": category, "sources": [source],
+                                      "references": [reference]}
+                else:
+                    row = inventory[key]
+                    if source not in row["sources"]:
+                        row["sources"].append(source)
+                    if reference not in row["references"]:
+                        row["references"].append(reference)
+                    if package.get("active"):
+                        row["active"] = True
+        return list(inventory.values())

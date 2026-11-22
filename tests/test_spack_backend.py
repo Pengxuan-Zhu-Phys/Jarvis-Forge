@@ -1419,3 +1419,63 @@ def test_eigen_activation_exports_legacy_header_hints(managed):
     text = Path(result['activation']).read_text()
     assert '_JFORGE_APT_HAD_EIGEN3_INCLUDE_DIR' in text
     assert '_JFORGE_APT_HAD_EIGEN3_ROOT' in text
+
+
+@pytest.mark.parametrize('cache', ['never', 'auto'])
+def test_build_tool_reuse_is_applied_in_native_transactions_and_cache_fallback(managed, monkeypatch, cache):
+    from jarvis_forge import toolchains, unified_profiles
+    from jarvis_forge.storage import digest
+    home, calls = managed
+    named_layout(home)
+    monkeypatch.setattr(unified_profiles, 'record', lambda h: {'backend': 'spack', 'stage': str(home.root/'stage')} if h.root == home.root else None)
+    monkeypatch.setattr(unified_profiles, 'refresh_activation', lambda *a: None)
+    monkeypatch.setattr(unified_profiles, 'sync_definition', lambda *a: None)
+    monkeypatch.setattr('jarvis_forge.apt_profiles.validate_active', lambda *a, **k: None)
+    monkeypatch.setattr(toolchains, 'binding', lambda h: {'version':'13.3.0','prefix':'/compiler',
+                                                        'drivers':{'CC':'/compiler/bin/gcc','CXX':'/compiler/bin/g++','FC':'/compiler/bin/gfortran'},'tools':{}})
+    monkeypatch.setattr(toolchains, 'validate_plan', lambda *a: None)
+    (home.root/'tools/pkg/.spack-db').mkdir(parents=True)
+    source = home.root/'tools/pkg/fixture-lib-1.0';source.mkdir()
+    executable = source/'tool';executable.write_text('retained build tool')
+    run = b.run
+    selected = {'name':'fixture-lib','version':'1.0','prefix':str(source),'source_hash':'old-tool',
+                'target_hash':'hash-fixture-lib','spec':'fixture-lib@=1.0','parameters':{},
+                'checks':{str(executable):digest(executable)},'runtime_prefixes':[str(source)]}
+    labels=[]
+    def engine(home,args,op,label,**kwargs):
+        labels.append(label)
+        if label.startswith('build-tool-candidates'):
+            return json.dumps({'selected':[selected], 'rejected':[], 'unsafe_existing':[]})
+        if cache=='auto' and label=='install-cache':
+            write_json(op/'command-install-cache.json',{'status':'failed','exit_code':1})
+            raise ForgeError('fixture cache miss')
+        if cache == 'auto' and label.startswith('plan-build-tools-'):
+            assert args[-1] == 'omit-cached-build-deps'
+        value=run(home,args,op,label,**kwargs)
+        if args[0]=='python' and len(args)>2 and args[2] in {'snapshot','installation-plan','installed'}:
+            doc=json.loads(value)
+            rules=yaml.safe_load((kwargs['envdir']/'.jforge-config/packages.yaml').read_text())['packages']
+            borrowed=rules.get('fixture-lib',{}).get('buildable') is False
+            for row in doc['packages']:
+                if row['name']=='fixture-app':
+                    row['node']={'dependencies':[{'name':'fixture-lib','hash':'hash-fixture-lib',
+                                                 'parameters':{'deptypes':['build'],'virtuals':[]}}]}
+                if row['name']=='fixture-lib' and borrowed:
+                    row.update(external=True,installed=True,prefix=str(source),node={'parameters':{}})
+            return json.dumps(doc)
+        return value
+    monkeypatch.setattr(b,'run',engine)
+    result=b.transact(home,'install',['fixture-app'],cache=cache)
+    assert result['state_committed']
+    tool=next(p for p in result['packages'] if p['name']=='fixture-lib')
+    assert tool['external'] and tool['prefix']==str(source)
+    assert any(label.startswith('concretize-build-tools-') for label in labels)
+    assert read_json(home.root/'spack/build-tool-reuse.json')['selected']
+    assert executable.read_text()=='retained build tool'
+    # A later request starts without treating the old optional external as a
+    # default provider; its new graph must establish eligibility again.
+    op=home.root/'next-operation';op.mkdir()
+    candidate=b._candidate(home,op,['fixture-lib'],result['environment'])
+    assert not (candidate/'spack.lock').exists()
+    reuse=yaml.safe_load((candidate/'spack.yaml').read_text())['spack']['concretizer']['reuse']
+    assert all('/hash-fixture-lib' in source['exclude'] for source in reuse['from'])

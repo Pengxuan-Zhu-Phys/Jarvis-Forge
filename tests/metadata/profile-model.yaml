@@ -1729,3 +1729,48 @@ definitions:
   - Local CMake fixtures; no real scientific application build.
   review:
     status: draft
+- id: forge.profiles.profile-inventory-unifies-stores-without-changing-native-state
+  title: Profile-wide native package inventory
+  purpose: Expose tool and application packages without changing dependency resolution
+    or stores.
+  binding:
+    adapter: pytest
+    selector: tests/test_apt.py::test_profile_inventory_unifies_stores_without_changing_native_state
+  scenario:
+    inputs:
+      environment: Disposable profile records and local fake backend installations.
+    action: Read combined package inventory through the CLI.
+  criteria:
+  - id: inventory
+    expected: One physical prefix appears once; equal names at different prefixes
+      remain distinct; categories, filters, details and profile isolation work without
+      writes.
+    verification: automated
+  failure_meaning: Profile inventory hides packages, merges different builds or changes
+    installed state.
+  limitations:
+  - Does not certify a real HPC bootstrap or Homebrew installation.
+  review:
+    status: draft
+- id: forge.profiles.profile-inventory-merges-shared-tool-keg-references
+  title: Shared Homebrew tool inventory
+  purpose: Represent a shared keg referenced by base tools and application packages
+    as one installation.
+  binding:
+    adapter: pytest
+    selector: tests/test_homebrew_backend.py::test_profile_inventory_merges_shared_tool_keg_references
+  scenario:
+    inputs:
+      environment: Disposable profile records and local fake backend installations.
+    action: Read combined package inventory through the CLI.
+  criteria:
+  - id: inventory
+    expected: The row retains both sources and a base-tool category; querying performs
+      no Homebrew mutations.
+    verification: automated
+  failure_meaning: Profile inventory hides packages, merges different builds or changes
+    installed state.
+  limitations:
+  - Does not certify a real HPC bootstrap or Homebrew installation.
+  review:
+    status: draft

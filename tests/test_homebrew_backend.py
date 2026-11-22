@@ -383,3 +383,20 @@ def test_autoremove_collects_only_owned_unreferenced_older_keg(setup_brew):
     cli('apt','autoremove','--yes')
     assert not (prefix/'Cellar/gsl/1.0').exists() and (prefix/'Cellar/gsl/2.0').is_dir()
     assert (prefix/'opt/gsl').resolve()==prefix/'Cellar/gsl/2.0'
+
+
+def test_profile_inventory_merges_shared_tool_keg_references(setup_brew):
+    cli, prefix, home, writes = setup_brew
+    cli('apt', 'install', 'eigen')
+    tools = home.root / 'tools'
+    # Simulate a base formula referenced by both stores without installing a keg.
+    write_json(tools / 'homebrew.json', read_json(home.root / 'homebrew.json'))
+    write_json(tools / 'packages.json', read_json(home.root / 'packages.json'))
+    before = writes()
+    result = cli('apt', 'list', 'eigen')
+    row, = result['packages']
+    assert result['backend'] == 'homebrew'
+    assert row['category'] == 'base-tool' and row['sources'] == ['tools', 'apt']
+    assert row['prefix'] == str(prefix / 'Cellar/eigen/1.0')
+    assert len(row['references']) == 2
+    assert writes() == before

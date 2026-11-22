@@ -169,12 +169,25 @@ def check_tools(record):
 
 
 def cmake_runtime_paths(record, cache):
+    """Prepend compiler runtime paths without stringifying typed CMake lists."""
     directories = list(dict.fromkeys(str(Path(path).parent) for path in record.get("runtimes", {}).values()))
     if directories:
         for name in ("CMAKE_BUILD_RPATH", "CMAKE_INSTALL_RPATH"):
             value = cache.get(name, {}).get("value", "")
-            paths = [*directories, *filter(None, str(value).split(";"))]
-            cache[name] = {"type": "STRING", "value": ";".join(dict.fromkeys(paths))}
+            if isinstance(value, list) and all(isinstance(path, str) for path in value):
+                # Keep raw list elements: cmake.commands owns list escaping.
+                merged = list(dict.fromkeys([*directories, *filter(None, value)]))
+            elif isinstance(value, str):
+                # Scalar values are already CMake syntax. Preserve escaped
+                # semicolons and keep generator expressions opaque.
+                paths = [value] if "$<" in value else re.split(r"(?<!\\);", value)
+                encoded = [path.replace(";", r"\;") for path in directories]
+                prefix = ";".join(encoded)
+                merged = (value if "$<" in value and (value == prefix or value.startswith(prefix + ";"))
+                          else ";".join(dict.fromkeys([*encoded, *filter(None, paths)])))
+            else:
+                raise ForgeError(f"{name} must be a string or a list of strings.")
+            cache[name] = {"type": "STRING", "value": merged}
 
 
 def _inspect(record):

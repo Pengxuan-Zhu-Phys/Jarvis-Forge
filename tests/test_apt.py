@@ -60,3 +60,70 @@ def test_real_dry_run_requires_selected_profile(tmp_path,capsys):
     assert main(['--home',str(home),'--json','apt','install','gsl','--dry-run'])==2
     assert 'profile' in json.loads(capsys.readouterr().out)['error']['message']
     assert not home.exists()
+
+
+def test_profile_inventory_unifies_stores_without_changing_native_state(tmp_path, monkeypatch, capsys):
+    import io
+    from rich.console import Console
+    from jarvis_forge import spack_backend, toolchains
+    from jarvis_forge.presentation import package_rows
+    from jarvis_forge.storage import ForgeHome, read_json, write_json
+    from profile_fixtures import project_profile
+
+    base = ForgeHome(tmp_path / 'forge')
+    profile = project_profile(base, 'ubuntu24')
+    tools = profile.root / 'tools'
+    def package(root, name, version, hash, manual=False, external=False):
+        prefix = root / 'pkg' / f'{name}-{version}'
+        prefix.mkdir(parents=True, exist_ok=True)
+        return dict(name=name, version=version, hash=hash, prefix=str(prefix),
+                    root=manual, automatic=not manual, external=external, installed=True, active=True)
+    gcc = package(tools, 'gcc', '13.3.0', 'tool-gcc', manual=True)
+    cmake = package(tools, 'cmake', '3.28.6', 'tool-cmake', manual=True)
+    bootstrap_gmp = package(tools, 'gmp', '6.3.0', 'host-gmp')
+    old_runtime = package(tools, 'gcc-runtime', '11.5.0', 'host-runtime')
+    write_json(tools / 'packages.json', {'spack': {'packages': [gcc, cmake, bootstrap_gmp, old_runtime]}})
+    application_gmp = package(profile.root, 'gmp', '6.3.0', 'app-gmp')
+    new_runtime = package(profile.root, 'gcc-runtime', '13.3.0', 'app-runtime')
+    gsl = package(profile.root, 'gsl', '2.8', 'app-gsl', manual=True)
+    state = read_json(profile.root / 'packages.json')
+    state['spack']['packages'] = [{**gcc, 'hash': 'external-gcc', 'external': True, 'root': False},
+                                  application_gmp, new_runtime, gsl]
+    write_json(profile.root / 'packages.json', state)
+    project_profile(base, 'ubuntu22', select=False)
+    def snapshot():
+        return {str(p.relative_to(base.root)): p.read_bytes() for p in base.root.rglob('*') if p.is_file()}
+    before = snapshot()
+    monkeypatch.setattr(spack_backend, 'run', lambda *a, **k: pytest.fail('inventory must be offline'))
+    monkeypatch.setattr(toolchains, 'install_suite', lambda *a, **k: pytest.fail('inventory must not install tools'))
+    args = ['--home', str(base.root), '--json', 'apt', 'list']
+    assert main(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    rows = result['packages']
+    assert result['backend'] == 'spack' and len(rows) == 7
+    compiler, = [p for p in rows if p['name'] == 'gcc']
+    assert compiler['category'] == 'base-tool' and compiler['sources'] == ['tools', 'apt']
+    assert not compiler['external']
+    assert {r['hash'] for r in compiler['references']} == {'tool-gcc', 'external-gcc'}
+    gmp = [p for p in rows if p['name'] == 'gmp']
+    assert len(gmp) == 2 and len({p['prefix'] for p in gmp}) == 2
+    assert {p['category'] for p in gmp} == {'bootstrap-dependency', 'application'}
+    assert main([*args, 'gcc*']) == 0
+    assert len(json.loads(capsys.readouterr().out)['packages']) == 3
+    # Newly visible base tools also support their existing details/path commands.
+    assert main(['--home', str(base.root), 'apt', 'show', 'cmake', '--path']) == 0
+    assert capsys.readouterr().out.strip() == cmake['prefix']
+    assert main(['--home', str(base.root), '--json', 'apt', 'show', 'cmake']) == 0
+    assert json.loads(capsys.readouterr().out)['installed_instances'][0]['category'] == 'base-tool'
+    monkeypatch.setattr(spack_backend, 'catalog', lambda *a, **k: [{'name': 'available-only'}])
+    assert main([*args, '--available']) == 0
+    assert json.loads(capsys.readouterr().out)['packages'] == [{'name': 'available-only'}]
+    assert main(['--home', str(base.root), '--profile', 'ubuntu22', '--json', 'apt', 'list']) == 0
+    assert json.loads(capsys.readouterr().out)['packages'] == []
+    assert snapshot() == before
+    for width in (48, 160):
+        screen = io.StringIO()
+        package_rows(Console(file=screen, width=width), rows)
+        text = screen.getvalue()
+        assert all(label in text for label in ('base tool', 'bootstrap dep', 'application'))
+        assert text.count('gcc-runtime') == 2 and text.count('gmp') == 2
