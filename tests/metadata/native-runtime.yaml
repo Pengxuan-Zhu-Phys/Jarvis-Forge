@@ -554,3 +554,69 @@ definitions:
   - No network or native package installation.
   review:
     status: draft
+- id: forge.presentation.long-recipe-descriptions-keep-the-identity-table
+  title: Recipe tables with long descriptions
+  purpose: Keep recipe/revision/script summary columns when description text exceeds
+    the terminal width.
+  binding:
+    adapter: pytest
+    selector: tests/test_cli.py::test_long_recipe_descriptions_keep_the_identity_table
+  scenario:
+    inputs:
+      environment: Local text rendering at 40, 80 and 120 columns.
+    action: Render long descriptions, locations and Unicode errors.
+  criteria:
+  - id: readability
+    expected: Keep recipe/revision/script summary columns when description text exceeds
+      the terminal width.
+    verification: automated
+  failure_meaning: Optional details destroy the summary layout or copyable content
+    is hard-wrapped.
+  limitations:
+  - Does not change backend behavior or certify an HPC installation.
+  review:
+    status: draft
+- id: forge.presentation.long-app-locations-keep-summary-columns-and-copyable-paths
+  title: App summaries with NAS locations
+  purpose: Separate full installation prefixes from aligned app summary columns for
+    installed lists and operation results.
+  binding:
+    adapter: pytest
+    selector: tests/test_cli.py::test_long_app_locations_keep_summary_columns_and_copyable_paths
+  scenario:
+    inputs:
+      environment: Local text rendering at 40, 80 and 120 columns.
+    action: Render long descriptions, locations and Unicode errors.
+  criteria:
+  - id: readability
+    expected: Separate full installation prefixes from aligned app summary columns
+      for installed lists and operation results.
+    verification: automated
+  failure_meaning: Optional details destroy the summary layout or copyable content
+    is hard-wrapped.
+  limitations:
+  - Does not change backend behavior or certify an HPC installation.
+  review:
+    status: draft
+- id: forge.presentation.unicode-error-paths-and-profile-hints-remain-copyable
+  title: Unicode CLI paths and hints
+  purpose: Measure panel content in terminal cells and preserve complete error paths
+    and profile hints at all tested widths.
+  binding:
+    adapter: pytest
+    selector: tests/test_cli.py::test_unicode_error_paths_and_profile_hints_remain_copyable
+  scenario:
+    inputs:
+      environment: Local text rendering at 40, 80 and 120 columns.
+    action: Render long descriptions, locations and Unicode errors.
+  criteria:
+  - id: readability
+    expected: Measure panel content in terminal cells and preserve complete error
+      paths and profile hints at all tested widths.
+    verification: automated
+  failure_meaning: Optional details destroy the summary layout or copyable content
+    is hard-wrapped.
+  limitations:
+  - Does not change backend behavior or certify an HPC installation.
+  review:
+    status: draft

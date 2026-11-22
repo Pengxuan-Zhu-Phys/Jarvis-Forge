@@ -152,13 +152,16 @@ def test_public_list_json_and_show_keep_full_metadata(tmp_path, monkeypatch, cap
     from profile_fixtures import project_profile
     from jarvis_forge.storage import ForgeHome
     scope=project_profile(ForgeHome(tmp_path/"absent"))
-    monkeypatch.setattr(ForgeHome,"packages",lambda home:[package])
+    monkeypatch.setattr(ForgeHome,"packages",lambda home:[package] if home.root==scope.root else [])
     monkeypatch.setattr(spack_backend, "read_details", lambda home, name: dict(name=name))
     common = ["--home", str(tmp_path / "absent"), "apt"]
     assert main([*common, "list"]) == 0
     assert "Prefix:" not in capsys.readouterr().out
     assert main([*common, "list", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["packages"] == [package]
+    listed, = json.loads(capsys.readouterr().out)["packages"]
+    assert {key:listed[key] for key in package} == package
+    assert listed["category"] == "application" and listed["sources"] == ["apt"]
+    assert "category" not in package
     assert main([*common, "show", "eigen"]) == 0
     details = capsys.readouterr().out
     assert package["prefix"] in details

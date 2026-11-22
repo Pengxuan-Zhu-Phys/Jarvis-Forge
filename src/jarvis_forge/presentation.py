@@ -165,11 +165,11 @@ def package_rows(console, packages, *, planned=False):
         # Keep the aligned identity columns and move metadata below them.
         # soft_wrap preserves full names/versions even on very small terminals.
         identity_widths = _column_widths(basic_headers[:2], items)
-        line(console, "  " + "Package".ljust(identity_widths[0]) + "  Version", style="bold")
+        line(console, "  " + "Package".ljust(identity_widths[0]) + " Version", style="bold")
         for name, version, kind, state in items:
             text = Text("  ")
             text.append(name, style="cyan")
-            text.append(" " * (identity_widths[0] - Text(name).cell_len + 2) + version)
+            text.append(" " * (identity_widths[0] - Text(name).cell_len + 1) + version)
             console.print(text, soft_wrap=True)
             line(console, "    " + " · ".join(v for v in (kind, state) if v != "—"), style="dim")
 
@@ -500,15 +500,29 @@ def _build_catalog_rows(console, entries, *, libraries=False):
     if any(descriptions):
         headers.append("Description")
         rows = [row + [description or "—"] for row, description in zip(rows, descriptions)]
-    if not _columns(console, headers, rows):
-        for row, description in zip(rows, descriptions):
-            parts = row[:2]
-            if not libraries:
-                count = row[2]
-                parts.append(count + (" script" if count == "1" else " scripts"))
-            line(console, "  " + " · ".join(parts))
-            if description:
-                console.print(Text("    " + description))
+    if _columns(console, headers, rows):
+        return
+    # Descriptions are optional details, not a reason to discard the identity
+    # table for every recipe in a narrow terminal.
+    basic_headers = headers[:-1] if any(descriptions) else headers
+    basic_rows = [row[:len(basic_headers)] for row in rows]
+    if _columns(console, basic_headers, basic_rows):
+        if any(descriptions):
+            line(console)
+            line(console, "Descriptions", style="bold")
+            for row, description in zip(rows, descriptions):
+                if description:
+                    line(console, "  " + row[0], style="cyan")
+                    line(console, "    " + description)
+        return
+    for row, description in zip(rows, descriptions):
+        parts = row[:2]
+        if not libraries:
+            count = row[2]
+            parts.append(count + (" script" if count == "1" else " scripts"))
+        line(console, "  " + " · ".join(parts))
+        if description:
+            line(console, "    " + description)
 
 
 def build_catalog(console, command, values):
@@ -561,6 +575,23 @@ def build_plan(console, values, *, verbose=False):
     line(console, values["note"], style="dim")
 
 
+def _app_table(console, headers, rows):
+    if _columns(console, headers, rows):
+        return
+    # Keep long NAS prefixes out of the summary columns. Paths remain complete
+    # on their own logical lines for copying and natural terminal wrapping.
+    identities = [row[:-1] for row in rows]
+    if not _columns(console, headers[:-1], identities):
+        for row in identities:
+            line(console, f"  {row[0]} {row[1]}", style="cyan")
+            line(console, "    " + " · ".join(f"{key}: {value}" for key, value in zip(headers[2:-1], row[2:])))
+    line(console)
+    line(console, "Locations", style="bold")
+    for row in rows:
+        line(console, f"  {row[0]} {row[1]}", style="cyan")
+        line(console, "    " + str(row[-1]))
+
+
 def build_artifacts(console, artifacts, *, installed=False):
     if not artifacts:
         line(console, "No apps installed in this profile." if installed else "No recorded build artifacts.")
@@ -570,8 +601,9 @@ def build_artifacts(console, artifacts, *, installed=False):
     title = "Installed apps" if installed else "Build artifacts"
     line(console, f"{title} ({len(artifacts)})", style="bold")
     if installed:
-        _table(console,[('App','Version','State','Status','Location'), *[(item.get('name',app_name(item['build_id'])),
-                str(item['version']),'ON' if item.get('enabled') else 'OFF',item['status'],item['prefix']) for item in artifacts]])
+        _app_table(console,['App','Version','State','Status','Location'],
+                   [[item.get('name') or app_name(item['build_id']), str(item['version']),
+                     'ON' if item.get('enabled') else 'OFF', item['status'], item['prefix']] for item in artifacts])
         line(console, "Inspect an app with jforge build show <app>.", style="dim")
         return
     for item in artifacts:
@@ -1017,8 +1049,10 @@ def app_operation(console,command,values):
     line(console,f"{command.capitalize()} · {status}",style='bold')
     rows=values.get('apps',[])
     if rows:
-        _table(console,[('App','Version','State','Location'), *[(row.get('name',row.get('app','')),str(row.get('version','')),
-               'ON' if row.get('enabled') else 'OFF' if 'enabled' in row else 'planned',str(row.get('prefix',''))) for row in rows]])
+        _app_table(console,['App','Version','State','Location'],
+                   [[row.get('name',row.get('app','')),str(row.get('version','')),
+                     'ON' if row.get('enabled') else 'OFF' if 'enabled' in row else 'planned',
+                     str(row.get('prefix',''))] for row in rows])
     elif status=='passed':line(console,'  No app changes.')
     if values.get('error'):
         error=values['error'];line(console,error.get('message','') if isinstance(error,dict) else str(error),style='red')
@@ -1209,8 +1243,8 @@ def render(console, command, values):
 
 def error(console, prog, message, hint=None):
     text = message + ("\nTry: " + hint if hint else "")
-    width = max(20, console.width - 8)
-    if all(len(part) <= width for part in text.splitlines()):
+    width = max(0, console.width - 8)
+    if all(Text(part).cell_len <= width for part in text.splitlines()):
         console.print(Panel(Text(text), title=Text(prog), border_style="red"))
         return
     console.print(Panel(Text("Command failed."), title=Text(prog), border_style="red"))

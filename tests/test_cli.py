@@ -209,3 +209,61 @@ def test_corrupt_package_manifest_returns_error_not_empty_list(tmp_path, capsys)
     assert main(["apt", "instances", "--archived", "--home", str(home), "--json"]) == 2
     assert not json.loads(capsys.readouterr().out)["ok"]
 
+
+
+@pytest.mark.parametrize('width',[40,80,120])
+def test_long_recipe_descriptions_keep_the_identity_table(width):
+    import io
+    from rich.console import Console
+    from jarvis_forge.presentation import build_catalog
+    description='Generate fixed event samples and compare the analysis results. '*4
+    entries=[{'id':'root','revision':'2026.11.09.2','files':[{'path':'check.py'}],'description':description},
+             {'id':'cbs','revision':'2026.11.09.2','files':[],'description':'Collider analysis'}]
+    screen=io.StringIO()
+    build_catalog(Console(file=screen,width=width),'build list',{'builds':entries,'libraries':[]})
+    text=screen.getvalue()
+    assert any(line.split()==['Recipe','Revision','Scripts'] for line in text.splitlines())
+    assert 'Descriptions' in text and description.strip() in text
+    assert 'root' in text and 'cbs' in text and '2026.11.09.2' in text
+    assert 'root · 2026.11.09.2' not in text
+
+
+@pytest.mark.parametrize('width',[40,80,120])
+def test_long_app_locations_keep_summary_columns_and_copyable_paths(width):
+    import io
+    from rich.console import Console
+    from jarvis_forge.presentation import app_operation, build_artifacts
+    first='/shared NAS/users/example/profiles/ubuntu24/apps/'+'long-workspace/'*12+'root-6.40.04'
+    second='/shared NAS/users/example/profiles/ubuntu24/apps/gambit-2.6.0'
+    rows=[{'name':'root','version':'6.40.04','enabled':True,'status':'ready','prefix':first},
+          {'name':'gambit','version':'2.6.0','enabled':False,'status':'ready','prefix':second}]
+    for operation in (False,True):
+        screen=io.StringIO();console=Console(file=screen,width=width)
+        if operation:
+            app_operation(console,'build install',{'status':'passed','apps':rows})
+        else:
+            build_artifacts(console,rows,installed=True)
+        text=screen.getvalue()
+        headers=['App','Version','State']+([] if operation else ['Status'])
+        assert any(line.split()==headers for line in text.splitlines())
+        assert 'Locations' in text and text.count(first)==text.count(second)==1
+        assert 'ON' in text and 'OFF' in text
+        assert all(len(line)<=width for line in text.splitlines() if line.lstrip().startswith(('App ', 'root ', 'gambit ')))
+
+
+@pytest.mark.parametrize('width',[40,80,120])
+def test_unicode_error_paths_and_profile_hints_remain_copyable(width):
+    import io
+    from rich.console import Console
+    from jarvis_forge.presentation import error, profile_check
+    path='/目录'*((width-20)//3)
+    message='Missing: '+path
+    screen=io.StringIO();console=Console(file=screen,width=width)
+    error(console,'jforge',message,'jforge -h')
+    text=screen.getvalue()
+    assert message in text and text.count(path)==1 and text.count('jforge -h')==1
+    screen.seek(0);screen.truncate(0)
+    reason='Select the external Python at '+path+'/bin/python3'
+    profile_check(console,{'host':{'system':'almalinux','version':'9.9','machine':'x86_64'},
+                           'profiles':[{'name':'ubuntu24','status':'blocked','reason':reason}]})
+    assert reason in screen.getvalue()
