@@ -229,7 +229,7 @@ def selection_path(base):
 def reject_old(base):
     base = base_home(base)
     config = base.root / "config.json"
-    if config.is_file() and read_json(config).get("layout_version") != 3:
+    if config.is_file() and read_json(config).get("layout_version") != 4:
         raise ForgeError(
             f"Unsupported Forge layout in {base.root}.",
             hint="Create a fresh Forge home: jforge init --home /path/to/new-forge",
@@ -280,22 +280,16 @@ def record(profile):
     value = read_json(file)
     if value.get("kind") != "profile":
         return None
-    if value.get("schema_version") != 3 or value.get("id") != profile.root.name:
+    if value.get("schema_version") != 3 or value.get("id") != profile.root.name or value.get("model") != "builtin-profile/1":
         raise ForgeError(f"Unsupported profile metadata: {file}")
     return value
 
 
-def platform_record(base, name):
-    file = base_home(base).root / "platforms" / identifier(name) / "metadata.json"
-    if not file.is_file():
-        raise ForgeError(f"No platform named {name}.", hint="jforge profile check")
+def tools_record(profile):
+    file = profile.root / "tools/metadata.json"
     value = read_json(file)
-    if (
-        value.get("schema_version") != 3
-        or value.get("kind") != "platform"
-        or value.get("id") != name
-    ):
-        raise ForgeError(f"Invalid platform metadata: {file}")
+    if value.get("schema_version") != 3 or value.get("kind") != "tool-suite" or value.get("id") != profile.root.name:
+        raise ForgeError(f"Invalid profile tool-suite metadata: {file}")
     return value
 
 
@@ -307,7 +301,7 @@ def compatible(data, current=None):
         or saved["machine"] != current["machine"]
     ):
         raise ForgeError(
-            f"Platform {data['id']} requires {saved['platform']}/{saved['machine']}."
+            f"Profile {data['id']} requires {saved['platform']}/{saved['machine']}."
         )
     if current["platform"] == "linux":
 
@@ -319,17 +313,17 @@ def compatible(data, current=None):
 
         if version(current["libc"]) < version(saved["libc"]):
             raise ForgeError(
-                f"Platform {data['id']} requires {saved['libc']}; current host has {current['libc']}.",
-                hint=f"Create a different platform: jforge profile create NAME --platform {data['id']}-{current['system']} --preset {data['preset']}",
+                f"Profile {data['id']} requires {saved['libc']}; current host has {current['libc']}.",
+                hint="Select a compatible profile or a separate Forge home on this host.",
             )
         _target(current, data["target"])
 
 
 def verify(profile, data):
-    platform_data = platform_record(base_home(profile), data["platform"])
+    platform_data = tools_record(profile)
     compatible(platform_data)
     if platform_data.get("status") != "ready" or data.get("status") != "ready":
-        raise ForgeError(f"Profile {data['id']} or its platform is not ready.")
+        raise ForgeError(f"Profile {data['id']} is not ready.")
     if data["backend"] == "spack":
         from .toolchains import _verify
 
@@ -337,7 +331,7 @@ def verify(profile, data):
     else:
         for path, checksum in platform_data["fingerprints"].items():
             if not Path(path).is_file() or digest(Path(path)) != checksum:
-                raise ForgeError(f"Platform tool changed: {path}")
+                raise ForgeError(f"Profile tool changed: {path}")
     if _python(data["python"]["executable"]) != data["python"]:
         raise ForgeError(f"External Python changed for profile {data['id']}.")
     from .apt_profiles import require_healthy_profile
@@ -368,7 +362,7 @@ def activation_checks(data):
         "  return 1",
         "fi",
     ]
-    platform_data = data.get("platform_metadata", data)
+    platform_data = data.get("tools", data)
     script = (
         "import os,platform,sys; h=" + repr(platform_data["host"]) + "; "
         'assert sys.platform==h["platform"] and platform.machine()==h["machine"], "Incompatible platform architecture"; '
@@ -404,23 +398,16 @@ def _scoped_home(base, parent, name):
 
 def _initialize_scope(base, scope):
     scope.initialize()
+    from .scope_locks import initialize
+    initialize(scope)
     (scope.root / "locks/apps.lock").touch(exist_ok=True)
     config = read_json(scope.root / "config.json")
     config.update(
         forge_home=str(base_home(base).root),
         apt_base_home=str(base_home(base).root),
-        layout_version=3,
+        layout_version=4,
     )
     write_json(scope.root / "config.json", config)
-
-
-def _namespace(base, name, kind):
-    base = base_home(base)
-    other = "profiles" if kind == "platform" else "platforms"
-    if (base.root / other / name).exists():
-        raise ForgeError(
-            f"{name} is already a {other[:-1]} name; platform and profile names share one namespace."
-        )
 
 
 def default_stage(scope):
@@ -456,8 +443,14 @@ def default_stage(scope):
     from .package_operations import _inside
 
     with directory_lock(root, ".stages.lock"):
+        from .paths import record_path
+        group = record_path(root, "stage", {"home": str(base_home(scope).root)}, create=True)
+        owner_scope = scope.root.parent if scope.root.name == "tools" and scope.root.parent.parent.name == "profiles" else scope.root
+        relative = Path("profiles") / owner_scope.name
+        if scope.root != owner_scope:
+            relative /= "tools"
         target = _inside(
-            ForgeHome(root), root / scope.root.parent.name / scope.root.name
+            ForgeHome(root), group / relative
         )
         if target.is_symlink():
             raise ForgeError(f"Node stage must not be a symbolic link: {target}")
@@ -477,55 +470,48 @@ def default_stage(scope):
     return target
 
 
-def prepare_platform(
-    base,
-    name,
-    *,
-    preset=None,
-    target=None,
-    stage=None,
-    jobs=None,
-    timeout=14400,
-    cache=None,
-    progress=None,
-    confirm=None,
-):
+def _prepare_tools(base, profile, *, target=None, stage=None, jobs=None, timeout=14400, cache=None, progress=None, confirm=None):
     from .paths import directory_lock
+    from . import scope_cleanup
+    from .scope_locks import lease
 
-    base = base_home(base)
-    name = identifier(name)
-    _namespace(base, name, "platform")
-    path = _scoped_home(base, "platforms", name)
-    with directory_lock(base.root / "platforms", ".platforms.lock"):
+    name = profile.root.name
+    preset = name
+    path = ForgeHome(profile.root / "tools")
+    with directory_lock(profile.root, ".tools.lock"):
         marker = path.root / "metadata.json"
+        previous = None
         if marker.is_file():
-            data = platform_record(base, name)
+            data = tools_record(profile)
             compatible(data)
-            if data.get("status") != "ready":
-                raise ForgeError(
-                    f"Platform {name} is incomplete; remove it explicitly before rebuilding."
-                )
             if target is not None and data["target"] != target:
                 raise ForgeError(
-                    f"Platform {name} uses target {data['target']}, not {target}."
+                    f"Profile {name} uses target {data['target']}, not {target}."
                 )
-            if data["backend"] == "spack":
-                from .toolchains import _verify
-
-                _verify(data["toolchain"])
             if preset and data["preset"] != preset:
-                raise ForgeError(
-                    f"Platform {name} uses preset {data['preset']}, not {preset}."
-                )
-            return data
-        if path.root.exists():
-            raise ForgeError(
-                f"Unregistered platform directory is preserved: {path.root}"
-            )
+                raise ForgeError(f"Profile {name} uses preset {data['preset']}, not {preset}.")
+            if data.get("status") == "ready":
+                if data["backend"] == "spack":
+                    from .toolchains import _verify
+                    _verify(data["toolchain"])
+                return data
+            preset = preset or data["preset"]
+            target = target or data["target"]
+            if stage is None and data.get("stage_root"):
+                stage = data["stage_root"]
+            if progress:
+                progress(f"Resume tools for profile {name}; reuse completed packages")
+            previous = data
+        elif path.root.exists() and not scope_cleanup.owned(base, path):
+            if scope_cleanup.lock_residue(path):
+                with lease(path, exclusive=True):
+                    scope_cleanup.delete(base, path)
+            else:
+                raise ForgeError(f"Unregistered tool directory is preserved: {path.root}")
         preset = preset or name
         if preset not in presets():
             raise ForgeError(
-                f"Unknown platform preset: {preset}.", hint="jforge profile check"
+                f"Unknown built-in profile: {preset}.", hint="jforge profile check"
             )
         definition = presets()[preset]
         target, python = _prerequisites(
@@ -538,7 +524,7 @@ def prepare_platform(
         _initialize_scope(base, path)
         data = {
             "schema_version": 3,
-            "kind": "platform",
+            "kind": "tool-suite",
             "id": name,
             "name": name,
             "preset": preset,
@@ -546,19 +532,20 @@ def prepare_platform(
             "backend": definition["backend"],
             "host": host(),
             "target": target,
-            "created_at": now(),
+            "created_at": previous.get("created_at", now()) if previous else now(),
+            "attempts": (previous.get("attempts", 1) + 1) if previous else 1,
             "status": "building",
             "bootstrap_python": python,
             "stage_mode": "explicit" if stage else "node",
             "stage_root": str(stage) if stage else None,
-            "stage": str(stage / name if stage else default_stage(path)),
+            "stage": str(stage / name / "tools" if stage else default_stage(path)),
         }
         write_json(marker, data)
         try:
             if data["backend"] == "spack":
-                from .toolchains import install_platform
+                from .toolchains import install_suite
 
-                data["toolchain"] = install_platform(
+                data["toolchain"] = install_suite(
                     path,
                     definition["versions"],
                     target=target,
@@ -603,121 +590,79 @@ def prepare_platform(
             raise
 
 
-def create(
-    base,
-    name,
-    *,
-    platform=None,
-    preset=None,
-    stage=None,
-    target=None,
-    jobs=None,
-    timeout=14400,
-    cache=None,
-    progress=None,
-    confirm=None,
-):
+def create(base, name, *, stage=None, target=None, jobs=None, timeout=14400, cache=None, progress=None, confirm=None):
     from .paths import directory_lock
-    from . import spack_backend, homebrew_backend
+    from . import spack_backend, homebrew_backend, scope_cleanup
+    from .scope_locks import lease
     import yaml
+    from contextlib import ExitStack
 
     base = base_home(base)
     reject_old(base)
-    name = identifier(name)
-    with directory_lock(base.root / "profiles", ".profiles.lock"):
-        _namespace(base, name, "profile")
-        profile = _scoped_home(base, "profiles", name)
-        if profile.root.exists():
-            raise ForgeError(f"Profile already exists: {name}")
-        if platform is None:
-            current = selection(base)
-            if current:
-                platform = record(_scoped_home(base, "profiles", current["id"]))[
-                    "platform"
-                ]
-            elif host()["platform"] == "darwin":
-                platform = "macos"
-            elif host()["system"] == "ubuntu" and host()["version"] in {
-                "22.04",
-                "24.04",
-                "26.04",
-            }:
-                platform = "ubuntu" + host()["version"][:2]
-            else:
-                raise ForgeError(
-                    "Choose a platform explicitly on this host.",
-                    hint="jforge profile create NAME --platform ubuntu24",
-                )
-        if platform == name:
-            raise ForgeError("Platform and profile names must be different.")
-        platform_data = prepare_platform(
-            base,
-            platform,
-            preset=preset,
-            stage=stage,
-            target=target,
-            jobs=jobs,
-            timeout=timeout,
-            cache=cache,
-            progress=progress,
-            confirm=confirm,
-        )
-        python = _python()
-        if any(
-            Path(python[key]).resolve().is_relative_to(base.root)
-            for key in ("prefix", "base_prefix")
-        ):
-            raise ForgeError(
-                "Select external Python with pyenv before creating a profile."
-            )
-        _initialize_scope(base, profile)
-        data = {
-            "schema_version": 3,
-            "kind": "profile",
-            "id": name,
-            "name": name,
-            "platform": platform,
-            "preset": platform_data["preset"],
-            "backend": platform_data["backend"],
-            "host": host(),
-            "target": platform_data["target"],
-            "python": python,
-            "toolchain": platform_data["toolchain"],
-            "platform_metadata": platform_data,
-            "created_at": now(),
-            "status": "creating",
-            "stage": str(
-                Path(stage).expanduser().resolve() / name
-                if stage
-                else default_stage(profile)
-            ),
-            "stage_mode": "explicit" if stage else "node",
-            "stage_root": str(Path(stage).expanduser().resolve()) if stage else None,
-            "apps": [],
-        }
-        write_json(profile.root / "metadata.json", data)
+    if name not in presets():
+        raise ForgeError(f"Unknown built-in profile: {name}.", hint="Choose ubuntu22, ubuntu24, ubuntu26 or macos.")
+    definition = presets()[name]
+    target, python = _prerequisites(base, definition, host(), target, source=cache != "only")
+    with ExitStack() as lifetime:
+        with directory_lock(base.root / "profiles", ".profiles.lock"):
+            profile = _scoped_home(base, "profiles", name)
+            if scope_cleanup.registered_removal(base, profile):
+                if profile.root.exists():
+                    with lease(profile, exclusive=True):
+                        scope_cleanup.delete(base, profile)
+                else:
+                    scope_cleanup.receipt(base, profile).unlink()
+            previous = record(profile)
+            if previous and previous.get("status") == "ready":
+                verify(profile, previous)
+                validate_python(previous, os.environ)
+                if progress:
+                    progress(f"Profile {name} is already ready")
+                return {**previous, "activation": str(profile.root / "activate.sh")}
+            if profile.root.exists() and not previous and not scope_cleanup.owned(base, profile):
+                if scope_cleanup.lock_residue(profile):
+                    with lease(profile, exclusive=True):
+                        scope_cleanup.delete(base, profile)
+                else:
+                    raise ForgeError(f"Unregistered profile is preserved: {profile.root}")
+            if previous:
+                compatible(previous)
+                if previous.get("target") != target or previous.get("python") != python:
+                    raise ForgeError("The interrupted profile uses different CPU/Python inputs; use its original environment.")
+                if stage is None and previous.get("stage_root"):
+                    stage = previous["stage_root"]
+                if progress:
+                    progress(f"Resume profile {name}; reuse completed packages")
+            if stage is not None:
+                stage = Path(stage).expanduser().resolve()
+                if not stage.is_dir() or not os.access(stage, os.W_OK | os.X_OK):
+                    raise ForgeError(f"Build stage is not writable: {stage}")
+            profile.root.mkdir(parents=True, exist_ok=True)
+            lifetime.enter_context(lease(profile, exclusive=True))
+            _initialize_scope(base, profile)
+            data = {"schema_version": 3, "kind": "profile", "model": "builtin-profile/1",
+                    "id": name, "name": name, "preset": name, "revision": definition["revision"],
+                    "backend": definition["backend"], "host": host(), "target": target,
+                    "python": python, "created_at": previous.get("created_at", now()) if previous else now(),
+                    "attempts": previous.get("attempts", 1) + 1 if previous else 1,
+                    "status": "creating", "stage_mode": "explicit" if stage else "node",
+                    "stage_root": str(stage) if stage else None,
+                    "stage": str(stage / name if stage else default_stage(profile)), "apps": []}
+            write_json(profile.root / "metadata.json", data)
         try:
+            tools = _prepare_tools(base, profile, target=target, stage=stage, jobs=jobs, timeout=timeout,
+                                   cache=cache, progress=progress, confirm=confirm)
+            data.update(tools=tools, toolchain=tools["toolchain"])
+            write_json(profile.root / "metadata.json", data)
             if data["backend"] == "spack":
                 spack_backend.bootstrap(profile, progress=progress)
             else:
                 homebrew_backend.initialize(profile, base, homebrew_backend.discover())
             data["status"] = "ready"
             write_json(profile.root / "metadata.json", data)
-            write_text(
-                profile.root / "profile.yaml",
-                yaml.safe_dump(
-                    {
-                        "schema_version": 3,
-                        "name": name,
-                        "platform": platform,
-                        "preset": data["preset"],
-                        "python": python["version"],
-                        "packages": [],
-                        "apps": [],
-                    },
-                    sort_keys=False,
-                ),
-            )
+            write_text(profile.root / "profile.yaml", yaml.safe_dump({
+                "schema_version": 3, "name": name, "preset": name,
+                "python": python["version"], "packages": [], "apps": []}, sort_keys=False))
             refresh_activation(profile)
             return {**data, "activation": str(profile.root / "activate.sh")}
         except BaseException:
@@ -733,7 +678,7 @@ def refresh_activation(profile):
     data = record(profile)
     if not data:
         return
-    platform_data = platform_record(base_home(profile), data["platform"])
+    platform_data = tools_record(profile)
     scripts = [environment_path(profile), platform_data["activation"]]
     # External apps deliberately stay out of the profile activation.
     for app in data.get("apps", []):
@@ -748,7 +693,7 @@ def refresh_activation(profile):
 
 def build_environment(profile, data, environment):
     validate_python(data, environment)
-    compatible(platform_record(base_home(profile), data["platform"]))
+    compatible(data)
     from .toolchains import environment as tool_environment
 
     return {
@@ -766,24 +711,32 @@ def _instances(base, current=None):
 
 def catalog(base):
     base = base_home(base)
-    return {
-        "presets": [{"name": name, **value} for name, value in presets().items()],
-        "platforms": [
-            read_json(file)
-            for file in sorted((base.root / "platforms").glob("*/metadata.json"))
-        ],
-        "instances": [data for _, data in _instances(base)],
-        "default": (selection(base) or {}).get("id"),
-    }
+    selected = (selection(base) or {}).get("id")
+    rows = []
+    for name, definition in presets().items():
+        data = record(_scoped_home(base, "profiles", name))
+        rows.append({"id": name, "name": name, "backend": definition["backend"],
+                     "status": data["status"] if data else "not installed", "selected": name == selected})
+    return {"instances": rows, "default": selected}
 
 
 def check(base, name=None):
     choices = presets()
     if name and name not in choices:
-        raise ForgeError(f"Unknown platform preset: {name}")
+        raise ForgeError(f"Unknown built-in profile: {name}")
     rows = []
     for key, preset in choices.items():
         if name and name != key:
+            continue
+        installed = record(_scoped_home(base, "profiles", key))
+        if installed and installed.get("status") == "ready":
+            try:
+                verify(_scoped_home(base, "profiles", key), installed)
+                validate_python(installed, os.environ)
+            except ForgeError as exc:
+                rows.append({"name": key, "backend": preset["backend"], "status": "blocked", "reason": str(exc)})
+            else:
+                rows.append({"name": key, "backend": preset["backend"], "status": "ready", "reason": None})
             continue
         try:
             _prerequisites(base, preset, host())
@@ -855,7 +808,7 @@ def set_default(base, name):
 def build(base, name, **kwargs):
     raise ForgeError(
         "Profile build was replaced by profile create.",
-        hint=f"jforge profile create NAME --platform {name}",
+        hint=f"jforge profile create {name}",
     )
 
 
@@ -890,34 +843,26 @@ def remove(base, name, *, dry_run=False, confirm=None):
     name = identifier(name)
 
     def inspect():
+        from . import scope_cleanup
         scope = _scoped_home(base, "profiles", name)
         if scope.root.exists():
             if not record(scope):
-                raise ForgeError(f"Unregistered profile is preserved: {scope.root}")
+                from . import scope_cleanup
+                if not (scope_cleanup.owned(base, scope) or scope_cleanup.lock_residue(scope)
+                        or scope_cleanup.registered_removal(base, scope)):
+                    raise ForgeError(f"Unregistered profile is preserved: {scope.root}")
             return scope
-        scope = _scoped_home(base, "platforms", name)
-        if not scope.root.exists():
-            raise ForgeError(f"No platform or profile named {name}.")
-        platform_record(base, name)
-        users = [row["id"] for _, row in _instances(base) if row["platform"] == name]
-        if users:
-            raise ForgeError("Platform is used by profiles: " + ", ".join(users))
-        return scope
+        if scope_cleanup.registered_removal(base, scope):
+            return scope
+        raise ForgeError(f"No profile named {name}.")
 
     if dry_run:
         target = inspect()
     else:
-        with (
-            directory_lock(base.root / "profiles", ".profiles.lock"),
-            directory_lock(base.root / "platforms", ".platforms.lock"),
-        ):
+        with directory_lock(base.root / "profiles", ".profiles.lock"):
             target = inspect()
-            if confirm is None:
-                raise ForgeError(
-                    "Removal requires confirmation.",
-                    hint="jforge profile remove NAME --yes",
-                )
-            confirm()
+            if confirm:
+                confirm()
             file = selection_path(base)
             index = read_json(file) if file.is_file() else None
             if index is not None:
@@ -928,8 +873,16 @@ def remove(base, name, *, dry_run=False, confirm=None):
                 index["hosts"] = {
                     key: row for key, row in index["hosts"].items() if row["id"] != name
                 }
-            with app_locked(target), locked(target):
-                shutil.rmtree(target.root)
-                if index is not None:
-                    write_json(file, index)
+            from .scope_locks import lease
+            from .scope_cleanup import delete
+            if target.root.exists():
+                with lease(target, exclusive=True):
+                    with app_locked(target), locked(target):
+                        pass
+                    delete(base, target)
+            else:
+                from .scope_cleanup import receipt
+                receipt(base, target).unlink(missing_ok=True)
+            if index is not None:
+                write_json(file, index)
     return {"name": name, "path": str(target.root), "dry_run": dry_run}

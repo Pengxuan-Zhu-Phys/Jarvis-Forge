@@ -2,7 +2,7 @@
 
 Forge prepares native packages and source-built scientific applications in isolated project profiles. Python installation and version selection belong to pyenv.
 
-The development documentation lives in [Jarvis-Books](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/tree/main/Docs/Jarvis-Forge): [CLI](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/CLI_DESIGN.md), [platforms and profiles](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/PROFILE_DESIGN.md), [directory rules](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/PATH_DESIGN.md), and [remaining work](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/PROFILE_LEDGER.md).
+The development documentation lives in [Jarvis-Books](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/tree/main/Docs/Jarvis-Forge): [CLI](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/CLI_DESIGN.md), [built-in profiles](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/PROFILE_DESIGN.md), [directory rules](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/PATH_DESIGN.md), and [remaining work](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/PROFILE_LEDGER.md).
 
 ## Install and select a profile
 
@@ -11,14 +11,16 @@ Select an existing pyenv Python first, then install the client into that interpr
 ```bash
 python3 -m pip install --upgrade Jarvis-Forge
 jforge --home /shared/path/forge init
-jforge profile check
-jforge profile create science --platform ubuntu24 --yes
-jforge profile use science
+jforge profile check ubuntu24
+jforge profile create ubuntu24
+jforge profile use ubuntu24
 ```
 
-The Ubuntu presets are `ubuntu22`, `ubuntu24` and `ubuntu26`. A platform supplies GCC, G++, GFortran and build tools; multiple profiles share it. Building a new Linux platform can take a long time. `macos` uses Apple Clang and audited existing Homebrew formulae, without sudo. Its first install can create a default profile automatically. Forge refuses Homebrew dependencies that require Homebrew Python.
+The built-in profiles are `ubuntu22`, `ubuntu24`, `ubuntu26` and `macos`. Each owns its compiler tool suite, packages and applications. Linux compiler builds can take a long time; repeating `create NAME` resumes an interrupted setup. macOS uses Apple Clang and audited existing Homebrew formulae, without sudo or Homebrew Python.
 
-The standalone `tools/jforge-pyenv-setup.sh` prepares pyenv and installs Forge from PyPI into its base interpreter. Forge itself never creates a Python environment. Select Python before creating a profile; changing the registered interpreter requires another profile.
+The five commands are `profile check NAME`, `create NAME`, `use NAME`, `show [NAME]` and `remove NAME`. No platform selection or custom profile names are required. Native operations display their plan and run directly; use `--dry-run` to preview changes.
+
+The standalone `tools/jforge-pyenv-setup.sh` prepares pyenv and installs Forge from PyPI into its base interpreter. Forge itself never creates a Python environment. Select Python before creating a profile; use a separate Forge home when a preset needs another Python identity.
 
 ## Packages and applications
 
@@ -53,25 +55,18 @@ Reinstalling an intact installed version enables it without rebuilding. Changing
 
 `apt install --dry-run` performs native dependency resolution and saves a history record. It changes no installed software or profile selection. `apt install --from 0001 --yes` replays that exact lock. Preview operations may create planning evidence, download verified recipe assets and write logs. Homebrew previews use native dependency and dry-run commands.
 
-```bash
-jforge profile export science -o science.yaml
-jforge profile create reproduced --from science.yaml --platform ubuntu24-hpc --yes
-jforge --profile science apt install eigen --yes
-```
-
-Exports pin managed package versions and variants. The destination verifies Python major/minor and compares the native solution before installation. Portable application recipes and their verified companion scripts travel with the export; local-only source paths cannot be exported.
 
 ## Activation and storage
 
 ```bash
 eval "$(jforge shell-init)"
-jforge profile use science
-source "$(jforge profile show science --path)"
+jforge profile use ubuntu24
+source "$(jforge profile show ubuntu24 --path)"
 ```
 
 Add the hook to your own Bash/Zsh startup configuration to activate successful changes in the calling terminal. Without the hook, source the stable profile entry explicitly. Activation preserves pyenv's interpreter and shell options. Named user scripts remain under `jforge env`; use `jforge env repair` to inspect and repair managed entries without executing arbitrary scripts.
 
-Each profile has `metadata.json`, `profile.yaml`, `activate.sh`, one current `spack/` environment, and `pkg/name-version`, `src/app-version`, `build/app-version`, `apps/app-version`. Platforms live in `platforms/NAME`; the shared Spack engine lives in `spack/spack-version`. Runs and histories use ordered directories such as `0001-install`. Hashes, host identities and timestamps belong in JSON, never allocated directory suffixes.
+Each profile has `metadata.json`, `profile.yaml`, `activate.sh`, one current `spack/` environment, and `pkg/name-version`, `src/app-version`, `build/app-version`, `apps/app-version`. Each profile owns its compiler bootstrap and tools in `tools/`; only the Spack engine in `spack/spack-version` and verified download caches are shared. Runs and histories use ordered directories such as `0001-install`. Hashes, host identities and timestamps belong in JSON, never allocated directory suffixes.
 
 Compilation defaults to node-local `SLURM_TMPDIR`, `TMPDIR` or the system temporary directory. `profile create --stage DIR` chooses another writable compilation root. Prefixes, downloads, logs and persistent metadata remain under the Forge home. Forge does not write packages into compute-node home directories.
 

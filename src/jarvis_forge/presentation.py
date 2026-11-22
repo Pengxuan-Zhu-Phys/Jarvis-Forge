@@ -1010,19 +1010,14 @@ def render(console, command, values):
         package_rows(console,values['installed_instances'])
         for row in values['installed_instances']:field(console,'prefix',row['prefix'])
         return
-    if command=='profile':
-        line(console,'Platforms',style='bold')
-        for row in values['platforms']:
-            line(console,f"  {row['id']} · {row['preset']} · {row['status']}")
-        if not values['platforms']:line(console,'  None installed')
+    if command=='profile' or command=='profile show' and values.get('view')=='list':
         line(console,'Profiles',style='bold')
         for row in values['instances']:
-            selected=' · default' if row['id']==values.get('default') else ''
-            line(console,f"  {row['id']} · {row['platform']} · {row['status']}{selected}")
-        if not values['instances']:line(console,'  None configured. Run jforge profile check.')
+            selected=' · selected' if row['id']==values.get('default') else ''
+            line(console,f"  {row['id']} · {row['status']}{selected}")
         return
     if command in {'profile create','profile use','profile show'}:
-        line(console,f"{values['id']} · {values.get('platform',values.get('preset',''))} · {values['status']}",style='bold')
+        line(console,f"{values['id']} · {values['status']}",style='bold')
         if command=='profile show':
             line(console,f"  {values['packages']} packages · {values['apps']} apps · Python {values['python']['version']}")
             for row in values['history']:

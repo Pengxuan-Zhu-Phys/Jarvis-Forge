@@ -1,18 +1,22 @@
-"""Platforms provide tools; profiles select packages, Python and app records."""
+"""The five commands for complete built-in compiler environments."""
 
 from pathlib import Path
 from typing import Optional
 import typer
-import yaml
 from . import unified_profiles as profiles
-from .storage import ForgeError, read_json, write_text
+from .storage import ForgeError, read_json
 
 app = typer.Typer(
     invoke_without_command=True,
     no_args_is_help=False,
-    help="Create and select project profiles that share a platform tool suite.",
+    help="Check, create, use, show and remove built-in compiler environments.",
     context_settings={"help_option_names": ["-h", "--help"]},
 )
+
+
+def _name(name):
+    if name not in profiles.presets():
+        raise ForgeError(f"Unknown built-in profile: {name}.", hint="Choose ubuntu22, ubuntu24, ubuntu26 or macos.")
 
 
 @app.callback()
@@ -20,11 +24,11 @@ def list_profiles(ctx: typer.Context):
     if ctx.invoked_subcommand is None:
         from .cli import emit
 
-        emit(ctx, "profile", **profiles.catalog(ctx.obj.home))
+        typer.echo(ctx.get_help())
 
 
 @app.command("check")
-def check(ctx: typer.Context, preset: Optional[str] = typer.Argument(None)):
+def check(ctx: typer.Context, preset: str = typer.Argument(...)):
     """Check host, CPU and external Python prerequisites without installing anything."""
     from .cli import emit
 
@@ -41,33 +45,22 @@ def check(ctx: typer.Context, preset: Optional[str] = typer.Argument(None)):
 def create(
     ctx: typer.Context,
     name: str = typer.Argument(...),
-    platform: Optional[str] = typer.Option(None, "--platform"),
-    preset: Optional[str] = typer.Option(None, "--preset"),
-    source: Optional[Path] = typer.Option(None, "--from"),
     stage: Optional[Path] = typer.Option(None, "--stage"),
     target: Optional[str] = typer.Option(None, "--target"),
     yes: bool = typer.Option(False, "--yes", "-y"),
     dry_run: bool = typer.Option(False, "--dry-run"),
 ):
-    """Create a profile and its platform, or reproduce an exported profile."""
+    """Create or resume this complete built-in environment."""
     from .cli import emit, _console
     from .apt_cli import _changes_confirmation
     from .apt_progress import AptProgress
 
     if dry_run or ctx.obj.dry_run:
-        if source:
-            from .profile_exports import load
-
-            document = load(source)
-            preset = document["platform"]["preset"]
-            platform = platform or document["platform"]["name"]
-        choice = preset or platform
-        checked = profiles.check(ctx.obj.home, choice)
+        checked = profiles.check(ctx.obj.home, name)
         emit(
             ctx,
             "profile create",
             id=name,
-            platform=platform or "host default",
             status="planned",
             dry_run=True,
             prerequisites=checked,
@@ -79,20 +72,13 @@ def create(
     )
     ctx.obj.apt_progress = progress
     options = {
-        "platform": platform,
-        "preset": preset,
         "stage": stage,
         "target": target,
         "progress": progress,
         "confirm": lambda plan: _changes_confirmation(ctx, yes, plan),
     }
     try:
-        if source:
-            from .profile_exports import reproduce
-
-            result = reproduce(ctx.obj.home, name, source, **options)
-        else:
-            result = profiles.create(ctx.obj.home, name, **options)
+        result = profiles.create(ctx.obj.home, name, **options)
     finally:
         progress.close()
     emit(ctx, "profile create", **result)
@@ -119,6 +105,7 @@ def use(ctx: typer.Context, name: str = typer.Argument(...)):
             },
         )
         return
+    _name(name)
     emit(ctx, "profile use", **profiles.set_default(ctx.obj.home, name))
 
 
@@ -128,20 +115,19 @@ def show(
     name: Optional[str] = typer.Argument(None),
     path: bool = typer.Option(False, "--path"),
 ):
-    """Show a profile or platform; --path prints its activation entry."""
+    """List built-in environments, or show one profile and its activation entry."""
     from .cli import emit
 
     if name is None:
-        from .apt_profiles import active_home
-
-        scope = active_home(ctx.obj.home)
-        name = scope.root.name
-    else:
-        scope = profiles._scoped_home(ctx.obj.home, "profiles", name)
+        if path:
+            raise ForgeError("Give a profile name with --path.")
+        emit(ctx, "profile show", view="list", **profiles.catalog(ctx.obj.home))
+        return
+    _name(name)
+    scope = profiles._scoped_home(ctx.obj.home, "profiles", name)
     data = profiles.record(scope)
     if not data:
-        scope = profiles._scoped_home(ctx.obj.home, "platforms", name)
-        data = profiles.platform_record(ctx.obj.home, name)
+        raise ForgeError(f"Profile {name} is not installed.", hint=f"jforge profile create {name}")
     if path:
         if ctx.obj.as_json:
             raise ForgeError("--path and --json are mutually exclusive.")
@@ -169,34 +155,6 @@ def show(
     )
 
 
-@app.command("export")
-def export(
-    ctx: typer.Context,
-    name: str = typer.Argument(...),
-    output: Optional[Path] = typer.Option(None, "--output", "-o"),
-):
-    """Export pinned package inputs and portable app recipes as profile YAML."""
-    from .cli import emit
-    from .profile_exports import export as describe
-
-    value = describe(ctx.obj.home, name)
-    text = yaml.safe_dump(value, sort_keys=False)
-    if output:
-        if not ctx.obj.dry_run:
-            write_text(output.expanduser().resolve(), text)
-        emit(
-            ctx,
-            "profile export",
-            path=str(output.expanduser().resolve()),
-            profile=value,
-            dry_run=ctx.obj.dry_run,
-        )
-    elif ctx.obj.as_json:
-        emit(ctx, "profile export", profile=value)
-    else:
-        typer.echo(text, nl=False)
-
-
 @app.command("remove")
 def remove(
     ctx: typer.Context,
@@ -204,7 +162,8 @@ def remove(
     yes: bool = typer.Option(False, "--yes", "-y"),
     dry_run: bool = typer.Option(False, "--dry-run"),
 ):
-    """Remove a profile, or a platform no profile is using."""
+    """Remove this complete environment."""
+    _name(name)
     from .cli import emit
     from .apt_cli import _confirm
 

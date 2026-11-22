@@ -200,25 +200,14 @@ def test_repair_hook_registers_once_and_restores_managed_startup_block(tmp_path,
     assert json.loads(capsys.readouterr().out)["changed"] == 0
 
 
-def test_repair_hook_recovers_installer_owned_bootstrap(tmp_path, capsys, monkeypatch):
+def test_repair_leaves_pyenv_installer_entries_and_startup_blocks_alone(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("SHELL", "/bin/bash")
-    bootstrap = tmp_path / ".jarvis-pyenv/jforge-bootstrap"
-    launcher = bootstrap / "bin/jforge"
-    launcher.parent.mkdir(parents=True)
-    launcher.write_text("#!/bin/sh\nprintf '%s\\n' 'export FIXTURE_HOOK=loaded'\n")
-    launcher.chmod(0o700)
     rc = tmp_path / ".bashrc"
-    rc.write_text("# >>> jforge pyenv setup >>>\nexport PYENV_ROOT=/user/pyenv\n# <<< jforge pyenv setup <<<\n")
+    text = "# >>> jforge pyenv setup >>>\nexport PYENV_ROOT=/user/pyenv\n# <<< jforge pyenv setup <<<\n"
+    rc.write_text(text)
     args = ["--home", str(tmp_path / "forge"), "env", "repair", "--json"]
     assert main(args) == 0
-    report = json.loads(capsys.readouterr().out)
-    assert report["changed"] == 2
-    assert (bootstrap / "activate.sh").is_file()
-    process = subprocess.run(["bash", "--noprofile", "--norc", "-ic",
-                              'source "$1"; printf "%s\\n" "$PYENV_ROOT" "$FIXTURE_HOOK"',
-                              "test", str(rc)], check=True, capture_output=True, text=True,
-                             env={"PATH": "/usr/bin:/bin"})
-    assert process.stdout.splitlines() == ["/user/pyenv", "loaded"]
-    assert main(args) == 0
     assert json.loads(capsys.readouterr().out)["changed"] == 0
+    assert rc.read_text() == text
+    assert not (tmp_path / ".jarvis-pyenv").exists()

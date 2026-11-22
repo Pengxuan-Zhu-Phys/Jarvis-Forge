@@ -91,7 +91,10 @@ def package_name(value: str) -> str:
 
 def default_home_file() -> Path:
     """Keep the remembered data root outside every individual Forge home."""
-    configured = os.environ.get("XDG_CONFIG_HOME")
+    private = os.environ.get("JFORGE_CONFIG_HOME")
+    if private and not Path(private).is_absolute():
+        raise ForgeError("JFORGE_CONFIG_HOME must be an absolute path.")
+    configured = private or os.environ.get("XDG_CONFIG_HOME")
     base = Path(configured).expanduser() if configured else Path.home() / ".config"
     if not base.is_absolute():
         base = Path.home() / ".config"
@@ -131,11 +134,11 @@ class ForgeHome:
         return preference
 
     def paths(self) -> dict:
-        if self.root.parent.name in {'platforms', 'profiles'}:
+        if self.root.parent.name == "profiles" or (self.root.name == "tools" and self.root.parent.parent.name == "profiles"):
             names = ('spack', 'pkg', 'operations', 'history', 'cache', 'locks', 'src', 'build', 'apps')
         else:
             names = ('environments', 'suites', 'operations', 'runs', 'comparisons', 'services',
-                     'profiles', 'platforms', 'spack', 'cache', 'work', 'locks')
+                     'profiles', 'spack', 'cache', 'work', 'locks')
         return {"home": str(self.root), **{n: str(self.root / n) for n in names}}
 
     def initialize(self) -> dict:
@@ -151,7 +154,7 @@ class ForgeHome:
             try:
                 with config.open("x", encoding="utf-8") as stream:
                     os.chmod(config, 0o600)
-                    json.dump({"schema_version": 1, "layout_version": 3, "host_id": uuid.uuid4().hex,
+                    json.dump({"schema_version": 1, "layout_version": 4, "host_id": uuid.uuid4().hex,
                                "created_at": now()}, stream, indent=2)
                     stream.write("\n")
             except FileExistsError:
@@ -166,7 +169,7 @@ class ForgeHome:
         config = read_json(path)
         if config.get("schema_version") != 1 or not isinstance(config.get("host_id"), str):
             raise ForgeError(f"Invalid Forge home configuration: {path}")
-        if config.get('layout_version') != 3:
+        if config.get('layout_version') != 4:
             raise ForgeError(f'Unsupported Forge layout: {self.root}',hint='Create a fresh Forge home: jforge init --home /path/to/new-forge')
         return config
 

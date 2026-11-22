@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-import shlex
 import shutil
 import stat
 import subprocess
@@ -12,11 +11,8 @@ from .shell_repair import activation_lock
 from .storage import ForgeError, new_id, write_json, write_text
 
 
-BOOTSTRAP_HEADER = "# Add the Jforge launcher to PATH while keeping the current Python selection.\n"
 _START = "# >>> jforge shell hook >>>"
 _END = "# <<< jforge shell hook <<<"
-_INSTALL_START = "# >>> jforge pyenv setup >>>"
-_INSTALL_END = "# <<< jforge pyenv setup <<<"
 _LOADER = r'''case $- in
     *i*)
         if [ "${_JFORGE_HOOK_LOADED-}" != 1 ] &&
@@ -89,7 +85,7 @@ def repair_startup(home, path, shell, *, dry_run=False, install=False):
 
     def update(original):
         lines = original.splitlines(keepends=True)
-        for start, end in ((_START, _END), (_INSTALL_START, _INSTALL_END)):
+        for start, end in ((_START, _END),):
             starts = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == start]
             ends = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == end]
             if not starts and not ends:
@@ -97,50 +93,13 @@ def repair_startup(home, path, shell, *, dry_run=False, install=False):
             if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
                 raise ForgeError(f"Incomplete or duplicate managed shell hook block: {path}")
             first, last = starts[0], ends[0]
-            if start == _START:
-                return "".join(lines[:first]) + block + "".join(lines[last + 1:])
-            # Restore the missing installer source line without replacing its pyenv setup.
-            bootstrap = Path.home() / ".jarvis-pyenv/jforge-bootstrap/activate.sh"
-            if any("jforge-bootstrap/activate.sh" in line and not line.lstrip().startswith("#")
-                   for line in lines[first + 1:last]):
-                return original
-            launcher = bootstrap.parent / "bin/jforge"
-            if launcher.is_file() and os.access(launcher, os.X_OK):
-                quoted = shlex.quote(str(bootstrap))
-                restore = f'case $- in *i*) if [ -r {quoted} ]; then . {quoted}; fi ;; esac\n'
-                return "".join(lines[:last]) + restore + "".join(lines[last:])
+            return "".join(lines[:first]) + block + "".join(lines[last + 1:])
         if install:
             return original + ("\n" if original and not original.endswith("\n") else "") + block
         return None
 
     # Leave an unregistered startup file alone during automatic discovery.
     if not install and (not path.is_file() or not any(
-            marker.encode() in path.read_bytes() for marker in (_START, _END, _INSTALL_START, _INSTALL_END))):
+            marker.encode() in path.read_bytes() for marker in (_START, _END))):
         return None
     return _edit(home, path, shell, update, dry_run=dry_run)
-
-
-def repair_bootstrap(home, path, *, dry_run=False):
-    """Restore the hook loader of an installed Forge bootstrap."""
-    launcher = path.parent / "bin/jforge"
-    if not launcher.is_file() or not os.access(launcher, os.X_OK):
-        return None
-
-    def update(original):
-        if original and not original.startswith(BOOTSTRAP_HEADER):
-            return None
-        if ("_jforge_bootstrap_hook=$(command jforge shell-init); then" in original
-                and 'eval "$_jforge_bootstrap_hook"' in original) or _LOADER in original:
-            return None
-        if not original:
-            bin_dir = shlex.quote(str(launcher.parent))
-            original = (BOOTSTRAP_HEADER + f'_jforge_bin={bin_dir}\n'
-                        'case ":${PATH-}:" in\n'
-                        '    *":$_jforge_bin:"*) ;;\n'
-                        '    *) export PATH="$_jforge_bin${PATH:+:$PATH}" ;;\n'
-                        'esac\nunset _jforge_bin\n')
-        return original + ("\n" if not original.endswith("\n") else "") + _LOADER
-
-    if path.is_symlink():
-        raise ForgeError(f"Managed bootstrap activation must not be a symbolic link: {path}")
-    return _edit(home, path, "bash", update, dry_run=dry_run)

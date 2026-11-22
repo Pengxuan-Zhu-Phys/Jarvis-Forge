@@ -110,11 +110,17 @@ elif verb != "update":
     }))
     home = tmp_path / "forge"
 
-    def cli(*args, as_json=True, status=0):
-        result = main(["--home", str(home), *(["--json"] if as_json else []), *args])
+    def cli(*args, as_json=True, status=0, forge_home=None):
+        result = main(["--home", str(forge_home or home), *(["--json"] if as_json else []), *args])
         captured = capsys.readouterr()
         assert result == status, captured
         return json.loads(captured.out) if as_json else captured.out
+
+    def in_home(name):
+        def invoke(*args, **kwargs):
+            return cli(*args, forge_home=tmp_path/name, **kwargs)
+        return invoke
+    cli.in_home=in_home
 
     def writes():
         calls = map(json.loads, (prefix / "calls.jsonl").read_text().splitlines())
@@ -124,16 +130,16 @@ elif verb != "update":
         drivers={'CC':shutil.which('cc'),'CXX':shutil.which('c++')}
         return {'external':True,'drivers':drivers,'tools':{}},{path:digest(Path(path)) for path in drivers.values()}
     monkeypatch.setattr(unified_profiles,'_mac_install',platform_tools)
-    created = cli("profile", "create", "mac", "--platform", "macos")
-    assert created['id']=='mac'
-    cli('profile','use','mac')
-    return cli, prefix, ForgeHome(home/'profiles/mac'), writes
+    created = cli("profile", "create", "macos")
+    assert created['id']=='macos'
+    cli('profile','use','macos')
+    return cli, prefix, ForgeHome(home/'profiles/macos'), writes
 
 
 def test_profile_inventory_selection_and_reversible_shell(setup_brew):
     cli, prefix, home, writes = setup_brew
-    assert cli("profile")["instances"][0]["backend"] == "homebrew"
-    assert cli("env", "list")["profiles"][0]["id"] == "mac"
+    assert next(row for row in cli("profile","show")["instances"] if row["id"]=="macos")["backend"] == "homebrew"
+    assert cli("env", "list")["profiles"][0]["id"] == "macos"
     assert cli("apt", "search", "eigen")["packages"][0]["name"] == "eigen"
     assert cli("apt", "show", "eigen")["installed_instances"] == []
     installed = cli("apt", "install", "eigen")
@@ -142,13 +148,14 @@ def test_profile_inventory_selection_and_reversible_shell(setup_brew):
     assert Path(installed["environment_activation"]).is_file()
     assert "runtime/activate.sh" in Path(installed["environment_activation"]).read_text()
     assert cli("apt", "list", "eigen")["packages"][0]["name"] == "eigen"
-    active = cli("profile", "show", "--path", as_json=False).strip()
+    active = cli("profile", "show", "macos", "--path", as_json=False).strip()
     # The alternate profile shares the same physical installation.
-    empty = cli("profile", "create", "alternate", "--platform", "macos")["activation"]
-    cli("profile","use","alternate")
-    assert cli("apt", "list", "eigen")["packages"] == []
-    selected = cli("profile", "use", "mac")
-    assert cli("profile", "show", "--path", as_json=False).strip() == active
+    alternate=cli.in_home("another-forge")
+    empty = alternate("profile", "create", "macos")["activation"]
+    alternate("profile","use","macos")
+    assert alternate("apt", "list", "eigen")["packages"] == []
+    selected = cli("profile", "use", "macos")
+    assert cli("profile", "show", "macos", "--path", as_json=False).strip() == active
     assert selected["activation"]==active
     assert not writes()
     for shell in ("bash", "zsh"):
@@ -224,7 +231,7 @@ def test_repair_lost_dependency_and_activation(setup_brew):
     state = brew.current(home)
     adapter = Path(state["activation"]).with_name("homebrew-environment.sh")
     adapter.unlink()
-    cli("profile", "show", "--path", as_json=False)
+    cli("profile", "show", "macos", "--path", as_json=False)
     assert cli("env", "repair", "apt", "--dry-run")["changed"]
     assert not adapter.exists()
     assert cli("env", "repair", "apt")["activation"] == state["activation"]
@@ -233,7 +240,7 @@ def test_repair_lost_dependency_and_activation(setup_brew):
     rows["gsl"]["installed"][0]["runtime_dependencies"] = [{"full_name": "stale", "pkg_version": "1.0"}]
     inventory.write_text(json.dumps(rows))
     repair = cli("env", "repair")
-    profile = next(item for item in repair["targets"] if item["name"] == "mac")
+    profile = next(item for item in repair["targets"] if item["name"] == "macos")
     assert "stale" in profile["deferred_roots"]["gsl"]
     assert profile["removed"] == 1
     assert brew.current(home)["roots"] == ["eigen", "gsl"]
@@ -262,7 +269,7 @@ def test_explicit_update_and_missing_binding(setup_brew, monkeypatch):
     assert [call["args"] for call in writes()] == [["update"]]
     (prefix / "bin/brew").unlink()
     # Login can still load the previously generated script from its evidence.
-    printed = cli("profile", "show", "--path", as_json=False).strip()
+    printed = cli("profile", "show", "macos", "--path", as_json=False).strip()
     assert brew.current(home)["activation"] in Path(printed).read_text()
     result = cli("apt", "list", status=1)
     assert "Homebrew launcher" in result["error"]["message"]
@@ -292,8 +299,8 @@ def test_macos_first_write_creates_default_but_preview_does_not(setup_brew):
     assert 'Select a profile' in cli('apt','install','eigen','--dry-run',status=2)['error']['message']
     assert not (base/'profiles/default').exists()
     result=cli('apt','install','eigen')
-    assert result['backend']=='homebrew' and (base/'profiles/default/activate.sh').is_file()
-    assert apt_profiles.active_home(ForgeHome(base)).root.name=='default' and not writes()
+    assert result['backend']=='homebrew' and (base/'profiles/macos/activate.sh').is_file()
+    assert apt_profiles.active_home(ForgeHome(base)).root.name=='macos' and not writes()
 
 
 def test_homebrew_registration_requires_darwin(monkeypatch):
@@ -327,13 +334,14 @@ def test_reuse_preserves_recorded_dependency_version(setup_brew):
     link = prefix / "opt/gsl"
     link.unlink()
     link.symlink_to(upgraded)
-    cli("profile", "create", "new", "--platform", "macos")
-    cli("profile","use","new")
-    selected = cli("apt", "install", "eigen")["packages"]
+    other=cli.in_home("another-forge")
+    other("profile", "create", "macos")
+    other("profile","use","macos")
+    selected = other("apt", "install", "eigen")["packages"]
     dependency = next(row for row in selected if row["name"] == "gsl")
     assert dependency["version"] == "1.0"
     assert dependency["automatic"]
-    assert cli("apt", "install", "gsl", status=2)["error"]["message"].endswith("keg of 'gsl'.")
+    assert other("apt", "install", "gsl", status=2)["error"]["message"].endswith("keg of 'gsl'.")
     assert [call["args"][0] for call in writes()] == ["install"]
 
 
@@ -357,11 +365,12 @@ def test_upgrade_preserves_old_keg_and_rebuild_failure_restores_owned_prefix(set
 def test_shared_keg_cannot_be_rebuilt_or_deleted_by_another_profile(setup_brew):
     cli,prefix,home,writes=setup_brew
     cli('apt','install','gsl')
-    cli('profile','create','second','--platform','macos');cli('profile','use','second')
-    cli('apt','install','gsl')
-    error=cli('apt','install','--rebuild','gsl','--yes',status=2)
+    other=cli.in_home('another-forge')
+    other('profile','create','macos');other('profile','use','macos')
+    other('apt','install','gsl')
+    error=other('apt','install','--rebuild','gsl','--yes',status=2)
     assert 'other profile references' in error['error']['message']
-    cli('apt','remove','gsl','--yes')
+    other('apt','remove','gsl','--yes')
     assert (prefix/'Cellar/gsl/1.0').is_dir()
 
 

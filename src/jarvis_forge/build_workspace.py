@@ -147,7 +147,7 @@ def publish(directory, result):
     prefix = Path(selected["prefix"])
     sources = []
     if profile:
-        from .unified_profiles import base_home, record, platform_record
+        from .unified_profiles import base_home, record
         from .storage import ForgeHome
         from .env_entries import _activation_text
         from .package_operations import environment_path
@@ -157,7 +157,7 @@ def publish(directory, result):
         managed = record(scope)
         scripts = [
             environment_path(scope),
-            platform_record(base, managed["platform"])["activation"],
+            managed["tools"]["activation"],
         ]
         scripts.extend(
             app["activation"]

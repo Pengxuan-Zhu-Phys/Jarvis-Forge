@@ -2006,7 +2006,7 @@ def search(home,term):
 
 def read_details(home,spec):
     name=name_of(spec)
-    if not configured(home):return {'name':name,'status':'profile-not-initialized','hint':'jforge profile create NAME --platform PRESET'}
+    if not configured(home):return {'name':name,'status':'profile-not-initialized','hint':'jforge profile create ubuntu24'}
     rows=_json(_read_native(home,['list','--format','version_json',name]),'package details')
     result=next((row for row in rows if row['name']==name),None)
     if result is None:raise ForgeError(f'No native Spack package matches {name}.',hint=f'jforge apt search {name}')

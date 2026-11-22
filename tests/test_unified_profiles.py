@@ -1,4 +1,4 @@
-"""Build platform suites once, bind external Python, and isolate project profiles."""
+"""Build complete preset profiles, resume failures, and reclaim failed scopes."""
 from pathlib import Path
 import json
 import os
@@ -19,7 +19,14 @@ def suite(tmp_path,monkeypatch):
     base=ForgeHome(tmp_path/'forge');base.initialize();calls=[]
     monkeypatch.setattr(profiles,'host',lambda:LINUX)
     monkeypatch.setenv('TMPDIR',str(tmp_path))
-    monkeypatch.setattr(spack_backend,'bootstrap',lambda *args,**kwargs:None)
+    def bootstrap(scope,**kwargs):
+        runtime=scope.root/'spack/runtime';runtime.mkdir(parents=True,exist_ok=True)
+        write_text(runtime/'activate.sh','return 0\n')
+        write_text(scope.root/'spack/spack.yaml','spack: {specs: []}\n')
+        write_json(scope.root/'spack/backend.json',{'schema_version':1,'backend':'spack','python':profiles._python()})
+        write_json(scope.root/'packages.json',{'activation':str(runtime/'activate.sh'),'spack':{'roots':[],'packages':[]}})
+    monkeypatch.setattr(spack_backend,'bootstrap',bootstrap)
+    monkeypatch.setattr(spack_backend,'_executable',lambda scope:Path(sys.executable))
     def install(scope,action,specs,**kwargs):
         calls.append((scope,specs,kwargs));packages=[]
         for spec in specs:
@@ -37,46 +44,52 @@ def suite(tmp_path,monkeypatch):
     return base,calls
 
 
-def test_named_platform_builds_pinned_suite_in_own_store_and_reuses_it(suite):
+def test_builtin_profile_builds_own_pinned_suite_and_reuses_it(suite):
     base,calls=suite
-    platform=profiles.prepare_platform(base,'ubuntu24-alma',preset='ubuntu24')
-    assert platform['preset']=='ubuntu24' and platform['host']==LINUX
-    assert Path(platform['stage']).is_relative_to(base.root.parent/f'jforge-stages-{os.getuid()}'/'platforms')
-    assert platform['toolchain']['deprecated_versions']==profiles.presets()['ubuntu24']['versions']
-    assert Path(platform['toolchain']['prefix']).name=='gcc-13.3.0'
+    data=profiles.create(base,'ubuntu24')
+    tools=data['tools']
+    assert tools['preset']=='ubuntu24' and tools['host']==LINUX
+    assert Path(tools['toolchain']['prefix']).is_relative_to(base.root/'profiles/ubuntu24/tools/pkg')
+    assert tools['toolchain']['deprecated_versions']==profiles.presets()['ubuntu24']['versions']
     assert calls[0][2]['deprecated_versions']==profiles.presets()['ubuntu24']['versions']
     assert calls[0][2]['target']=='x86_64'
-    assert profiles.prepare_platform(base,'ubuntu24-alma')==platform and len(calls)==1
-    assert (base.root/'platforms/ubuntu24-alma/bin/gfortran').is_symlink()
-    assert not list((base.root/'profiles').glob('*/metadata.json'))
+    assert profiles.create(base,'ubuntu24')['id']=='ubuntu24' and len(calls)==1
+    assert (base.root/'profiles/ubuntu24/tools/bin/gfortran').is_symlink()
+    assert not (base.root/'platforms').exists()
 
 
-def test_changed_platform_target_or_compiler_is_rejected(suite):
+def test_changed_profile_target_or_compiler_is_rejected(suite):
     base,_=suite
-    data=profiles.prepare_platform(base,'ubuntu24')
-    with pytest.raises(ForgeError,match='uses target'):profiles.prepare_platform(base,'ubuntu24',target='x86_64_v3')
+    data=profiles.create(base,'ubuntu24')
+    with pytest.raises(ForgeError,match='target|CPU'):profiles.create(base,'ubuntu24',target='x86_64_v3')
     Path(data['toolchain']['prefix'],'.spack/spec.json').write_text('changed')
-    with pytest.raises(ForgeError,match='changed'):profiles.prepare_platform(base,'ubuntu24')
+    with pytest.raises(ForgeError,match='changed'):profiles.create(base,'ubuntu24')
 
 
-def test_invalid_stage_and_unregistered_platform_are_not_adopted(suite,tmp_path):
+def test_invalid_stage_and_unknown_user_directory_are_not_adopted(suite,tmp_path):
     base,_=suite
-    with pytest.raises(ForgeError,match='stage is not writable'):profiles.prepare_platform(base,'ubuntu24',stage=tmp_path/'absent')
-    assert not (base.root/'platforms/ubuntu24').exists()
-    occupied=base.root/'platforms/ubuntu24';occupied.mkdir();(occupied/'user-file').write_text('keep')
-    with pytest.raises(ForgeError,match='Unregistered'):profiles.prepare_platform(base,'ubuntu24')
+    with pytest.raises(ForgeError,match='stage is not writable'):profiles.create(base,'ubuntu24',stage=tmp_path/'absent')
+    assert not (base.root/'profiles/ubuntu24').exists()
+    occupied=base.root/'profiles/ubuntu24';occupied.mkdir();(occupied/'user-file').write_text('keep')
+    with pytest.raises(ForgeError,match='Unregistered'):profiles.create(base,'ubuntu24')
     assert (occupied/'user-file').read_text()=='keep'
 
 
-def test_failed_platform_records_failure_without_changing_selection(suite,monkeypatch):
+def test_failed_create_retries_without_manual_remove_and_keeps_selection(suite,monkeypatch):
     base,_=suite;pointer=base.root/'profiles/selection.json'
     write_json(pointer,{'schema_version':3,'hosts':{}});before=pointer.read_bytes()
+    real=toolchains.install_suite
     def fail(*args,**kwargs):raise ForgeError('compiler build failed')
-    monkeypatch.setattr(toolchains,'install_platform',fail)
-    with pytest.raises(ForgeError,match='compiler build failed'):profiles.prepare_platform(base,'ubuntu24')
-    assert read_json(base.root/'platforms/ubuntu24/metadata.json')['status']=='failed'
+    monkeypatch.setattr(toolchains,'install_suite',fail)
+    with pytest.raises(ForgeError,match='compiler build failed'):profiles.create(base,'ubuntu24')
+    marker=base.root/'profiles/ubuntu24/metadata.json'
+    assert read_json(marker)['status']=='failed' and pointer.read_bytes()==before
+    monkeypatch.setattr(toolchains,'install_suite',real)
+    messages=[]
+    ready=profiles.create(base,'ubuntu24',progress=lambda message:messages.append(message))
+    assert ready['status']=='ready' and ready['attempts']==2
+    assert any('Resume profile' in item for item in messages)
     assert pointer.read_bytes()==before
-    with pytest.raises(ForgeError,match='incomplete'):profiles.prepare_platform(base,'ubuntu24')
 
 
 @pytest.mark.parametrize('shell',['bash','zsh'])
@@ -106,13 +119,13 @@ printf '%s\\n' "$PATH"
 
 def test_external_apps_are_not_loaded_and_queries_do_not_refresh_files(tmp_path,capsys):
     from jarvis_forge.cli import main
-    base=ForgeHome(tmp_path/'forge');scope=project_profile(base)
+    base=ForgeHome(tmp_path/'forge');scope=project_profile(base,"ubuntu24")
     external=tmp_path/'external.sh';external.write_text('exit 91\n')
     data=profiles.record(scope);data['apps']=[{'name':'external','activation':str(external),'enabled':True,'external':True}]
     write_json(scope.root/'metadata.json',data);profiles.refresh_activation(scope)
     assert str(external) not in (scope.root/'activate.sh').read_text()
     before={file:(file.read_bytes(),file.stat().st_mtime_ns) for file in base.root.rglob('*') if file.is_file()}
-    for command in (['profile'],['profile','show','default'],['profile','show','--path'],['env','current','--path']):
+    for command in (['profile','show'],['profile','show','ubuntu24'],['profile','show','ubuntu24','--path'],['env','current','--path']):
         assert main(['--home',str(base.root),*command])==0,capsys.readouterr()
         capsys.readouterr()
     assert all(file.read_bytes()==value[0] and file.stat().st_mtime_ns==value[1] for file,value in before.items())

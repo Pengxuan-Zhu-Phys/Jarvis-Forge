@@ -4,7 +4,6 @@ from __future__ import annotations
 import fnmatch
 from pathlib import Path
 import shlex
-import sys
 from typing import Optional
 import typer
 
@@ -21,14 +20,11 @@ app = typer.Typer(
 
 
 def _confirm(ctx, yes, message):
-    if yes or getattr(ctx.obj, "yes", False):
-        return
-    if ctx.obj.as_json or not sys.stdin.isatty():
-        raise ForgeError(
-            "This package plan requires --yes in non-interactive/JSON mode."
-        )
-    if not typer.confirm(message, default=True):
-        raise ForgeError("Operation cancelled.", code=130)
+    if not ctx.obj.as_json:
+        from .cli import _console
+        from .presentation import line
+
+        line(_console(stderr=True), message.rstrip("?"))
 
 
 def _changes_confirmation(ctx, yes, changes):
@@ -48,7 +44,6 @@ def _changes_confirmation(ctx, yes, changes):
                         row["name"] + "@" + str(row.get("version", "")) for row in rows
                     ),
                 )
-    _confirm(ctx, yes, "Proceed with this plan?")
 
 
 def _progress(ctx):
@@ -106,7 +101,7 @@ def _transact(
         if not record(ctx.obj.home):
             raise ForgeError(
                 "Select a profile before computing an installation plan.",
-                hint="jforge profile create default --platform ubuntu24",
+                hint="jforge profile create ubuntu24",
             )
     else:
         _ready(ctx, yes=yes)

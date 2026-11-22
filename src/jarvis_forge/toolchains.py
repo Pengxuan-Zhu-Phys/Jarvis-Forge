@@ -79,11 +79,10 @@ def installed(home, name):
 
 
 def binding(profile):
-    from .unified_profiles import record, base_home, platform_record
-    data=record(profile)
-    if data:
-        selected=platform_record(base_home(profile),data['platform'])
-        return _verify(selected['toolchain']) if selected['backend']=='spack' else None
+    from .unified_profiles import record
+    data = record(profile)
+    if data and data.get("toolchain") and data["backend"] == "spack":
+        return _verify(data["toolchain"])
     return None
 
 
@@ -125,7 +124,7 @@ def _root_package(result, name, version):
 
 
 def install(*args, **kwargs):
-    raise ForgeError('Independent toolchains have been removed.',hint='jforge profile create NAME --platform ubuntu24')
+    raise ForgeError('Independent toolchains have been removed.',hint='jforge profile create ubuntu24')
 
 
 def use(*args, **kwargs):
@@ -238,8 +237,8 @@ def check(home, name):
             "runtimes": {name: str(path) for name, path in libraries.items()}, "output": output, "status": "passed"}
 
 
-def install_platform(scope, versions, *, target, stage, jobs=None, timeout=14400, cache='never', progress=None,confirm=None):
-    """Install the platform suite into its own store, using host compilers once."""
+def install_suite(scope, versions, *, target, stage, jobs=None, timeout=14400, cache='never', progress=None,confirm=None):
+    """Install this profile's compiler suite into its own store, using host compilers once."""
     from . import spack_backend
     stage.mkdir(parents=True,exist_ok=True)
     spack_backend.bootstrap(scope,extensions=False,progress=progress)
@@ -251,7 +250,7 @@ def install_platform(scope, versions, *, target, stage, jobs=None, timeout=14400
     if package['external']:
         raise ForgeError('The platform compiler must be installed in the platform store.',code=1)
     prefix=Path(package['prefix']).resolve()
-    record={'deprecated_versions':versions,'schema_version':3,'id':scope.root.name,'version':versions['gcc'],'target':target,
+    record={'deprecated_versions':versions,'schema_version':3,'id':scope.root.parent.name if scope.root.name=='tools' else scope.root.name,'version':versions['gcc'],'target':target,
             'prefix':str(prefix),'profile':str(scope.root),'drivers':{key:str(prefix/'bin'/name) for key,name in DRIVERS.items()},
             'spec_sha256':digest(prefix/'.spack/spec.json'),
             'tools':_suite_tools(result,{key:value for key,value in versions.items() if key!='gcc'})}

@@ -526,7 +526,7 @@ def _check_host(home, selected_graph, saved_nodes=None, apt_profile=None):
     from .unified_profiles import record, verify
     selected=ForgeHome(Path(apt_profile['path'])) if apt_profile else active_home(home)
     managed=record(selected)
-    if not managed:raise ForgeError('Builds require a project profile.',hint='jforge profile create default --platform ubuntu24')
+    if not managed:raise ForgeError('Builds require a project profile.',hint='jforge profile create ubuntu24')
     verify(selected,managed)
     apt_profile={'backend':managed['backend'],'path':str(selected.root)}
     nodes = selected_graph["nodes"]

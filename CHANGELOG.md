@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.1 — 2026-11-22
+
+### Changed
+
+- Replace the shared platform/profile model with four complete built-in profiles: `ubuntu22`, `ubuntu24`, `ubuntu26` and `macos`. Keep only profile check/create/use/show/remove; each profile owns its compiler tools, packages, applications and activation entry.
+- Display native apt/build/profile plans and execute directly, including non-interactive and JSON operations. Dependency, ownership, host, Python and active-operation checks still apply.
+- Separate the standalone pyenv installer's Python root and Forge data home. Preserve explicit home selection, use node scratch storage and automatic CPU budgets, and report missing Python development libraries before compilation.
+- Keep the pyenv installer independent of env repair. Forge repairs its own runtime hooks and managed environments without taking over Python installation or installer startup blocks.
+
+### Fixed
+
+- Resume failed or interrupted profile creation without requiring manual removal, reuse completed compiler packages, and reuse an already-ready profile.
+- Hold profile lifecycle locks outside the directory being removed and close internal lock descriptors before deletion. Preserve ownership and deletion records after partial failure, recover stale lock-only remnants, and protect unknown user files.
+- Isolate node scratch by Forge home as well as profile name, avoiding collisions between independent installations. Release the global profile namespace lock during long compiler builds.
+
+### Upgrade
+
+- Use a fresh Forge home for the single-layer layout; the former two-layer layout is not migrated. Existing external pyenv installations can be reused.
+
 ## 1.2.0 — 2026-11-22
 
 ### Breaking changes

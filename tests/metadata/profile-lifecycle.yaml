@@ -1,0 +1,429 @@
+schema_version: 1
+kind: test-metadata
+project_id: jarvis-forge
+scope:
+  component: profile-lifecycle-and-installer
+definitions:
+- id: forge.profile-lifecycle.profile-remove-closes-inner-locks-before-deleting-them
+  title: Profile remove closes inner locks before deleting them
+  purpose: Profile remove closes inner locks before deleting them.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_lifecycle.py::test_profile_remove_closes_inner_locks_before_deleting_them
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise profile remove closes inner locks before deleting them.
+  criteria:
+  - id: behavior
+    expected: Profile remove closes inner locks before deleting them.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.interrupted-remove-keeps-ownership-and-same-command-finishes
+  title: Interrupted remove keeps ownership and same command finishes
+  purpose: Interrupted remove keeps ownership and same command finishes.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_lifecycle.py::test_interrupted_remove_keeps_ownership_and_same_command_finishes
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise interrupted remove keeps ownership and same command finishes.
+  criteria:
+  - id: behavior
+    expected: Interrupted remove keeps ownership and same command finishes.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.profile-remove-refuses-an-active-operation-without-changing-files
+  title: Profile remove refuses an active operation without changing files
+  purpose: Profile remove refuses an active operation without changing files.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_lifecycle.py::test_profile_remove_refuses_an_active_operation_without_changing_files
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise profile remove refuses an active operation without changing files.
+  criteria:
+  - id: behavior
+    expected: Profile remove refuses an active operation without changing files.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.profile-remove-recovers-lock-only-residue-and-protects-unknown-files
+  title: Profile remove recovers lock only residue and protects unknown files
+  purpose: Profile remove recovers lock only residue and protects unknown files.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_lifecycle.py::test_profile_remove_recovers_lock_only_residue_and_protects_unknown_files
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise profile remove recovers lock only residue and protects unknown
+      files.
+  criteria:
+  - id: behavior
+    expected: Profile remove recovers lock only residue and protects unknown files.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.native-plans-display-and-execute-without-prompt
+  title: Native plans display and execute without prompt
+  purpose: Native plans display and execute without prompt.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_lifecycle.py::test_native_plans_display_and_execute_without_prompt
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise native plans display and execute without prompt.
+  criteria:
+  - id: behavior
+    expected: Native plans display and execute without prompt.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.profile-cli-has-only-the-five-builtin-operations
+  title: Profile cli has only the five builtin operations
+  purpose: Profile cli has only the five builtin operations.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_lifecycle.py::test_profile_cli_has_only_the_five_builtin_operations
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise profile cli has only the five builtin operations.
+  criteria:
+  - id: behavior
+    expected: Profile cli has only the five builtin operations.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.setup-installs-in-the-selected-prefix-and-pip-updates-the-running-cli
+  title: Setup installs in the selected prefix and pip updates the running cli
+  purpose: Setup installs in the selected prefix and pip updates the running cli.
+  binding:
+    adapter: pytest
+    selector: tests/test_pyenv_setup.py::test_setup_installs_in_the_selected_prefix_and_pip_updates_the_running_cli
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise setup installs in the selected prefix and pip updates the running
+      cli.
+  criteria:
+  - id: behavior
+    expected: Setup installs in the selected prefix and pip updates the running cli.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.library-probe-accepts-headers-using-stdio-types
+  title: Library probe accepts headers using stdio types
+  purpose: Library probe accepts headers using stdio types.
+  binding:
+    adapter: pytest
+    selector: tests/test_pyenv_setup.py::test_library_probe_accepts_headers_using_stdio_types
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise library probe accepts headers using stdio types.
+  criteria:
+  - id: behavior
+    expected: Library probe accepts headers using stdio types.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.failed-dependency-configure-never-runs-make-or-install
+  title: Failed dependency configure never runs make or install
+  purpose: Failed dependency configure never runs make or install.
+  binding:
+    adapter: pytest
+    selector: tests/test_pyenv_setup.py::test_failed_dependency_configure_never_runs_make_or_install
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise failed dependency configure never runs make or install.
+  criteria:
+  - id: behavior
+    expected: Failed dependency configure never runs make or install.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.dynamic-loader-rejects-a-library-with-an-unresolved-dependency
+  title: Dynamic loader rejects a library with an unresolved dependency
+  purpose: Dynamic loader rejects a library with an unresolved dependency.
+  binding:
+    adapter: pytest
+    selector: tests/test_pyenv_setup.py::test_dynamic_loader_rejects_a_library_with_an_unresolved_dependency
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise dynamic loader rejects a library with an unresolved dependency.
+  criteria:
+  - id: behavior
+    expected: Dynamic loader rejects a library with an unresolved dependency.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.failed-loader-compilation-does-not-run-a-stale-probe
+  title: Failed loader compilation does not run a stale probe
+  purpose: Failed loader compilation does not run a stale probe.
+  binding:
+    adapter: pytest
+    selector: tests/test_pyenv_setup.py::test_failed_loader_compilation_does_not_run_a_stale_probe
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise failed loader compilation does not run a stale probe.
+  criteria:
+  - id: behavior
+    expected: Failed loader compilation does not run a stale probe.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.python-validation-reports-all-missing-modules
+  title: Python validation reports all missing modules
+  purpose: Python validation reports all missing modules.
+  binding:
+    adapter: pytest
+    selector: tests/test_pyenv_setup.py::test_python_validation_reports_all_missing_modules
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise python validation reports all missing modules.
+  criteria:
+  - id: behavior
+    expected: Python validation reports all missing modules.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.linux-preflight-lists-every-required-library-without-starting-a-build
+  title: Linux preflight lists every required library without starting a build
+  purpose: Linux preflight lists every required library without starting a build.
+  binding:
+    adapter: pytest
+    selector: tests/test_pyenv_setup.py::test_linux_preflight_lists_every_required_library_without_starting_a_build
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise linux preflight lists every required library without starting
+      a build.
+  criteria:
+  - id: behavior
+    expected: Linux preflight lists every required library without starting a build.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.bootstrap-budget-obeys-affinity-and-ancestor-cgroup-limits
+  title: Bootstrap budget obeys affinity and ancestor cgroup limits
+  purpose: Bootstrap budget obeys affinity and ancestor cgroup limits.
+  binding:
+    adapter: pytest
+    selector: tests/test_pyenv_setup.py::test_bootstrap_budget_obeys_affinity_and_ancestor_cgroup_limits
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise bootstrap budget obeys affinity and ancestor cgroup limits.
+  criteria:
+  - id: behavior
+    expected: Bootstrap budget obeys affinity and ancestor cgroup limits.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.bootstrap-budget-caps-unrestricted-compiles
+  title: Bootstrap budget caps unrestricted compiles
+  purpose: Bootstrap budget caps unrestricted compiles.
+  binding:
+    adapter: pytest
+    selector: tests/test_pyenv_setup.py::test_bootstrap_budget_caps_unrestricted_compiles
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise bootstrap budget caps unrestricted compiles.
+  criteria:
+  - id: behavior
+    expected: Bootstrap budget caps unrestricted compiles.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.builtin-profile-builds-own-pinned-suite-and-reuses-it
+  title: Builtin profile builds own pinned suite and reuses it
+  purpose: Builtin profile builds own pinned suite and reuses it.
+  binding:
+    adapter: pytest
+    selector: tests/test_unified_profiles.py::test_builtin_profile_builds_own_pinned_suite_and_reuses_it
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise builtin profile builds own pinned suite and reuses it.
+  criteria:
+  - id: behavior
+    expected: Builtin profile builds own pinned suite and reuses it.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.changed-profile-target-or-compiler-is-rejected
+  title: Changed profile target or compiler is rejected
+  purpose: Changed profile target or compiler is rejected.
+  binding:
+    adapter: pytest
+    selector: tests/test_unified_profiles.py::test_changed_profile_target_or_compiler_is_rejected
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise changed profile target or compiler is rejected.
+  criteria:
+  - id: behavior
+    expected: Changed profile target or compiler is rejected.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.invalid-stage-and-unknown-user-directory-are-not-adopted
+  title: Invalid stage and unknown user directory are not adopted
+  purpose: Invalid stage and unknown user directory are not adopted.
+  binding:
+    adapter: pytest
+    selector: tests/test_unified_profiles.py::test_invalid_stage_and_unknown_user_directory_are_not_adopted
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise invalid stage and unknown user directory are not adopted.
+  criteria:
+  - id: behavior
+    expected: Invalid stage and unknown user directory are not adopted.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.failed-create-retries-without-manual-remove-and-keeps-selection
+  title: Failed create retries without manual remove and keeps selection
+  purpose: Failed create retries without manual remove and keeps selection.
+  binding:
+    adapter: pytest
+    selector: tests/test_unified_profiles.py::test_failed_create_retries_without_manual_remove_and_keeps_selection
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise failed create retries without manual remove and keeps selection.
+  criteria:
+  - id: behavior
+    expected: Failed create retries without manual remove and keeps selection.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.profiles-have-independent-tools-state-and-scripts
+  title: Profiles have independent tools state and scripts
+  purpose: Profiles have independent tools state and scripts.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_model.py::test_profiles_have_independent_tools_state_and_scripts
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise profiles have independent tools state and scripts.
+  criteria:
+  - id: behavior
+    expected: Profiles have independent tools state and scripts.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft
+- id: forge.profile-lifecycle.only-builtin-names-are-created-and-repeated-create-reuses
+  title: Only builtin names are created and repeated create reuses
+  purpose: Only builtin names are created and repeated create reuses.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_model.py::test_only_builtin_names_are_created_and_repeated_create_reuses
+  scenario:
+    inputs:
+      environment: Disposable local prefixes, fake native tools or offline installer
+        wheels.
+    action: Exercise only builtin names are created and repeated create reuses.
+  criteria:
+  - id: behavior
+    expected: Only builtin names are created and repeated create reuses.
+    verification: automated
+  failure_meaning: Profile lifecycle, installer separation or shell ownership regressed.
+  limitations:
+  - Does not certify an actual GCC/CPython build on an HPC node.
+  review:
+    status: draft

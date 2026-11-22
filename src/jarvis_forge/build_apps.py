@@ -24,6 +24,15 @@ _LOCKED = ContextVar("forge_app_operation", default=frozenset())
 
 @contextmanager
 def locked(scope):
+    from .scope_locks import lease
+
+    with lease(scope):
+        with _locked(scope):
+            yield
+
+
+@contextmanager
+def _locked(scope):
     if str(scope.root) in _LOCKED.get():
         yield
         return
@@ -40,6 +49,15 @@ def locked(scope):
 
 @contextmanager
 def reading(scope):
+    from .scope_locks import lease
+
+    with lease(scope, readonly=True):
+        with _reading(scope):
+            yield
+
+
+@contextmanager
+def _reading(scope):
     """Export a coherent snapshot without creating lock files in a read command."""
     import fcntl
 
@@ -82,7 +100,7 @@ def selected(base, *, write=False, progress=None, confirm=None):
     if not data:
         raise ForgeError(
             "Select a project profile first.",
-            hint="jforge profile create default --platform ubuntu24",
+            hint="jforge profile create ubuntu24",
         )
     profiles.verify(scope, data)
     profiles.validate_python(data, os.environ)
@@ -211,44 +229,11 @@ def fetch(base, reference, directory=None, *, scope=None, fresh=True):
         name=name,
         version=version,
         profile=scope.root.name,
-        platform=profiles.record(scope)["platform"],
         external=external,
         source_root=str(source.parent),
         status="fetched",
     )
     write_json(target / "metadata.json", data)
-    return target
-
-
-def import_bundle(base, scope, app):
-    target = scope.root / "src" / semantic_name(app["name"], app["version"])
-    if target.exists():
-        raise ForgeError(f"Import would overwrite an existing workspace: {target}")
-    target.mkdir(parents=True)
-    bundle = app["recipe"]
-    write_text(target / "build.yaml", bundle["text"])
-    for row in bundle["files"]:
-        file = _inside(ForgeHome(target), target / row["path"])
-        write_text(file, row["content"])
-    builds.load(target / "build.yaml", home=base)
-    write_json(
-        target / "metadata.json",
-        {
-            "schema_version": 1,
-            "kind": "workspace",
-            "build": "build.yaml",
-            "home": str(base.root),
-            "name": app["name"],
-            "version": app["version"],
-            "profile": scope.root.name,
-            "platform": profiles.record(scope)["platform"],
-            "external": False,
-            "origin": "profile-export",
-            "resource_hashes": {row["path"]: row["sha256"] for row in bundle["files"]},
-            "sha256": bundle["sha256"],
-            "status": "fetched",
-        },
-    )
     return target
 
 
@@ -653,7 +638,7 @@ def _install(
                 if row.get("workspace") == str(workspace)
             ],
         )
-    data.update(profile=scope.root.name, platform=profiles.record(scope)["platform"])
+    data.update(profile=scope.root.name)
     _preflight(base, scope, workspace)
     _dependencies(base, scope, workspace, _visiting, progress, confirm, parameters)
     fingerprint = _input(base, scope, workspace, parameters)

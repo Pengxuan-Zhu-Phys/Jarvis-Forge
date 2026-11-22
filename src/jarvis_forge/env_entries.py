@@ -260,7 +260,7 @@ def _write(home, name, *, kind, description, revision, profile, backend, builds,
     activation = home.root / "activate.sh" if managed and name == "apt" else folder / "activate.sh"
     scripts = [Path(backend)] if backend else []
     if managed:
-        scripts.append(Path(managed["platform_metadata"]["activation"]))
+        scripts.append(Path(managed["tools"]["activation"]))
     scripts.extend(Path(item["activation"]) for item in builds)
     text = _activation_text(name, scripts, managed=managed, activation=activation)
     if not activation.is_file() or activation.read_text(encoding="utf-8") != text:
@@ -512,7 +512,7 @@ def prepare_build_environment(base, profile, managed, names, environment, script
     with _output_lock(profile, managed):
         apps = ([row for row in managed.get("apps",[]) if row.get("enabled") and not row.get("external")]
                 if managed.get("schema_version")==3 else _apt_builds(base, profile, instance, _omitted(profile, "apt")))
-        scripts = [environment_path(profile), Path(managed["platform_metadata"]["activation"])]
+        scripts = [environment_path(profile), Path(managed["tools"]["activation"])]
         suppressed = []
         for app in apps:
             dependencies = _output_dependencies(base, (app["artifact_id"],))

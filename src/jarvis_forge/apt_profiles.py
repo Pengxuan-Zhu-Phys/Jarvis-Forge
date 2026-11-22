@@ -134,12 +134,12 @@ def ensure_active(base, *, progress=None, selected=None, confirm=None):
     if host()["platform"] == "darwin":
         if progress:
             progress("Create default profile using the macos platform")
-        create(base, "default", platform="macos", progress=progress, confirm=confirm)
-        set_default(base, "default")
+        create(base, "macos", progress=progress, confirm=confirm)
+        set_default(base, "macos")
         return active_home(base)
     raise ForgeError(
         "No project profile is selected.",
-        hint="jforge profile create default --platform ubuntu24\njforge profile use default",
+        hint="jforge profile create ubuntu24\njforge profile use ubuntu24",
     )
 
 
@@ -179,14 +179,14 @@ def use(base, name):
 def switch(*args, **kwargs):
     raise ForgeError(
         "The old apt profile/switch/import interface has been removed.",
-        hint="jforge profile create NAME --platform ubuntu24",
+        hint="jforge profile create ubuntu24",
     )
 
 
 def create_homebrew(base, name):
     from .unified_profiles import create
 
-    return create(base, name, platform="macos")
+    return create(base, "macos")
 
 
 def archived_homes(base):

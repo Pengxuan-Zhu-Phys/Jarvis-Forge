@@ -54,6 +54,15 @@ def _inside(home, path):
 
 @contextmanager
 def locked(home: ForgeHome):
+    from .scope_locks import lease
+
+    with lease(home):
+        with _locked(home):
+            yield
+
+
+@contextmanager
+def _locked(home: ForgeHome):
     if os.name != "posix":
         raise ForgeError(
             "The user-prefix package manager requires POSIX; use WSL on Windows."

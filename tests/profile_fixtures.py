@@ -10,10 +10,12 @@ from jarvis_forge import unified_profiles as profiles
 from jarvis_forge.storage import ForgeHome,digest,read_json,write_json,write_text
 
 
-def project_profile(base,name='default',platform='test-platform',*,select=True):
+def project_profile(base,name='default',*,select=True):
     base.initialize()
     scope=profiles._scoped_home(base,'profiles',name)
-    platform_home=profiles._scoped_home(base,'platforms',platform)
+    platform_home=ForgeHome(scope.root/'tools')
+    profiles._initialize_scope(base,scope)
+    platform=name
     if not (platform_home.root/'metadata.json').exists():
         profiles._initialize_scope(base,platform_home)
         drivers={key:shutil.which(command) or '/usr/bin/'+command for key,command in [('CC','cc'),('CXX','c++')]}
@@ -22,16 +24,16 @@ def project_profile(base,name='default',platform='test-platform',*,select=True):
                'fingerprints':{path:digest(Path(path)) for path in drivers.values()}}
         script=platform_home.root/'activate.sh'
         write_text(script,''.join(f'export {key}={shlex.quote(path)}\n' for key,path in drivers.items())+'return 0\n')
-        write_json(platform_home.root/'metadata.json',{'schema_version':3,'kind':'platform','id':platform,
+        write_json(platform_home.root/'metadata.json',{'schema_version':3,'kind':'tool-suite','id':platform,
                     'preset':'ubuntu24','revision':1,'backend':'spack','host':profiles.host(),'target':None,
                     'status':'ready','activation':str(script),'toolchain':chain})
-    platform_data=profiles.platform_record(base,platform)
+    platform_data=read_json(platform_home.root/'metadata.json')
     profiles._initialize_scope(base,scope)
     python=profiles._python()
-    write_json(scope.root/'metadata.json',{'schema_version':3,'kind':'profile','id':name,'name':name,
-                'platform':platform,'preset':'ubuntu24','backend':'spack','host':profiles.host(),'target':None,
+    write_json(scope.root/'metadata.json',{'schema_version':3,'kind':'profile','model':'builtin-profile/1','id':name,'name':name,
+                'preset':'ubuntu24','backend':'spack','host':profiles.host(),'target':None,
                 'status':'ready','python':python,'toolchain':platform_data['toolchain'],
-                'platform_metadata':platform_data,'stage':str(scope.root/'stage'),'apps':[]})
+                'tools':platform_data,'stage':str(scope.root/'stage'),'apps':[]})
     runtime=scope.root/'spack/runtime';runtime.mkdir(parents=True,exist_ok=True)
     write_text(runtime/'activate.sh','return 0\n')
     write_text(scope.root/'spack/spack.yaml','spack: {specs: []}\n')

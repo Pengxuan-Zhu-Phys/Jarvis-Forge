@@ -10,6 +10,7 @@ def isolated_forge_default(tmp_path, monkeypatch):
     monkeypatch.setenv('TMPDIR',str(tmp_path/'node-tmp'))
     monkeypatch.setenv('JFORGE_HOME', str(tmp_path / 'default-forge'))
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'user-config'))
+    monkeypatch.delenv('JFORGE_CONFIG_HOME', raising=False)
 
 
 @pytest.fixture

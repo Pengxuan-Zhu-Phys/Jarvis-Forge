@@ -2,18 +2,20 @@ schema_version: 1
 kind: test-metadata
 project_id: jarvis-forge
 scope:
-  component: platform-profile-model
+  component: builtin-profile-model
   preconditions: Local development interpreter and CMake; no remote hosts.
 definitions:
 - id: forge.profiles.local-recipe-inspection-is-independent-of-profile-layout
   title: Inspect local recipes independently of the selected profile
-  purpose: Permit read-only recipe inspection before preparing a compatible Forge home.
+  purpose: Permit read-only recipe inspection before preparing a compatible Forge
+    home.
   binding:
     adapter: pytest
     selector: tests/test_cli.py::test_local_build_show_does_not_require_a_compatible_profile
   scenario:
     inputs:
-      environment: A disposable home with unsupported layout metadata and a local ROOT recipe.
+      environment: A disposable home with unsupported layout metadata and a local
+        ROOT recipe.
     action: Inspect the original recipe and its expanded steps as JSON.
   criteria:
   - id: read-only
@@ -164,48 +166,6 @@ definitions:
   criteria:
   - id: contract
     expected: Native stage names clear only changed owned stages.
-    verification: automated
-  failure_meaning: The profile, prefix, transaction or exported identity boundary
-    regressed.
-  limitations:
-  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
-  review:
-    status: draft
-- id: forge.profiles.profiles-share-platform-but-have-independent-state-and-scripts
-  title: Profiles share platform but have independent state and scripts
-  purpose: Profiles share platform but have independent state and scripts.
-  binding:
-    adapter: pytest
-    selector: tests/test_profile_model.py::test_profiles_share_platform_but_have_independent_state_and_scripts
-  scenario:
-    inputs:
-      environment: Disposable local Forge homes; fake native backends or local tiny
-        CMake sources.
-    action: Exercise profiles share platform but have independent state and scripts.
-  criteria:
-  - id: contract
-    expected: Profiles share platform but have independent state and scripts.
-    verification: automated
-  failure_meaning: The profile, prefix, transaction or exported identity boundary
-    regressed.
-  limitations:
-  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
-  review:
-    status: draft
-- id: forge.profiles.namespace-collision-and-duplicate-profile-are-rejected
-  title: Namespace collision and duplicate profile are rejected
-  purpose: Namespace collision and duplicate profile are rejected.
-  binding:
-    adapter: pytest
-    selector: tests/test_profile_model.py::test_namespace_collision_and_duplicate_profile_are_rejected
-  scenario:
-    inputs:
-      environment: Disposable local Forge homes; fake native backends or local tiny
-        CMake sources.
-    action: Exercise namespace collision and duplicate profile are rejected.
-  criteria:
-  - id: contract
-    expected: Namespace collision and duplicate profile are rejected.
     verification: automated
   failure_meaning: The profile, prefix, transaction or exported identity boundary
     regressed.
@@ -708,27 +668,6 @@ definitions:
   - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
   review:
     status: draft
-- id: forge.profiles.export-uses-full-lock-dag-and-portable-package-identity
-  title: Export uses full lock dag and portable package identity
-  purpose: Export uses full lock dag and portable package identity.
-  binding:
-    adapter: pytest
-    selector: tests/test_profile_exports.py::test_export_uses_full_lock_dag_and_portable_package_identity
-  scenario:
-    inputs:
-      environment: Disposable local Forge homes; fake native backends or local tiny
-        CMake sources.
-    action: Exercise export uses full lock dag and portable package identity.
-  criteria:
-  - id: contract
-    expected: Export uses full lock dag and portable package identity.
-    verification: automated
-  failure_meaning: The profile, prefix, transaction or exported identity boundary
-    regressed.
-  limitations:
-  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
-  review:
-    status: draft
 - id: forge.profiles.variant-diff-refuses-before-install-and-pins-native-syntax
   title: Variant diff refuses before install and pins native syntax
   purpose: Variant diff refuses before install and pins native syntax.
@@ -743,111 +682,6 @@ definitions:
   criteria:
   - id: contract
     expected: Variant diff refuses before install and pins native syntax.
-    verification: automated
-  failure_meaning: The profile, prefix, transaction or exported identity boundary
-    regressed.
-  limitations:
-  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
-  review:
-    status: draft
-- id: forge.profiles.python-mismatch-fails-before-creating-any-platform
-  title: Python mismatch fails before creating any platform
-  purpose: Python mismatch fails before creating any platform.
-  binding:
-    adapter: pytest
-    selector: tests/test_profile_exports.py::test_python_mismatch_fails_before_creating_any_platform
-  scenario:
-    inputs:
-      environment: Disposable local Forge homes; fake native backends or local tiny
-        CMake sources.
-    action: Exercise python mismatch fails before creating any platform.
-  criteria:
-  - id: contract
-    expected: Python mismatch fails before creating any platform.
-    verification: automated
-  failure_meaning: The profile, prefix, transaction or exported identity boundary
-    regressed.
-  limitations:
-  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
-  review:
-    status: draft
-- id: forge.profiles.export-rejects-ambiguous-or-invalid-identity
-  title: Export rejects ambiguous or invalid identity
-  purpose: Export rejects ambiguous or invalid identity.
-  binding:
-    adapter: pytest
-    selector: tests/test_profile_exports.py::test_export_rejects_ambiguous_or_invalid_identity
-  scenario:
-    inputs:
-      environment: Disposable local Forge homes; fake native backends or local tiny
-        CMake sources.
-    action: Exercise export rejects ambiguous or invalid identity.
-  criteria:
-  - id: contract
-    expected: Export rejects ambiguous or invalid identity.
-    verification: automated
-  failure_meaning: The profile, prefix, transaction or exported identity boundary
-    regressed.
-  limitations:
-  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
-  review:
-    status: draft
-- id: forge.profiles.app-export-rejects-unavailable-local-source-paths
-  title: App export rejects unavailable local source paths
-  purpose: App export rejects unavailable local source paths.
-  binding:
-    adapter: pytest
-    selector: tests/test_profile_exports.py::test_app_export_rejects_unavailable_local_source_paths
-  scenario:
-    inputs:
-      environment: Disposable local Forge homes; fake native backends or local tiny
-        CMake sources.
-    action: Exercise app export rejects unavailable local source paths.
-  criteria:
-  - id: contract
-    expected: App export rejects unavailable local source paths.
-    verification: automated
-  failure_meaning: The profile, prefix, transaction or exported identity boundary
-    regressed.
-  limitations:
-  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
-  review:
-    status: draft
-- id: forge.profiles.bundle-integrity-and-companion-materialization
-  title: Bundle integrity and companion materialization
-  purpose: Bundle integrity and companion materialization.
-  binding:
-    adapter: pytest
-    selector: tests/test_profile_exports.py::test_bundle_integrity_and_companion_materialization
-  scenario:
-    inputs:
-      environment: Disposable local Forge homes; fake native backends or local tiny
-        CMake sources.
-    action: Exercise bundle integrity and companion materialization.
-  criteria:
-  - id: contract
-    expected: Bundle integrity and companion materialization.
-    verification: automated
-  failure_meaning: The profile, prefix, transaction or exported identity boundary
-    regressed.
-  limitations:
-  - Does not certify a real GCC bootstrap, NAS installation or Homebrew installation.
-  review:
-    status: draft
-- id: forge.profiles.release-app-bundle-builds-in-another-empty-profile
-  title: Release app bundle builds in another empty profile
-  purpose: Release app bundle builds in another empty profile.
-  binding:
-    adapter: pytest
-    selector: tests/test_profile_exports.py::test_release_app_bundle_builds_in_another_empty_profile
-  scenario:
-    inputs:
-      environment: Disposable local Forge homes; fake native backends or local tiny
-        CMake sources.
-    action: Exercise release app bundle builds in another empty profile.
-  criteria:
-  - id: contract
-    expected: Release app bundle builds in another empty profile.
     verification: automated
   failure_meaning: The profile, prefix, transaction or exported identity boundary
     regressed.
@@ -1755,86 +1589,6 @@ definitions:
   - Does not certify a real GCC bootstrap or target-host installation.
   review:
     status: draft
-- id: forge.profiles.named-platform-builds-pinned-suite-in-own-store-and-reuses-it
-  title: Named platform builds pinned suite in own store and reuses it
-  purpose: Named platform builds pinned suite in own store and reuses it.
-  binding:
-    adapter: pytest
-    selector: tests/test_unified_profiles.py::test_named_platform_builds_pinned_suite_in_own_store_and_reuses_it
-  scenario:
-    inputs:
-      environment: Local temporary profiles, tiny CMake sources and injected failure
-        boundaries.
-    action: Exercise named platform builds pinned suite in own store and reuses it.
-  criteria:
-  - id: contract
-    expected: Named platform builds pinned suite in own store and reuses it.
-    verification: automated
-  failure_meaning: Profile ownership, provenance or transactional publication regressed.
-  limitations:
-  - Does not certify a real GCC bootstrap or target-host installation.
-  review:
-    status: draft
-- id: forge.profiles.changed-platform-target-or-compiler-is-rejected
-  title: Changed platform target or compiler is rejected
-  purpose: Changed platform target or compiler is rejected.
-  binding:
-    adapter: pytest
-    selector: tests/test_unified_profiles.py::test_changed_platform_target_or_compiler_is_rejected
-  scenario:
-    inputs:
-      environment: Local temporary profiles, tiny CMake sources and injected failure
-        boundaries.
-    action: Exercise changed platform target or compiler is rejected.
-  criteria:
-  - id: contract
-    expected: Changed platform target or compiler is rejected.
-    verification: automated
-  failure_meaning: Profile ownership, provenance or transactional publication regressed.
-  limitations:
-  - Does not certify a real GCC bootstrap or target-host installation.
-  review:
-    status: draft
-- id: forge.profiles.invalid-stage-and-unregistered-platform-are-not-adopted
-  title: Invalid stage and unregistered platform are not adopted
-  purpose: Invalid stage and unregistered platform are not adopted.
-  binding:
-    adapter: pytest
-    selector: tests/test_unified_profiles.py::test_invalid_stage_and_unregistered_platform_are_not_adopted
-  scenario:
-    inputs:
-      environment: Local temporary profiles, tiny CMake sources and injected failure
-        boundaries.
-    action: Exercise invalid stage and unregistered platform are not adopted.
-  criteria:
-  - id: contract
-    expected: Invalid stage and unregistered platform are not adopted.
-    verification: automated
-  failure_meaning: Profile ownership, provenance or transactional publication regressed.
-  limitations:
-  - Does not certify a real GCC bootstrap or target-host installation.
-  review:
-    status: draft
-- id: forge.profiles.failed-platform-records-failure-without-changing-selection
-  title: Failed platform records failure without changing selection
-  purpose: Failed platform records failure without changing selection.
-  binding:
-    adapter: pytest
-    selector: tests/test_unified_profiles.py::test_failed_platform_records_failure_without_changing_selection
-  scenario:
-    inputs:
-      environment: Local temporary profiles, tiny CMake sources and injected failure
-        boundaries.
-    action: Exercise failed platform records failure without changing selection.
-  criteria:
-  - id: contract
-    expected: Failed platform records failure without changing selection.
-    verification: automated
-  failure_meaning: Profile ownership, provenance or transactional publication regressed.
-  limitations:
-  - Does not certify a real GCC bootstrap or target-host installation.
-  review:
-    status: draft
 - id: forge.profiles.profile-activation-switch-preserves-pyenv-and-user-added-paths
   title: Profile activation switch preserves pyenv and user added paths
   purpose: Profile activation switch preserves pyenv and user added paths.
@@ -1933,46 +1687,6 @@ definitions:
   failure_meaning: Profile ownership, provenance or transactional publication regressed.
   limitations:
   - Does not certify a real GCC bootstrap or target-host installation.
-  review:
-    status: draft
-- id: forge.profiles.export-preserves-actual-parameter-overrides
-  title: Export preserves actual parameter overrides
-  purpose: Export preserves actual parameter overrides.
-  binding:
-    adapter: pytest
-    selector: tests/test_profile_exports.py::test_export_preserves_actual_parameter_overrides
-  scenario:
-    inputs:
-      environment: Local temporary profiles, tiny CMake sources and injected failure
-        boundaries.
-    action: Exercise export preserves actual parameter overrides.
-  criteria:
-  - id: contract
-    expected: Export preserves actual parameter overrides.
-    verification: automated
-  failure_meaning: Profile ownership, provenance or transactional publication regressed.
-  limitations:
-  - Does not certify a real GCC bootstrap or target-host installation.
-  review:
-    status: draft
-- id: forge.profiles.export-refuses-a-partially-published-profile-without-writes
-  title: Export refuses a partially published profile without writes
-  purpose: Export refuses a partially published profile without writes.
-  binding:
-    adapter: pytest
-    selector: tests/test_profile_exports.py::test_export_refuses_a_partially_published_profile_without_writes
-  scenario:
-    inputs:
-      environment: Temporary local profiles and tiny CMake fixtures; no NAS or native
-        tool bootstrap.
-    action: Exercise export refuses a partially published profile without writes.
-  criteria:
-  - id: contract
-    expected: Export refuses a partially published profile without writes.
-    verification: automated
-  failure_meaning: Release ownership, snapshot or transaction contract regressed.
-  limitations:
-  - Does not certify a target-host installation.
   review:
     status: draft
 - id: forge.profiles.companion-copy-preserves-bytes-used-by-its-checksum

@@ -8,6 +8,9 @@ Install pyenv, Python and Jarvis-Forge under the current directory.
 Source ./activate.sh after installation to load this installation.
 
 Options
+  --home <path>            Initial Forge data home (default: ./jforge; saved separately).
+  --pyenv-root <path>      Reuse or install a separate pyenv root (default: current directory).
+  --stage <path>           Python build scratch root (default: node temporary directory).
   --python <version>       Select a CPython patch version (default: 3.13.15).
   --install-build-deps     Install macOS build dependencies through Homebrew.
                           Linux prepares missing Python libraries locally by default.
@@ -32,11 +35,23 @@ python_version=3.13.15
 install_deps=false
 upgrade_package=false
 configure_startup=false
+forge_home_option=
+pyenv_root_option=
+stage_option=
 while (( $# )); do
     case "$1" in
         --python)
             (( $# >= 2 )) || usage_error 'Expected a version after --python.'
             python_version=$2
+            shift 2
+            ;;
+        --home|--pyenv-root|--stage)
+            (( $# >= 2 )) && [[ -n "$2" ]] || usage_error "Expected a path after $1."
+            case "$1" in
+                --home) forge_home_option=$2 ;;
+                --pyenv-root) pyenv_root_option=$2 ;;
+                --stage) stage_option=$2 ;;
+            esac
             shift 2
             ;;
         --install-build-deps) install_deps=true; shift ;;
@@ -71,7 +86,21 @@ state_dir="$bootstrap_root/jforge-bootstrap"
 lock_dir="$bootstrap_root/.jforge-bootstrap.lock"
 mkdir -p "$(dirname "$lock_dir")"
 mkdir "$lock_dir" || fail "Another installation may be running. If it was interrupted, remove $lock_dir and retry."
-trap 'rmdir "$lock_dir"' EXIT
+cleanup() {
+    local status=$?
+    if [[ -n "${build_stage-}" ]]; then
+        for log in "$build_stage"/python-build*.log; do
+            [[ ! -f "$log" ]] || cp "$log" "$state_dir/logs/$(basename "$log")"
+        done
+        if (( status == 0 )); then
+            rm -rf -- "$build_stage"
+        else
+            printf 'Build scratch retained at %s\n' "$build_stage" >&2
+        fi
+    fi
+    rmdir "$lock_dir"
+}
+trap cleanup EXIT
 
 install_build_deps() {
     if [[ "$platform" == Darwin ]]; then
@@ -159,7 +188,7 @@ build_library() {
     (cd "$work/$source_name" && ./configure --prefix="$prefix" --libdir="$prefix/lib" "$@") \
         > "$log" 2>&1 || { tail -n 30 "$log" >&2; fail "Could not configure $name. Full log: $log"; }
     printf 'Build Python dependency %s\n' "$name" >&2
-    make -C "$work/$source_name" -j4 >> "$log" 2>&1 ||
+    make -C "$work/$source_name" -j"$build_jobs" >> "$log" 2>&1 ||
         { tail -n 30 "$log" >&2; fail "Could not build $name. Full log: $log"; }
     printf 'Install Python dependency %s\n' "$name" >&2
     make -C "$work/$source_name" install >> "$log" 2>&1 ||
@@ -180,6 +209,71 @@ archive_sha256() {
     else
         shasum -a 256 "$1" | cut -d ' ' -f 1
     fi
+}
+
+preflight_linux_libraries() {
+    local missing=()
+    # Detect every non-bootstrapped required extension before any Python build.
+    # The three libraries prepared below are checked after their local fallback.
+    command -v "${CC:-cc}" >/dev/null || fail 'A host C compiler is required to build Python.'
+    command -v make >/dev/null || fail 'GNU make is required to build Python.'
+    has_library zlib.h '(void)zlibVersion()' -lz || missing+=("zlib (zlib.h, -lz; Python zlib)")
+    has_library bzlib.h '(void)BZ2_bzlibVersion()' -lbz2 || missing+=("bzip2 (bzlib.h, -lbz2; Python bz2)")
+    has_library lzma.h '(void)lzma_version_number()' -llzma || missing+=("xz (lzma.h, -llzma; Python lzma)")
+    has_library ffi.h '(void)ffi_prep_cif((ffi_cif *)0, FFI_DEFAULT_ABI, 0, &ffi_type_void, (ffi_type **)0)' -lffi ||
+        missing+=("libffi (ffi.h, -lffi; Python ctypes)")
+    has_library openssl/ssl.h 'char minimum_openssl[(OPENSSL_VERSION_NUMBER >= 0x10101000L) ? 1 : -1]; (void)minimum_openssl; (void)TLS_method()' -lssl -lcrypto ||
+        missing+=("OpenSSL >= 1.1.1 (openssl/ssl.h, -lssl -lcrypto; Python ssl)")
+    if (( ${#missing[@]} )); then
+        printf 'Missing Python build dependencies:\n' >&2
+        printf '  %s\n' "${missing[@]}" >&2
+        fail 'Prepare these development libraries before retrying; existing user libraries can be selected through CPPFLAGS/LDFLAGS/PKG_CONFIG_PATH. Python was not rebuilt.'
+    fi
+}
+
+available_build_jobs() {
+    local proc=${1:-/proc} count allowed kind root mount controllers selected group directory quota period limit
+    count=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf 1)
+    [[ "$count" =~ ^[1-9][0-9]*$ ]] || count=1
+    if [[ -r "$proc/self/status" ]]; then
+        allowed=$(awk '/^Cpus_allowed_list:/ {n=split($2,a,","); total=0; for(i=1;i<=n;i++){m=split(a[i],r,"-"); total+=(m==2?r[2]-r[1]+1:1)} print total}' "$proc/self/status")
+        if [[ "$allowed" =~ ^[1-9][0-9]*$ ]] && (( allowed < count )); then count=$allowed; fi
+    fi
+    if [[ -r "$proc/self/cgroup" && -r "$proc/self/mountinfo" ]]; then
+        while IFS=' ' read -r kind root mount controllers; do
+            root=${root//\\040/ }; mount=${mount//\\040/ }
+            while IFS=: read -r _ selected group; do
+                if [[ "$kind" == cgroup2 ]]; then
+                    [[ -z "$selected" ]] || continue
+                else
+                    [[ ",$selected," == *,cpu,* && ",$controllers," == *,cpu,* ]] || continue
+                fi
+                directory=$mount
+                if [[ "$group" == "$root"/* && "$group" != *..* ]]; then
+                    directory="$mount/${group#"$root"/}"
+                elif [[ "$root" == / && "$group" != *..* ]]; then
+                    directory="$mount$group"
+                fi
+                while :; do
+                    quota=max; period=1
+                    if [[ "$kind" == cgroup2 && -r "$directory/cpu.max" ]]; then
+                        read -r quota period < "$directory/cpu.max"
+                    elif [[ "$kind" == cgroup && -r "$directory/cpu.cfs_quota_us" && -r "$directory/cpu.cfs_period_us" ]]; then
+                        read -r quota < "$directory/cpu.cfs_quota_us"
+                        read -r period < "$directory/cpu.cfs_period_us"
+                    fi
+                    if [[ "$quota" =~ ^[1-9][0-9]*$ && "$period" =~ ^[1-9][0-9]*$ ]]; then
+                        limit=$(( (quota + period - 1) / period ))
+                        if (( limit < count )); then count=$limit; fi
+                    fi
+                    [[ "$directory" != "$mount" ]] || break
+                    directory=${directory%/*}
+                done
+            done < "$proc/self/cgroup"
+        done < <(awk '{for(i=1;i<=NF;i++) if($i=="-" && ($(i+1)=="cgroup" || $(i+1)=="cgroup2")) print $(i+1),$4,$5,$(i+3)}' "$proc/self/mountinfo")
+    fi
+    (( count <= 16 )) || count=16
+    printf '%s\n' "$count"
 }
 
 prepare_linux_libraries() {
@@ -214,16 +308,27 @@ prepare_linux_libraries() {
     fi
 }
 
-pyenv_root=$bootstrap_root
-private_pyenv="$bootstrap_root/bin/pyenv"
+pyenv_root=${pyenv_root_option:-$bootstrap_root}
+mkdir -p "$pyenv_root"
+pyenv_root=$(cd "$pyenv_root" && pwd -P)
+private_pyenv="$pyenv_root/bin/pyenv"
 if [[ ! -x "$private_pyenv" ]]; then
-    private_pyenv="$bootstrap_root/pyenv/bin/pyenv"
+    private_pyenv="$pyenv_root/pyenv/bin/pyenv"
 fi
 
 pyenv_bin=$private_pyenv
 base_python="$pyenv_root/versions/$python_version/bin/python"
-mkdir -p "$bootstrap_root/tmp" "$bootstrap_root/cache/pip" "$state_dir/logs"
-export TMPDIR="$bootstrap_root/tmp"
+mkdir -p "$bootstrap_root/cache/pip" "$bootstrap_root/cache/python" "$state_dir/logs"
+stage_root=${stage_option:-${SLURM_TMPDIR:-${TMPDIR:-/tmp}}}
+mkdir -p "$stage_root"
+stage_root=$(cd "$stage_root" && pwd -P)
+build_stage=$(mktemp -d "$stage_root/jforge-python.XXXXXXXX")
+export TMPDIR="$build_stage"
+export PYTHON_BUILD_CACHE_PATH="$bootstrap_root/cache/python"
+build_jobs=$(available_build_jobs)
+export MAKE_OPTS="-j$build_jobs"
+export MAKE_INSTALL_OPTS="-j$build_jobs"
+printf 'Python build policy: %s jobs · scratch %s\n' "$build_jobs" "$build_stage" >&2
 export PIP_CACHE_DIR="$bootstrap_root/cache/pip"
 
 if [[ ! -x "$pyenv_bin" ]]; then
@@ -255,6 +360,7 @@ PY
 
 if [[ ! -x "$base_python" ]] || ! validate_python 2> "$state_dir/logs/python-validation.log"; then
     if [[ "$platform" == Linux ]]; then
+        preflight_linux_libraries
         prepare_linux_libraries
     elif "$install_deps"; then
         install_build_deps
@@ -281,75 +387,137 @@ if [[ ! -e "$pyenv_root/version" && ! -L "$pyenv_root/version" ]]; then
 fi
 
 mkdir -p "$state_dir/bin"
+# Validate the selected data home before pip can change the installed client.
+forge_home_option=$("$base_python" -I - "$bootstrap_root" "$forge_home_option" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+selected = sys.argv[2] or os.environ.get("JFORGE_HOME")
+saved = root / "config/jarvis-forge/default-home.json"
+if not selected and saved.exists():
+    record = json.loads(saved.read_text())
+    selected = record.get("default_home")
+    if record.get("schema_version") != 1 or not isinstance(selected, str) or not Path(selected).is_absolute():
+        sys.exit(f"Invalid remembered Forge home: {saved}")
+home = Path(selected or root / "jforge").expanduser().resolve()
+if Path(sys.prefix).resolve().is_relative_to(home) or Path(sys.base_prefix).resolve().is_relative_to(home):
+    sys.exit("Forge home must be separate from the pyenv Python installation; select another --home directory.")
+config = home / "config.json"
+if config.exists():
+    record = json.loads(config.read_text())
+    if record.get("schema_version") != 1 or record.get("layout_version") != 4:
+        sys.exit(f"Unsupported Forge layout at {home}. Repeat setup with --home /path/to/new-forge; pyenv does not need rebuilding.")
+print(home)
+PY
+)
 pip_args=(install --no-user)
 if "$upgrade_package"; then
     pip_args+=(--upgrade)
 fi
-"$base_python" -I -m pip "${pip_args[@]}" Jarvis-Forge >&2
+"$base_python" -I -m pip "${pip_args[@]}" 'Jarvis-Forge>=1.2.1' >&2
 PYENV_ROOT="$pyenv_root" "$pyenv_bin" rehash
 
-launcher="$state_dir/bin/jforge"
-if [[ -e "$launcher" && ! -L "$launcher" ]]; then
-    if [[ ! -f "$launcher" ]] || ! grep -Fqx '# Jarvis-Forge bootstrap launcher' "$launcher"; then
-        fail "Move the existing file at $launcher before retrying."
-    fi
-fi
-launcher_tmp=$(mktemp "$state_dir/bin/.jforge.XXXXXX")
-# Keep the stable command used by saved Spack adapters, backed by the same
-# pyenv base interpreter that users upgrade with python -m pip.
-printf '#!/bin/bash\n# Jarvis-Forge bootstrap launcher\nexport JFORGE_HOME=${JFORGE_HOME:-%q}\nif [ "${1-}" = __jforge_controller_python ]; then\n    shift\n    exec %q -I -B "$@"\nfi\nexport JFORGE_CONTROLLER_LAUNCHER=%q\nexec %q -I -m jarvis_forge "$@"\n' \
-    "$bootstrap_root/jforge" "$base_python" "$launcher" "$base_python" > "$launcher_tmp"
-chmod u+x "$launcher_tmp"
-"$launcher_tmp" --version
-JFORGE_HOME="$bootstrap_root/jforge" XDG_CONFIG_HOME="$bootstrap_root/config" "$launcher_tmp" init >/dev/null
-mv -f "$launcher_tmp" "$launcher"
+# Publish installer-owned entries; Forge does not manage or repair this Python setup.
+"$base_python" -I - "$bootstrap_root" "$pyenv_root" "$pyenv_bin" "$base_python" "$forge_home_option" "$build_jobs" "$stage_root" <<'PY_SETUP'
+import json
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+import tempfile
 
-activation_file="$bootstrap_root/activate.sh"
-[[ ! -d "$activation_file" ]] || fail "Move the existing directory at $activation_file before retrying."
-activation_tmp=$(mktemp "$bootstrap_root/.activate.XXXXXX")
-{
-    printf 'export JFORGE_HOME=%q\n' "$bootstrap_root/jforge"
-    printf 'export PIP_CACHE_DIR=%q\n' "$bootstrap_root/cache/pip"
-    printf 'if [ -z "${PYENV_ROOT-}" ] || [ "$PYENV_ROOT" = %q ]; then\n' "$bootstrap_root"
-    printf '    export PYENV_ROOT=%q\n' "$bootstrap_root"
-    printf '    export PATH=%q:"$PATH"\n' "$(dirname "$private_pyenv")"
-    printf '    eval "$(%q init -)"\n' "$private_pyenv"
-    printf 'fi\n'
-    printf '_jforge_bootstrap_bin=%q\n' "$state_dir/bin"
-    cat <<'EOF'
-# Add the Jforge launcher to PATH while keeping the current Python selection.
-_jforge_bootstrap_path=${PATH:+":$PATH:"}
-case "$_jforge_bootstrap_path" in
-    ":$_jforge_bootstrap_bin:"*) ;;
-    *)
-        # Re-sourcing after package activation can find the launcher later in PATH.
-        while [ "${_jforge_bootstrap_path#*":$_jforge_bootstrap_bin:"}" != "$_jforge_bootstrap_path" ]; do
-            _jforge_bootstrap_path="${_jforge_bootstrap_path%%":$_jforge_bootstrap_bin:"*}:${_jforge_bootstrap_path#*":$_jforge_bootstrap_bin:"}"
-        done
-        export PATH="$_jforge_bootstrap_bin${_jforge_bootstrap_path%:}"
-        ;;
-esac
-unset _jforge_bootstrap_bin _jforge_bootstrap_path
+ACTIVATION_HEADER = "# Jarvis-Forge bootstrap activation v1\n"
+LAUNCHER_HEADER = "#!/bin/bash\n# Jarvis-Forge bootstrap launcher\n"
 
-# Load the shell hook for package changes and successful interactive builds.
+def launcher(data):
+    quote = shlex.quote
+    return (LAUNCHER_HEADER + f'export JFORGE_CONFIG_HOME={quote(data["config_home"])}\n'
+            'if [ "${1-}" = __jforge_controller_python ]; then\n    shift\n'
+            f'    exec {quote(data["python"])} -I -B "$@"\nfi\n'
+            f'export JFORGE_CONTROLLER_LAUNCHER={quote(data["launcher"])}\n'
+            f'exec {quote(data["python"])} -I -m jarvis_forge "$@"\n')
+
+def activation(data):
+    quote = shlex.quote
+    return (ACTIVATION_HEADER + f'export JFORGE_CONFIG_HOME={quote(data["config_home"])}\n'
+            f'export PIP_CACHE_DIR={quote(str(Path(data["root"]) / "cache/pip"))}\n' + r'''
+_jforge_bootstrap_prepend() {
+    local _jfp_bin=$1 _jfp_path
+    _jfp_path=${PATH:+":$PATH:"}
+    while [ "${_jfp_path#*":$_jfp_bin:"}" != "$_jfp_path" ]; do
+        _jfp_path="${_jfp_path%%":$_jfp_bin:"*}:${_jfp_path#*":$_jfp_bin:"}"
+    done
+    export PATH="$_jfp_bin${_jfp_path%:}"
+}
+''' +
+            f'if [ -z "${{PYENV_ROOT-}}" ] || [ "$PYENV_ROOT" = {quote(data["pyenv_root"])} ]; then\n'
+            f'    export PYENV_ROOT={quote(data["pyenv_root"])}\n'
+            f'    _jforge_bootstrap_prepend {quote(str(Path(data["pyenv"]).parent))}\n'
+            f'    if _jforge_pyenv_init=$({quote(data["pyenv"])} init -); then\n'
+            '        eval "$_jforge_pyenv_init" || printf "%s\\n" "jforge: Could not initialize pyenv." >&2\n'
+            '    else\n        printf "%s\\n" "jforge: Could not initialize pyenv." >&2\n    fi\n'
+            '    unset _jforge_pyenv_init\nfi\n'
+            f'_jforge_bootstrap_prepend {quote(str(Path(data["launcher"]).parent))}\n'
+            'unset -f _jforge_bootstrap_prepend\n' + r'''
 case "${0##*/}:$-" in
     sh:*|-sh:*) ;;
     *:*i*)
         if [ -n "${BASH_VERSION-}${ZSH_VERSION-}" ] &&
             _jforge_bootstrap_hook=$(command jforge shell-init); then
-            eval "$_jforge_bootstrap_hook"
+            eval "$_jforge_bootstrap_hook" || printf '%s\n' 'jforge: Could not load the shell hook.' >&2
         fi
         unset _jforge_bootstrap_hook
         ;;
 esac
-EOF
-} > "$activation_tmp"
-mv -f "$activation_tmp" "$activation_file"
+''')
+
+root = Path(sys.argv[1])
+data = {"schema_version": 1, "kind": "pyenv-installer", "root": str(root),
+        "pyenv_root": sys.argv[2], "pyenv": sys.argv[3], "python": sys.argv[4],
+        "python_version": sys.version.split()[0], "initial_forge_home": sys.argv[5],
+        "launcher": str(root / "jforge-bootstrap/bin/jforge"),
+        "activation": str(root / "activate.sh"), "config_home": str(root / "config"),
+        "build": {"jobs": int(sys.argv[6]), "stage": sys.argv[7]}}
+for key, header in (("launcher", LAUNCHER_HEADER), ("activation", ACTIVATION_HEADER)):
+    path = Path(data[key])
+    if path.is_symlink() or path.exists() and (not path.is_file() or not path.read_text().startswith(header)):
+        sys.exit(f"Choose a clean installer directory; unrecognized entry: {path}")
+
+def write(path, text, mode=0o600):
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            os.fchmod(stream.fileno(), mode)
+            stream.write(text)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+entry = Path(data["launcher"])
+fd, temporary = tempfile.mkstemp(dir=entry.parent)
+os.close(fd)
+try:
+    Path(temporary).write_text(launcher(data))
+    Path(temporary).chmod(0o700)
+    subprocess.run([temporary, "--home", sys.argv[5], "init"], check=True, stdout=subprocess.DEVNULL)
+    os.replace(temporary, entry)
+finally:
+    Path(temporary).unlink(missing_ok=True)
+write(Path(data["activation"]), activation(data))
+write(root / "jforge-bootstrap/metadata.json", json.dumps(data, indent=2) + "\n")
+PY_SETUP
+launcher="$state_dir/bin/jforge"
+activation_file="$bootstrap_root/activate.sh"
+"$launcher" --version
 
 if ! "$configure_startup"; then
     printf '\nActivate this installation with\n'
     printf 'source %q\n' "$activation_file"
-    printf 'Then run: jforge profile check\n'
+    if [[ "$platform" == Darwin ]]; then printf 'Then run: jforge profile check macos\n'; else printf 'Then run: jforge profile check ubuntu24\n'; fi
     exit 0
 fi
 
@@ -422,4 +590,4 @@ else
 fi
 
 printf '\nOpen a new terminal or run: exec %s -l\n' "$login_shell"
-printf 'Then run: jforge profile check\n'
+if [[ "$platform" == Darwin ]]; then printf 'Then run: jforge profile check macos\n'; else printf 'Then run: jforge profile check ubuntu24\n'; fi

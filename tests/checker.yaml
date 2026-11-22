@@ -276,6 +276,7 @@ groups:
   - tests/test_unified_profiles.py
   - tests/test_profile_model.py
   - tests/test_profile_transactions.py
+  - tests/test_profile_lifecycle.py
   - tests/test_package_lifecycle.py
   - tests/test_socket_runtime.py
   - tests/test_profile_exports.py
@@ -302,6 +303,9 @@ groups:
   - tests/test_paths.py
   - tests/test_profile_model.py
   - tests/test_profile_transactions.py
+  - tests/test_profile_lifecycle.py
+  - src/jarvis_forge/scope_locks.py
+  - src/jarvis_forge/scope_cleanup.py
   - tests/test_package_lifecycle.py
   - tests/test_socket_runtime.py
   - tests/test_profile_exports.py

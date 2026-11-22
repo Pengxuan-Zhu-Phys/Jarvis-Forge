@@ -377,7 +377,7 @@ def _globals(argv: list[str]) -> list[str]:
 _REPLACED={
     ('apt','check'):'apt install --dry-run',('apt','satisfy'):'apt install',('apt','reinstall'):'apt install --rebuild NAME',
     ('apt','full-upgrade'):'apt upgrade',('apt','instances'):'apt list',('apt','prefix'):'apt show NAME --path',
-    ('apt','env'):'profile show --path',('apt','edit-sources'):'apt sources',('apt','import'):'profile create NAME --platform ubuntu24',
+    ('apt','env'):'profile show --path',('apt','edit-sources'):'apt sources',('apt','import'):'profile create ubuntu24',
     ('apt','switch'):'profile use NAME',('apt','profile'):'profile',('apt','toolchain'):'profile show NAME',
     ('apt','compilers'):'profile show NAME',('apt','shell-init'):'shell-init',('build','plan'):'build install --dry-run',
     ('build','validate'):'build install --dry-run',('build','run'):'build install',('build','resume'):'build install APP',
@@ -395,7 +395,7 @@ def _reject_replaced(args):
         if pair==('apt','profile') and index+2<len(args):
             action=args[index+2]
             if action=='check':replacement='profile check'
-            elif action=='build' or '--create' in args:replacement='profile create NAME --platform PRESET'
+            elif action=='build' or '--create' in args:replacement='profile create ubuntu24'
             elif action=='apps':replacement='build list / jforge build install APP / jforge build remove APP'
             elif action=='global' or not action.startswith('-'):replacement='profile use NAME'
         raise ForgeError('Command replaced: jforge '+' '.join(pair)+'.',hint='Use jforge '+replacement)

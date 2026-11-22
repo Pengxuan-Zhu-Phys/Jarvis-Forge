@@ -5,7 +5,7 @@ from subprocess import TimeoutExpired
 
 from . import build_workspace, environment_registry, homebrew_backend
 from .package_operations import _inside
-from .shell_hook import BOOTSTRAP_HEADER, repair_bootstrap, repair_startup, startup_files
+from .shell_hook import repair_startup, startup_files
 from .shell_repair import WORKSPACE_HEADER, repair_apt_profile, repair_artifact, repair_file
 from .storage import ForgeError, ForgeHome, read_json
 
@@ -115,18 +115,6 @@ def repair_managed(home, *, dry_run=False, install_hook=False):
 
     for path, shell in startup:
         run("hook", path, repair_startup, home, path, install=install_hook, shell=shell)
-
-    bootstrap = Path.home() / ".jarvis-pyenv/jforge-bootstrap/activate.sh"
-    try:
-        existed = bootstrap.is_file() and not bootstrap.is_symlink()
-        run("bootstrap hook", bootstrap, repair_bootstrap, home, bootstrap)
-        if existed:
-            with bootstrap.open("rb") as stream:
-                generated = stream.readline() == BOOTSTRAP_HEADER.encode()
-            if generated:
-                run("bootstrap", bootstrap, repair_file, bootstrap, workspace_sources=workspace_sources, save_unchanged=False)
-    except OSError as exc:
-        failed("bootstrap", bootstrap, exc)
 
     return {"scope": "managed", "dry_run": dry_run, "targets": results, "errors": errors,
             "changed": sum(result["changed"] for result in results),

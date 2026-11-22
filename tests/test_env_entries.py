@@ -35,9 +35,9 @@ def write_backend(profile, revision="op-1", text="export FIXTURE_PKG=1\n"):
 
 def test_profile_entry_is_stable_and_queries_do_not_write(home,linux_apt,capsys):
     from profile_fixtures import project_profile
-    profile=project_profile(home);short=profile.root/'activate.sh'
+    profile=project_profile(home,'ubuntu24');short=profile.root/'activate.sh'
     original=short.read_bytes();mtime=short.stat().st_mtime_ns
-    assert main(['--home',str(home.root),'profile','show','--path'])==0
+    assert main(['--home',str(home.root),'profile','show','ubuntu24','--path'])==0
     assert Path(capsys.readouterr().out.strip())==short
     assert short.read_bytes()==original and short.stat().st_mtime_ns==mtime
 
@@ -84,8 +84,8 @@ def test_package_changes_publish_the_stable_entry_without_a_shell_hook(home, lin
 
 def test_profile_show_reports_metadata_without_backend_revision(home,linux_apt,capsys):
     from profile_fixtures import project_profile
-    profile=project_profile(home)
-    assert main(['--home',str(home.root),'profile','show'])==0
+    profile=project_profile(home,'ubuntu24')
+    assert main(['--home',str(home.root),'profile','show','ubuntu24'])==0
     output=capsys.readouterr().out
     assert str(profile.root/'activate.sh') in output and '0 packages' in output
 
