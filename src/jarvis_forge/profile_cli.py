@@ -77,10 +77,12 @@ def create(
         "progress": progress,
         "confirm": lambda plan: _changes_confirmation(ctx, yes, plan),
     }
+    success = False
     try:
         result = profiles.create(ctx.obj.home, name, **options)
+        success = result.get("status") == "ready"
     finally:
-        progress.close()
+        progress.close(success=success)
     emit(ctx, "profile create", **result)
 
 

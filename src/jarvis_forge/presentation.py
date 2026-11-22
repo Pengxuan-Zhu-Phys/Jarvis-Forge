@@ -24,6 +24,36 @@ def line(console, value="", *, style=None):
     console.print(Text(str(value), style=style), soft_wrap=True)
 
 
+def package_setup_message(console, message, *, indent=""):
+    """Render known setup notices without exposing backend wording."""
+    if message.startswith("GNU patch ") and message.endswith(" ready"):
+        version = message[len("GNU patch "):-len(" ready")]
+        text = Text(indent)
+        text.append("✓ ", style="green")
+        text.append("GNU patch", style="bold")
+        text.append(f"  {version}", style="cyan")
+        text.append(" · ready", style="dim")
+        console.print(text, soft_wrap=True)
+        return True
+    prefix = "Use pinned tool-suite versions: "
+    if message.startswith(prefix):
+        from rich.table import Table
+
+        line(console, indent + "Tool suite · pinned versions", style="bold")
+        table = Table.grid(padding=(0, 2))
+        table.add_column(style="dim")
+        table.add_column()
+        table.add_column(style="cyan", no_wrap=True)
+        names = {"gcc": "GCC", "cmake": "CMake", "gmake": "GNU Make",
+                 "autoconf": "Autoconf", "automake": "Automake"}
+        for spec in message[len(prefix):].split(", "):
+            name, _, version = spec.partition("@")
+            table.add_row(indent, Text(names.get(name, name)), Text(version, style="cyan"))
+        console.print(table)
+        return True
+    return False
+
+
 def label(key):
     return {"operation_id": "Operation", "run_id": "Run", "suite_id": "Suite", "install_id": "Instance",
             "official_source": "Official source", "source_packages": "Source packages", "updated_at": "Updated",
@@ -216,6 +246,18 @@ def apt_packages(console, values):
     if packages:
         line(console)
         line(console, "Details: jforge apt show <package>", style="dim")
+
+
+def package_change_plan(console, changes, *, verbose=False, indent=""):
+    for action in ("install", "upgrade", "rebuild", "remove"):
+        rows = changes.get(action, [])
+        if not rows:
+            continue
+        packages = ", ".join(row["name"] + "@" + str(row.get("version", "")) for row in rows)
+        message = action.capitalize() + ": " + packages
+        if not verbose and Text(indent + message).cell_len > console.width:
+            message = action.capitalize() + f": {len(rows)} packages"
+        line(console, indent + message)
 
 
 def apt_transaction(console, command, values):

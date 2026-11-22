@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import codecs
 from contextlib import contextmanager
+from contextvars import ContextVar
 import os
 from pathlib import Path
 import re
@@ -15,7 +16,23 @@ from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.text import Text
 
-from .presentation import line
+from .presentation import line, package_setup_message
+
+_ACTIVE_PROGRESS = ContextVar("forge_active_package_progress", default=None)
+
+
+def current_progress():
+    return _ACTIVE_PROGRESS.get()
+
+
+@contextmanager
+def progress_context(progress):
+    token = _ACTIVE_PROGRESS.set(progress)
+    try:
+        yield progress
+    finally:
+        _ACTIVE_PROGRESS.reset(token)
+
 
 
 class _KnownTotalColumn(MofNCompleteColumn):
@@ -137,6 +154,10 @@ class AptProgress:
                 line(self.console, self.indent + "Preparing Spack environment...")
                 self.preparing = True
         else:
+            if not self.verbose and not self.as_json and package_setup_message(
+                self.console, message, indent=self.indent
+            ):
+                return
             line(self.console, self.indent + message)
 
     @contextmanager

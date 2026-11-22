@@ -43,6 +43,9 @@ groups:
   - tests/test_standard_checks.py
   - tests/test_build_cards.py
   inputs:
+  - src/jarvis_forge/apt_cli.py
+  - src/jarvis_forge/apt_progress.py
+  - src/jarvis_forge/presentation.py
   - src/jarvis_forge/toolchains.py
   - src/jarvis_forge/cmake.py
   - src/jarvis_forge/build*.py
@@ -290,6 +293,10 @@ groups:
   - tests/test_profile_exports.py
   - tests/test_build_apps.py
   inputs:
+  - src/jarvis_forge/profile_cli.py
+  - src/jarvis_forge/apt_cli.py
+  - src/jarvis_forge/apt_progress.py
+  - src/jarvis_forge/presentation.py
   - src/jarvis_forge/cmake.py
   - src/jarvis_forge/toolchain*.py
   - src/jarvis_forge/unified_profiles.py

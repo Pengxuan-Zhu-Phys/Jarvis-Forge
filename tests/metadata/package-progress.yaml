@@ -1,0 +1,96 @@
+schema_version: 1
+kind: test-metadata
+project_id: jarvis-forge
+scope:
+  component: package-progress
+  preconditions: Local development Python; isolated fake package backend; no downloads
+    or remote nodes.
+definitions:
+- id: forge.progress.install-entrypoints-keep-live-progress
+  title: Installation plans preserve live package progress
+  purpose: Profile and apt entry points keep active tasks during initial and fallback
+    plans; only validated success finalizes missing completion events.
+  binding:
+    adapter: pytest
+    selector: tests/test_apt_progress.py::test_install_entrypoints_keep_live_progress_after_plan_and_retry
+  scenario:
+    inputs:
+      backend: isolated fake package backend
+      terminal: forced-terminal console or local pseudo-terminal
+    action: Run the installation entry point and observe plans, active tasks and completion.
+  criteria:
+  - id: lifecycle
+    expected: Profile and apt entry points keep active tasks during initial and fallback
+      plans; only validated success finalizes missing completion events.
+    verification: automated
+  failure_meaning: Printing a plan disables or corrupts subsequent package progress.
+  limitations:
+  - Does not validate a real remote package installation.
+  review:
+    status: draft
+- id: forge.progress.json-install-plan-is-machine-readable
+  title: JSON installation plans remain machine readable
+  purpose: Plan observers do not close progress or introduce human-readable plan output
+    into JSON stdout.
+  binding:
+    adapter: pytest
+    selector: tests/test_apt_progress.py::test_json_install_plan_keeps_stdout_machine_readable
+  scenario:
+    inputs:
+      backend: isolated fake package backend
+      terminal: forced-terminal console or local pseudo-terminal
+    action: Run the installation entry point and observe plans, active tasks and completion.
+  criteria:
+  - id: lifecycle
+    expected: Plan observers do not close progress or introduce human-readable plan
+      output into JSON stdout.
+    verification: automated
+  failure_meaning: Printing a plan disables or corrupts subsequent package progress.
+  limitations:
+  - Does not validate a real remote package installation.
+  review:
+    status: draft
+- id: forge.progress.build-dependency-plan-console
+  title: Build dependency plans share the active console
+  purpose: Build dependency callbacks use their live package console and restore the
+    previous progress context after installation.
+  binding:
+    adapter: pytest
+    selector: tests/test_project_builds.py::test_build_dependency_plan_uses_its_active_package_console
+  scenario:
+    inputs:
+      backend: isolated fake package backend
+      terminal: forced-terminal console or local pseudo-terminal
+    action: Run the installation entry point and observe plans, active tasks and completion.
+  criteria:
+  - id: lifecycle
+    expected: Build dependency callbacks use their live package console and restore
+      the previous progress context after installation.
+    verification: automated
+  failure_meaning: Printing a plan disables or corrupts subsequent package progress.
+  limitations:
+  - Does not validate a real remote package installation.
+  review:
+    status: draft
+- id: forge.progress.terminal-install-progress
+  title: Live installation progress in a real terminal
+  purpose: Profile and apt installations render running packages and activity bars
+    after printing a plan through a real pseudo-terminal.
+  binding:
+    adapter: pytest
+    selector: tests/test_package_terminal.py::test_install_progress_survives_plan_printing_in_a_real_terminal
+  scenario:
+    inputs:
+      backend: isolated fake package backend
+      terminal: forced-terminal console or local pseudo-terminal
+    action: Run the installation entry point and observe plans, active tasks and completion.
+  criteria:
+  - id: lifecycle
+    expected: Profile and apt installations render running packages and activity bars
+      after printing a plan through a real pseudo-terminal.
+    verification: automated
+  failure_meaning: Printing a plan disables or corrupts subsequent package progress.
+  limitations:
+  - Does not validate a real remote package installation.
+  review:
+    status: draft

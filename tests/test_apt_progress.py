@@ -438,3 +438,79 @@ def test_completed_package_rows_remain_in_scrollback_when_next_package_starts(mo
         assert [row['elapsed_seconds'] for row in progress.completed_rows] == [65, 25]
     finally:
         progress.close()
+
+
+@pytest.mark.parametrize('command',['profile','apt'])
+@pytest.mark.parametrize('width',[40,90])
+@pytest.mark.parametrize('fails',[False,True])
+def test_install_entrypoints_keep_live_progress_after_plan_and_retry(tmp_path,monkeypatch,command,width,fails):
+    from jarvis_forge import cli, unified_profiles
+    monkeypatch.delenv('NO_COLOR',raising=False)
+    monkeypatch.setenv('TERM','xterm-256color')
+    screen=io.StringIO();console=Console(file=screen,force_terminal=True,width=width)
+    monkeypatch.setattr(cli,'_console',lambda stderr=False:console)
+    monkeypatch.setattr(apt_cli,'ensure_active',lambda home,**kwargs:home)
+    seen=[]
+    packages=[dict(name=name,version='1.0',hash=hash,root=True,external=False,installed=False)
+              for name,hash in [('alpha','aaaaaaa111'),('beta','bbbbbbb222')]]
+    def install(progress,confirm):
+        seen.append(progress)
+        progress('[1/4] Resolve dependencies');progress('[2/4] Check installation plan')
+        confirm({'install':[{'name':f'package-{i}','version':'1.0'} for i in range(40)]})
+        assert not progress.closed and progress.live.live.is_started
+        progress('[3/4] Install packages');progress.installation_plan(packages)
+        progress.output('stdout',b'[ ] aaaaaaa alpha@1.0 build (0s)\n[ ] bbbbbbb beta@1.0 install (0s)\n')
+        assert len(progress.in_flight)==2
+        confirm({'rebuild':[{'name':'alpha','version':'1.0'}]})
+        assert not progress.closed and progress.live.live.is_started and len(progress.in_flight)==2
+        capture=io.StringIO();Console(file=capture,width=width,color_system=None).print(progress.live.get_renderable())
+        display=capture.getvalue()
+        assert 'alpha@1.0' in display and 'beta@1.0' in display and '━' in display
+        progress.output('stdout',b'[+] aaaaaaa alpha@1.0 /prefix (1s)\n')
+        assert len(progress.in_flight)==1 and progress.live.live.is_started
+        if fails:raise ForgeError('fixture installation failed')
+        # A verified success must finalize a package whose final display event
+        # was missing; it must never finalize missing packages on failure.
+        progress('[4/4] Save environment')
+    if command=='profile':
+        def create(home,name,**kwargs):
+            install(kwargs['progress'],kwargs['confirm'])
+            return {'id':name,'status':'ready','activation':str(tmp_path/'activate.sh')}
+        monkeypatch.setattr(unified_profiles,'create',create)
+        args=['profile','create','ubuntu24']
+    else:
+        def transact(home,action,specs,**kwargs):
+            install(kwargs['progress'],kwargs['confirm'])
+            return {'status':'passed','roots':list(specs),'packages':[]}
+        monkeypatch.setattr(spack_backend,'transact',transact)
+        args=['apt','install','fixture']
+    assert main(['--home',str(tmp_path/'forge'),*args])==(2 if fails else 0)
+    progress,=seen
+    assert progress.closed and not progress.live.live.is_started
+    assert len(progress.completed_rows)==(1 if fails else 2)
+    assert 'Install: 40 packages' in screen.getvalue() and 'package-39@1.0' not in screen.getvalue()
+
+
+@pytest.mark.parametrize('command',['profile','apt'])
+def test_json_install_plan_keeps_stdout_machine_readable(tmp_path,monkeypatch,capsys,command):
+    from jarvis_forge import unified_profiles
+    monkeypatch.setattr(apt_cli,'ensure_active',lambda home,**kwargs:home)
+    def flow(progress,confirm):
+        progress('[1/4] Resolve dependencies')
+        confirm({'install':[{'name':'alpha','version':'1.0'}]})
+        assert not progress.closed and progress.live is None
+    if command=='profile':
+        def create(home,name,**kwargs):
+            flow(kwargs['progress'],kwargs['confirm'])
+            return {'id':name,'status':'ready','activation':str(tmp_path/'activate.sh')}
+        monkeypatch.setattr(unified_profiles,'create',create)
+        args=['profile','create','ubuntu24']
+    else:
+        def transact(home,action,specs,**kwargs):
+            flow(kwargs['progress'],kwargs['confirm'])
+            return {'status':'passed','packages':[]}
+        monkeypatch.setattr(spack_backend,'transact',transact)
+        args=['apt','install','alpha']
+    assert main(['--home',str(tmp_path/'forge'),'--json',*args])==0
+    output=capsys.readouterr()
+    assert json.loads(output.out)['ok'] and 'Install:' not in output.out

@@ -8,3 +8,4 @@ documents:
 - profile-lifecycle.yaml
 - build-tool-reuse.yaml
 - rpath.yaml
+- package-progress.yaml

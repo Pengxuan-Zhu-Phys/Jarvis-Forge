@@ -1527,3 +1527,37 @@ def test_source_lock_lives_in_the_git_directory(home, tmp_path):
     loose.mkdir()
     other = builds.source_cmake_lock(home, loose)
     assert other.is_relative_to(home.root / "locks/sources")
+
+
+def test_build_dependency_plan_uses_its_active_package_console(home,tmp_path,monkeypatch,linux_apt):
+    import io
+    from rich.console import Console
+    from jarvis_forge import cli, apt_cli, spack_backend
+    from jarvis_forge.apt_progress import current_progress
+    monkeypatch.delenv('NO_COLOR',raising=False);monkeypatch.setenv('TERM','xterm-256color')
+    console=Console(file=io.StringIO(),force_terminal=True,width=90)
+    monkeypatch.setattr(cli,'_console',lambda stderr=False:console)
+    context=SimpleNamespace(obj=SimpleNamespace(as_json=False))
+    seen=[]
+    def install(target,action,specs,**kwargs):
+        display=current_progress();seen.append(display)
+        assert display is kwargs['progress'].display
+        progress=kwargs['progress'];progress('[1/4] Resolve dependencies')
+        kwargs['confirm']({'install':[{'name':'gsl','version':'2.8'}]})
+        assert display.live.live.is_started and not display.closed
+        progress('[3/4] Install packages')
+        progress.installation_plan([dict(name='gsl',version='2.8',hash='abcdefg111',external=False,installed=False)])
+        progress.output('stdout',b'[ ] abcdefg gsl@2.8 build (0s)\n')
+        assert len(display.in_flight)==1
+        kwargs['confirm']({'rebuild':[{'name':'gsl','version':'2.8'}]})
+        assert display.live.live.is_started and len(display.in_flight)==1
+        progress.output('stdout',b'[+] abcdefg gsl@2.8 /prefix (1s)\n')
+        activation=target.root/'spack/runtime/activate.sh';activation.write_text(':\n')
+        lock=target.root/'spack.lock';lock.write_text('{}')
+        return {'activation':str(activation),'lockfile':str(lock),'packages':[]}
+    monkeypatch.setattr(spack_backend,'transact',install)
+    card=tmp_path/'deps.yaml';card.write_text(yaml.safe_dump({'name':'deps','dependencies':['gsl'],'checks':{'after':[['true']]}}))
+    result=builds.execute(home,card,confirm=lambda plan:apt_cli._changes_confirmation(context,False,plan))
+    assert result['status']=='passed',result
+    assert current_progress() is None and len(seen)==1 and seen[0].closed
+    assert 'Install: gsl@2.8' in console.file.getvalue()

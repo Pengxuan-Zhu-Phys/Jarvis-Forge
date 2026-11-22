@@ -1104,9 +1104,10 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
         # use the compiler supplied by its shared platform.
         # The screen uses the same phase and package display as `jforge apt install`.
         display = AptProgress(_console(stderr=True), verbose=verbose, as_json=as_json, indent="  ")
+        from .apt_progress import progress_context
         reporter = _AptInstallProgress(progress, display, logs)
         try:
-            with process_environment(environment):
+            with process_environment(environment), progress_context(display):
                 target = ensure_active(home, progress=reporter,
                                        selected=ForgeHome(Path(apt_profile["path"])) if apt_profile else None)
                 _require_spack_profile(target)

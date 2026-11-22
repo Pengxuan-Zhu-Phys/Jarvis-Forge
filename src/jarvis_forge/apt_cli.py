@@ -28,22 +28,18 @@ def _confirm(ctx, yes, message):
 
 
 def _changes_confirmation(ctx, yes, changes):
-    if progress := getattr(ctx.obj, "apt_progress", None):
-        progress.close()
+    # This callback is a plan observer, not the end of an installation.
+    # Printing through the live console preserves its cursor and refresh area.
     if not ctx.obj.as_json:
         from .cli import _console
-        from .presentation import line
+        from .apt_progress import current_progress
+        from .presentation import package_change_plan
 
-        for action in ("install", "upgrade", "rebuild", "remove"):
-            if rows := changes.get(action):
-                line(
-                    _console(stderr=True),
-                    action.capitalize()
-                    + ": "
-                    + ", ".join(
-                        row["name"] + "@" + str(row.get("version", "")) for row in rows
-                    ),
-                )
+        progress = current_progress() or getattr(ctx.obj, "apt_progress", None)
+        console = progress.console if progress is not None else _console(stderr=True)
+        package_change_plan(console, changes,
+                            verbose=getattr(progress, "verbose", getattr(ctx.obj, "verbose", False)),
+                            indent=getattr(progress, "indent", ""))
 
 
 def _progress(ctx):

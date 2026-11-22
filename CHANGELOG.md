@@ -2,10 +2,19 @@
 
 ## Unreleased
 
+### Changed
+
+- Present bootstrap patch readiness and pinned tool-suite versions as a styled status line and aligned version summary across profile, apt and build dependency installation; preserve original notices in detailed mode.
+
 ### Fixed
 
+- Keep package progress live after displaying installation and fallback plans. Profile creation, apt installation and build dependencies share the active progress console; long plans use concise counts, and successful profile creation finalizes package progress.
 - Preserve recipe summary tables when descriptions are long, and move long app installation paths below aligned summaries. Measure error panel contents by terminal cells so Unicode paths remain complete and copyable.
 - Keep package inventories aligned on ordinary SSH terminals. When the Source column does not fit, group packages by source and retain the four-column table; narrow screens place package metadata on a separate line without truncating names or versions.
+
+### Known issues
+
+- Profile tool and application scopes still use separate bootstrap locations. Hosts without patch can build it twice within one profile; solver and signature-tool bootstrap dependencies may also be prepared separately. Consolidating bootstrap tools is tracked as PF-16 and is not implemented in this change.
 
 ## 1.2.2 — 2026-11-23
 

@@ -119,10 +119,12 @@ def test_linux_source_install_bootstraps_missing_patch_and_reuses_it(tmp_path, m
     (host_bin / "patch").symlink_to("/bin/sh")
     b.run(home, b._install_args(4, "never"), op, "install-with-host-patch")
     assert "export PATH=" not in contexts[-1]
+    from rich.text import Text
+    rendered = Text.from_ansi(screen.getvalue()).plain
     assert all(message in screen.getvalue() for message in (
         "Fetch GNU patch", "Configure GNU patch", "Build GNU patch", "Verify GNU patch",
-        f"GNU patch {bootstrap_patch.VERSION} ready",
     ))
+    assert f"GNU patch  {bootstrap_patch.VERSION} · ready" in rendered
     if terminal:
         assert f"{len(archive_data)}/{len(archive_data)} bytes" in screen.getvalue()
         assert not progress.live.tasks and not progress.live.live.is_started
