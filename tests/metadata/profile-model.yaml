@@ -1774,3 +1774,27 @@ definitions:
   - Does not certify a real HPC bootstrap or Homebrew installation.
   review:
     status: draft
+- id: forge.profiles.inventory-table-adapts-without-inline-metadata-dump
+  title: Responsive profile inventory tables
+  purpose: Keep inventories aligned after adding source categories on ordinary SSH
+    terminals.
+  binding:
+    adapter: pytest
+    selector: tests/test_apt.py::test_inventory_table_adapts_without_inline_metadata_dump
+  scenario:
+    inputs:
+      environment: Representative long package names and versions at 40, 80 and 120
+        columns.
+    action: Render the same package inventory across terminal widths.
+  criteria:
+  - id: layout
+    expected: Wide displays retain Source; ordinary displays group four-column tables;
+      narrow displays preserve identities and place metadata below. Distinct installations
+      remain visible.
+    verification: automated
+  failure_meaning: A long value or the source column downgrades the whole inventory
+    to an unaligned tag dump.
+  limitations:
+  - Checks local text rendering without a remote package installation.
+  review:
+    status: draft

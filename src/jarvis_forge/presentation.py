@@ -118,8 +118,12 @@ def package_kind(item):
     return ""
 
 
-def _columns(console, headers, rows):
-    widths = [max(Text(row[i]).cell_len for row in [headers, *rows]) for i in range(len(headers))]
+def _column_widths(headers, rows):
+    return [max(Text(row[i]).cell_len for row in [headers, *rows]) for i in range(len(headers))]
+
+
+def _columns(console, headers, rows, *, widths=None):
+    widths = widths or _column_widths(headers, rows)
     if sum(widths) + 2 * len(headers) > console.width:
         return False
     for index, row in enumerate([headers, *rows]):
@@ -151,11 +155,43 @@ def package_rows(console, packages, *, planned=False):
     if not rows:
         line(console, "  No matching packages.")
         return
-    if not _columns(console, headers, rows):
-        # Preserve full identifiers and category labels on narrow terminals.
-        for name, version, *labels in rows:
-            tags = "; ".join(v for v in labels if v != "—")
-            line(console, f"  {name} {version} [{tags}]")
+    if _columns(console, headers, rows):
+        return
+
+    def compact_table(items, widths):
+        basic_headers = ["Package", "Version", "Kind", "State"]
+        if _columns(console, basic_headers, items, widths=widths):
+            return
+        # Keep the aligned identity columns and move metadata below them.
+        # soft_wrap preserves full names/versions even on very small terminals.
+        identity_widths = _column_widths(basic_headers[:2], items)
+        line(console, "  " + "Package".ljust(identity_widths[0]) + "  Version", style="bold")
+        for name, version, kind, state in items:
+            text = Text("  ")
+            text.append(name, style="cyan")
+            text.append(" " * (identity_widths[0] - Text(name).cell_len + 2) + version)
+            console.print(text, soft_wrap=True)
+            line(console, "    " + " · ".join(v for v in (kind, state) if v != "—"), style="dim")
+
+    if not categorized:
+        compact_table(rows, _column_widths(headers, rows))
+        return
+    # An extra source column must not downgrade an entire SSH package list.
+    # Group by that source and retain the original four aligned columns.
+    basic = [[name, version, kind, state] for name, version, source, kind, state in rows]
+    widths = _column_widths(["Package", "Version", "Kind", "State"], basic)
+    titles = {"base tool": "Base tools", "bootstrap dep": "Bootstrap dependencies",
+              "application": "Application packages", "—": "Other packages"}
+    visible = 0
+    for source, title in titles.items():
+        group = [[name, version, kind, state] for name, version, category, kind, state in rows if category == source]
+        if not group:
+            continue
+        if visible:
+            line(console)
+        line(console, f"{title} · {len(group)}", style="bold")
+        compact_table(group, widths)
+        visible += 1
 
 
 def package_summary(console, packages):

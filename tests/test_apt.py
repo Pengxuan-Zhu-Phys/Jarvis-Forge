@@ -125,5 +125,42 @@ def test_profile_inventory_unifies_stores_without_changing_native_state(tmp_path
         screen = io.StringIO()
         package_rows(Console(file=screen, width=width), rows)
         text = screen.getvalue()
-        assert all(label in text for label in ('base tool', 'bootstrap dep', 'application'))
+        assert all(label in text.lower() for label in ('base tool', 'bootstrap dep', 'application'))
         assert text.count('gcc-runtime') == 2 and text.count('gmp') == 2
+
+
+@pytest.mark.parametrize('width', [40, 80, 120])
+def test_inventory_table_adapts_without_inline_metadata_dump(width):
+    import copy
+    import io
+    from rich.console import Console
+    from jarvis_forge.presentation import package_rows
+    rows=[
+        dict(name='gcc',version='13.3.0',category='base-tool',root=True,active=True),
+        dict(name='ca-certificates-mozilla',version='2026-03-19',category='bootstrap-dependency',root=False,installed=True),
+        dict(name='glibc',version='2.34',category='bootstrap-dependency',root=False,active=True,external=True),
+        dict(name='rapidjson',version='1.2.0-2024-08-16',category='application',root=False,active=True),
+        dict(name='bzip2',version='1.0.8',category='bootstrap-dependency',root=False,active=True),
+        dict(name='bzip2',version='1.0.8',category='application',root=False,active=True),
+    ]
+    before=copy.deepcopy(rows)
+    screen=io.StringIO();package_rows(Console(file=screen,width=width),rows)
+    text=screen.getvalue()
+    assert rows==before
+    assert 'ca-certificates-mozilla' in text and '1.2.0-2024-08-16' in text
+    assert text.count('bzip2')==2 and 'active, external' in text
+    assert '[application;' not in text and '[bootstrap dep;' not in text
+    if width==120:
+        assert 'Source' in text and 'Bootstrap dependencies' not in text
+    else:
+        assert all(label in text for label in ('Base tools','Bootstrap dependencies','Application packages'))
+        headers=[line for line in text.splitlines() if line.strip().startswith('Package')]
+        assert len(headers)==3
+        if width==80:
+            assert all(line.split()==['Package','Version','Kind','State'] for line in headers)
+            assert len({tuple(line.index(key) for key in ('Package','Version','Kind','State')) for line in headers})==1
+            state_column=headers[0].index('State')
+            assert next(line for line in text.splitlines() if line.strip().startswith('glibc ')).index('active, external')==state_column
+        else:
+            assert all(line.split()==['Package','Version'] for line in headers)
+            assert any(line.strip()=='dependency · active, external' for line in text.splitlines())

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Keep package inventories aligned on ordinary SSH terminals. When the Source column does not fit, group packages by source and retain the four-column table; narrow screens place package metadata on a separate line without truncating names or versions.
+
 ## 1.2.2 — 2026-11-23
 
 ### Changed
