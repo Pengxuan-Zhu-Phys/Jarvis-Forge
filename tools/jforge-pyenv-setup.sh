@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage: bash jforge-pyenv-setup.sh [OPTIONS]
-Install pyenv, Python and Jarvis-Forge under the current directory.
+Install pyenv, Python and the latest PyPI Jarvis-Forge release under the current directory.
 Source ./activate.sh after installation to load this installation.
 
 Options
@@ -14,7 +14,7 @@ Options
   --python <version>       Select a CPython patch version (default: 3.13.15).
   --install-build-deps     Install macOS build dependencies through Homebrew.
                           Linux prepares missing Python libraries locally by default.
-  --upgrade               Upgrade Jarvis-Forge in this pyenv Python installation.
+  --upgrade               Install the latest Jarvis-Forge release (the default).
   --shell-config          Register activate.sh in your Bash/Zsh startup files.
   --no-shell-config       Print a source command without editing startup files (default).
   -h, --help              Show this message and exit.
@@ -33,7 +33,6 @@ usage_error() {
 
 python_version=3.13.15
 install_deps=false
-upgrade_package=false
 configure_startup=false
 forge_home_option=
 pyenv_root_option=
@@ -55,7 +54,7 @@ while (( $# )); do
             shift 2
             ;;
         --install-build-deps) install_deps=true; shift ;;
-        --upgrade) upgrade_package=true; shift ;;
+        --upgrade) shift ;;
         --shell-config) configure_startup=true; shift ;;
         --no-shell-config) configure_startup=false; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -413,11 +412,7 @@ if config.exists():
 print(home)
 PY
 )
-pip_args=(install --no-user)
-if "$upgrade_package"; then
-    pip_args+=(--upgrade)
-fi
-"$base_python" -I -m pip "${pip_args[@]}" 'Jarvis-Forge>=1.2.1' >&2
+"$base_python" -I -m pip install --no-user --upgrade --no-cache-dir Jarvis-Forge >&2
 PYENV_ROOT="$pyenv_root" "$pyenv_bin" rehash
 
 # Publish installer-owned entries; Forge does not manage or repair this Python setup.

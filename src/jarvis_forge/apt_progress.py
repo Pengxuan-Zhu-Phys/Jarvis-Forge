@@ -55,14 +55,14 @@ class _InstallProgress(Progress):
         if not active:
             return
         compact = self.console.width < 72
-        activity = self.console.width >= 80
+        bar_width = max(8, min(24, self.console.width // 6))
         table = Table(box=None, padding=(0, 1), expand=True, header_style="dim")
         table.add_column("", width=1)
         table.add_column("Package / phase" if compact else "Package", ratio=2)
         if not compact:
             table.add_column("Phase", ratio=1)
-        if activity:
-            table.add_column("Activity", width=8)
+        if not compact:
+            table.add_column("Activity", width=bar_width)
         if compact:
             table.add_column("Time: phase / total", justify="right")
         else:
@@ -71,11 +71,14 @@ class _InstallProgress(Progress):
         for task in active:
             phase = task.fields["phase"]
             name = task.fields["package"]
-            row = [self.columns[0].render(task), Text(name + ("\n" + phase if compact else ""))]
+            activity = ProgressBar(total=None, width=bar_width, pulse=True, animation_time=task.get_time())
+            label = (Group(Text(name), Text(phase, style="cyan"), activity)
+                     if compact else Text(name))
+            row = [self.columns[0].render(task), label]
             if not compact:
                 row.append(Text(phase, style="cyan"))
-            if activity:
-                row.append(ProgressBar(total=None, width=8, pulse=True, animation_time=task.get_time()))
+            if not compact:
+                row.append(activity)
             phase_time = _duration(task.get_time() - task.fields["phase_started"])
             total_time = _duration(task.elapsed)
             row.extend([Text(phase_time + " / " + total_time)] if compact else [Text(phase_time), Text(total_time)])

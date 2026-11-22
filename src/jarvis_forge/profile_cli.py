@@ -28,12 +28,12 @@ def list_profiles(ctx: typer.Context):
 
 
 @app.command("check")
-def check(ctx: typer.Context, preset: str = typer.Argument(...)):
-    """Check host, CPU and external Python prerequisites without installing anything."""
+def check(ctx: typer.Context, name: Optional[str] = typer.Argument(None, metavar="NAME")):
+    """Check one built-in profile, or all profiles when NAME is omitted."""
     from .cli import emit
 
-    result = profiles.check(ctx.obj.home, preset)
-    failed = bool(preset) and all(
+    result = profiles.check(ctx.obj.home, name)
+    failed = bool(name) and all(
         row["status"] not in {"buildable", "ready"} for row in result["profiles"]
     )
     emit(ctx, "profile check", ok=not failed, **result)

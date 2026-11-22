@@ -114,8 +114,11 @@ esac
     assert not (root / "jforge-bootstrap/venvs").exists()
 
     fixture_wheel(wheels, "1.2.2")
-    run([str(python), "-m", "pip", "install", "--upgrade", "Jarvis-Forge"])
+    run(args)  # Rerunning setup must upgrade without a flag or version constraint.
     assert run([str(launcher), "--version"]).stdout.strip() == "Jarvis-Forge 1.2.2"
+    fixture_wheel(wheels, "1.2.3")
+    run([str(python), "-m", "pip", "install", "--upgrade", "Jarvis-Forge"])
+    assert run([str(launcher), "--version"]).stdout.strip() == "Jarvis-Forge 1.2.3"
     installed = json.loads(run([str(python), "-I", "-c",
                                "import json,jarvis_forge; print(json.dumps(jarvis_forge.__file__))"]).stdout)
     assert Path(installed).is_relative_to(prefix)
@@ -125,7 +128,7 @@ esac
         if executable := shutil.which(shell):
             probe = 'source "$1/activate.sh"; source "$1/activate.sh"; jforge --version; command python -m jarvis_forge --version'
             assert run([executable, *options, "-c", probe, "probe", str(root)]).stdout.splitlines() == [
-                "Jarvis-Forge 1.2.2", "Jarvis-Forge 1.2.2"]
+                "Jarvis-Forge 1.2.3", "Jarvis-Forge 1.2.3"]
     assert list(login.iterdir()) == []
 
 

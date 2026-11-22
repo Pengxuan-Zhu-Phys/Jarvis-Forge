@@ -4,6 +4,9 @@
 
 ### Changed
 
+- Install or upgrade to the latest stable PyPI Jarvis-Forge release whenever the standalone pyenv setup runs, without a client version constraint.
+- Keep per-package activity bars visible in narrow terminals and scale their width on larger screens, while retaining aligned completion records above the live progress area.
+- Check all built-in profiles when `jforge profile check` is run without a name; a supplied name still checks only that profile.
 - Replace the shared platform/profile model with four complete built-in profiles: `ubuntu22`, `ubuntu24`, `ubuntu26` and `macos`. Keep only profile check/create/use/show/remove; each profile owns its compiler tools, packages, applications and activation entry.
 - Display native apt/build/profile plans and execute directly, including non-interactive and JSON operations. Dependency, ownership, host, Python and active-operation checks still apply.
 - Separate the standalone pyenv installer's Python root and Forge data home. Preserve explicit home selection, use node scratch storage and automatic CPU budgets, and report missing Python development libraries before compilation.

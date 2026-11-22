@@ -109,7 +109,7 @@ def test_profile_cli_has_only_the_five_builtin_operations(tmp_path, capsys):
     assert main([*args, "show"]) == 0
     assert {row["id"] for row in json.loads(capsys.readouterr().out)["instances"]} == {"ubuntu22", "ubuntu24", "ubuntu26", "macos"}
     for removed in (["export", "ubuntu24"], ["create", "ubuntu24", "--platform", "ubuntu24"],
-                    ["create", "custom-name"], ["check"]):
+                    ["create", "custom-name"]):
         assert main([*args, *removed]) == 2
         capsys.readouterr()
     assert not home.exists()

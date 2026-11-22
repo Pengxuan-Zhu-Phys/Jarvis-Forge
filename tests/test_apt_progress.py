@@ -183,7 +183,7 @@ def test_status_events_survive_concurrent_output_on_the_same_line(monkeypatch):
         progress.close()
 
 
-@pytest.mark.parametrize("width", [40, 60, 80, 120])
+@pytest.mark.parametrize("width", [40, 60, 72, 80, 120])
 def test_aligned_package_rows_show_phase_and_total_time_separately(monkeypatch, width):
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.setenv("TERM", "xterm-256color")
@@ -215,6 +215,8 @@ def test_aligned_package_rows_show_phase_and_total_time_separately(monkeypatch, 
         assert "fixture@1.0" in display and "build" in display
         assert "00:30" in display and "02:30" in display
         assert "other@2.0" not in display
+        # Each running package keeps a pulse even in a narrow terminal.
+        assert "━" in display.split("fixture@1.0", 1)[1]
         if width >= 80:
             assert "Step 3/4" in display and "1/3" in display and "33%" in display
             assert "Phase time" in display and "Total time" in display and "Activity" in display

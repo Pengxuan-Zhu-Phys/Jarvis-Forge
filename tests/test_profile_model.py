@@ -112,6 +112,21 @@ def test_check_and_list_are_read_only_without_automatic_gcc_bootstrap(tmp_path,m
     assert len(json.loads(capsys.readouterr().out)['instances'])==4
     assert main(['--home',str(base),'--json','profile','check','ubuntu24'])==0
     assert json.loads(capsys.readouterr().out)['profiles'][0]['status']=='buildable'
+    args=['--home',str(base),'--json','profile','check']
+    assert main(args)==0
+    assert {row['name'] for row in json.loads(capsys.readouterr().out)['profiles']}==set(profiles.presets())
+    assert main(['--home',str(base),'profile','check'])==0
+    text=capsys.readouterr().out
+    assert all(name in text for name in profiles.presets())
+    def blocked(*args, **kwargs):
+        raise ForgeError('Missing host prerequisites')
+    monkeypatch.setattr(profiles,'_prerequisites',blocked)
+    assert main(args)==0
+    assert len(json.loads(capsys.readouterr().out)['profiles'])==4
+    assert main([*args,'ubuntu24'])==2
+    assert json.loads(capsys.readouterr().out)['profiles'][0]['status'] in {'blocked','unsupported'}
+    assert main([*args,'unknown'])==2
+    capsys.readouterr()
     assert not base.exists()
     monkeypatch.setattr(profiles,'host',lambda:{'platform':'linux','system':'almalinux','version':'9','machine':'x86_64','libc':'glibc 2.34'})
     with pytest.raises(ForgeError,match='No project profile'):apt_profiles.ensure_active(ForgeHome(base))

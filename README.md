@@ -18,7 +18,7 @@ jforge profile use ubuntu24
 
 The built-in profiles are `ubuntu22`, `ubuntu24`, `ubuntu26` and `macos`. Each owns its compiler tool suite, packages and applications. Linux compiler builds can take a long time; repeating `create NAME` resumes an interrupted setup. macOS uses Apple Clang and audited existing Homebrew formulae, without sudo or Homebrew Python.
 
-The five commands are `profile check NAME`, `create NAME`, `use NAME`, `show [NAME]` and `remove NAME`. No platform selection or custom profile names are required. Native operations display their plan and run directly; use `--dry-run` to preview changes.
+The five commands are `profile check [NAME]`, `create NAME`, `use NAME`, `show [NAME]` and `remove NAME`. No platform selection or custom profile names are required. Native operations display their plan and run directly; use `--dry-run` to preview changes.
 
 The standalone `tools/jforge-pyenv-setup.sh` prepares pyenv and installs Forge from PyPI into its base interpreter. Forge itself never creates a Python environment. Select Python before creating a profile; use a separate Forge home when a preset needs another Python identity.
 
