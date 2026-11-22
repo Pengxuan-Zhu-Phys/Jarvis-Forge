@@ -7,47 +7,60 @@ import sys
 
 
 def short_stages(stage):
-    # These modules use only the standard library and run under the same
-    # controller Python as Spack. Do not change Spack specs or package inputs.
-    from jarvis_forge.paths import semantic_name, metadata, sequence
-    from jarvis_forge.storage import new_id
+    # Spack owns stage contents: archive expansion can move every loose file
+    # into spack-src, and destroy/recreate removes them altogether. Ownership
+    # must survive outside that directory, including across installer workers.
+    from jarvis_forge.paths import semantic_name, sequence, directory_lock
+    from jarvis_forge.storage import ForgeError, read_json, write_json
+    import shutil
 
     allocated = set()
     original_init = stage.Stage.__init__
     signature = inspect.signature(original_init)
 
-    def compute(spec):
-        from jarvis_forge.paths import directory_lock
-        from jarvis_forge.storage import ForgeError,read_json
-        import shutil
-        root = Path(stage.get_stage_root())
-        version=str(spec.version) if spec.versions.concrete else 'dev'
-        name=semantic_name(spec.name or 'source',version)
-        identity={'spec':str(spec),'dag_hash':spec.dag_hash() if spec.concrete else None}
-        path=root/name
-        with directory_lock(root,'.stages.lock'):
-            if path.is_symlink():raise ForgeError(f'Managed stage must not be a symbolic link: {path}')
-            marker=path/'metadata.json'
+    def register(root, name, identity):
+        path = root / name
+        with directory_lock(root, ".stages.lock"):
+            registry = root / "stages.json"
+            if registry.is_symlink():
+                raise ForgeError(f"Stage registry must not be a symbolic link: {registry}")
+            data = read_json(registry) if registry.exists() else {
+                "schema_version": 1, "kind": "stage-registry", "stages": {},
+            }
+            if (data.get("schema_version") != 1 or data.get("kind") != "stage-registry"
+                    or not isinstance(data.get("stages"), dict)):
+                raise ForgeError(f"Invalid stage registry: {registry}")
+            if path.is_symlink():
+                raise ForgeError(f"Managed stage must not be a symbolic link: {path}")
             if path.exists():
-                if not marker.is_file() or read_json(marker).get('kind')!='stage':
-                    raise ForgeError(f'Unregistered build stage is preserved: {path}')
-                if read_json(marker).get('identity')!=identity:shutil.rmtree(path)
-            metadata(path,'stage',spec.name or 'source',version=version,identity=identity)
-        allocated.add(name)
+                if name not in data["stages"]:
+                    raise ForgeError(f"Unregistered build stage is preserved: {path}")
+                if not path.is_dir():
+                    raise ForgeError(f"Managed stage must be a directory: {path}")
+                if data["stages"][name] != identity:
+                    shutil.rmtree(path)
+            data["stages"][name] = identity
+            write_json(registry, data)
+        allocated.add(path)
         return name
+
+    def compute(spec):
+        root = Path(stage.get_stage_root())
+        version = str(spec.version) if spec.versions.concrete else "dev"
+        name = semantic_name(spec.name or "source", version)
+        identity = {"spec": str(spec), "dag_hash": spec.dag_hash() if spec.concrete else None}
+        return register(root, name, identity)
 
     def initialize(self, *args, **kwargs):
         bound = signature.bind(self, *args, **kwargs)
-        # An explicit path belongs to the upstream source or caller. Name
-        # assignment here only controls stages created in the configured root.
+        # An explicit path belongs to the upstream source or caller.
         if bound.arguments.get("path") is None:
+            root = Path(stage.get_stage_root())
             name = bound.arguments.get("name")
-            if name not in allocated:
-                root = Path(stage.get_stage_root())
-                name = sequence(root,'resource' if name else 'stage')
-                metadata(root/name,'stage','resource' if bound.arguments.get('name') else 'stage',
-                         identity={'native_name':bound.arguments.get('name')})
-                allocated.add(name)
+            if name is None or root / name not in allocated:
+                native_name = name
+                name = sequence(root, "resource" if name else "stage")
+                register(root, name, {"native_name": native_name})
                 bound.arguments["name"] = name
         return original_init(*bound.args, **bound.kwargs)
 

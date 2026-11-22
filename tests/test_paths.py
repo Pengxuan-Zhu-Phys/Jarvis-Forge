@@ -82,7 +82,8 @@ def test_all_controlled_generation_sites_use_semantic_or_ordered_names():
     assert violations==[]
 
 
-def test_native_stage_names_clear_only_changed_owned_stages(tmp_path):
+@pytest.mark.parametrize("package, version", [("zlib", "1.3.1"), ("compiler-wrapper", "1.1.0")])
+def test_native_stage_names_clear_only_changed_owned_stages(tmp_path, package, version):
     from types import SimpleNamespace
     from jarvis_forge.spack_entry import short_stages
     class Stage:
@@ -90,14 +91,52 @@ def test_native_stage_names_clear_only_changed_owned_stages(tmp_path):
     adapter=SimpleNamespace(Stage=Stage,get_stage_root=lambda:str(tmp_path))
     short_stages(adapter)
     class Spec:
-        name='zlib';version='1.3.1';versions=SimpleNamespace(concrete=True);concrete=True
+        versions=SimpleNamespace(concrete=True);concrete=True
         value='one'
         def dag_hash(self):return self.value
-        def __str__(self):return 'zlib@1.3.1 '+self.value
-    spec=Spec();assert adapter.compute_stage_name(spec)=='zlib-1.3.1'
-    payload=tmp_path/'zlib-1.3.1/payload';payload.write_text('old stage')
-    assert adapter.compute_stage_name(spec)=='zlib-1.3.1' and payload.is_file()
-    spec.value='two';assert adapter.compute_stage_name(spec)=='zlib-1.3.1' and not payload.exists()
-    assert read_json(tmp_path/'zlib-1.3.1/metadata.json')['identity']['dag_hash']=='two'
+        def __str__(self):return f'{self.name}@{self.version} '+self.value
+    spec=Spec();spec.name=package;spec.version=version
+    label=f'{package}-{version}'
+    assert adapter.compute_stage_name(spec)==label
+    payload=tmp_path/label/'payload';payload.parent.mkdir();payload.write_text('old stage')
+    assert adapter.compute_stage_name(spec)==label and payload.is_file()
+    spec.value='two';assert adapter.compute_stage_name(spec)==label and not payload.exists()
+    assert read_json(tmp_path/'stages.json')['stages'][label]['dag_hash']=='two'
     opaque=adapter.Stage(name='spack-stage-resource-'+('a'*64))
     assert opaque.name=='0001-resource'
+
+    # Spack can destroy and recreate a directory in another installer worker.
+    # The registry must survive, with no loose file in the source stage.
+    import shutil
+    name = adapter.compute_stage_name(spec)
+    folder = tmp_path / name
+    folder.mkdir()
+    (folder / "spack-src").mkdir()
+    (folder / "spack-src/source.c").write_text("source")
+    assert not (folder / "metadata.json").exists()
+    def fresh_adapter():
+        class FreshStage:
+            def __init__(self, name=None, path=None): self.name=name; self.path=path
+        result = SimpleNamespace(Stage=FreshStage, get_stage_root=lambda: str(tmp_path))
+        short_stages(result)
+        return result
+    assert fresh_adapter().compute_stage_name(spec) == name
+    assert (folder / "spack-src/source.c").read_text() == "source"
+    shutil.rmtree(folder)
+    assert fresh_adapter().compute_stage_name(spec) == name
+    assert not folder.exists()
+    # Unknown contents and symlink targets still cannot be adopted or removed.
+    registry = tmp_path / "stages.json"
+    saved = registry.read_bytes()
+    registry.unlink()
+    folder.mkdir(); (folder / "user-file").write_text("preserve")
+    with pytest.raises(ForgeError, match="Unregistered build stage"):
+        fresh_adapter().compute_stage_name(spec)
+    assert (folder / "user-file").read_text() == "preserve"
+    registry.write_bytes(saved)
+    shutil.rmtree(folder)
+    target = tmp_path / "user-dir"; target.mkdir()
+    folder.symlink_to(target, target_is_directory=True)
+    with pytest.raises(ForgeError, match="symbolic link"):
+        fresh_adapter().compute_stage_name(spec)
+    assert target.is_dir()

@@ -154,7 +154,7 @@ definitions:
     status: draft
 - id: forge.profiles.native-stage-names-clear-only-changed-owned-stages
   title: Native stage names clear only changed owned stages
-  purpose: Native stage names clear only changed owned stages.
+  purpose: Persist source stage ownership outside Spack-managed contents across workers and recreation.
   binding:
     adapter: pytest
     selector: tests/test_paths.py::test_native_stage_names_clear_only_changed_owned_stages
@@ -162,10 +162,10 @@ definitions:
     inputs:
       environment: Disposable local Forge homes; fake native backends or local tiny
         CMake sources.
-    action: Exercise native stage names clear only changed owned stages.
+    action: Recreate zlib and compiler-wrapper stages through independent adapters, then check identity changes and unknown paths.
   criteria:
   - id: contract
-    expected: Native stage names clear only changed owned stages.
+    expected: Registered stages survive content cleanup; changed identities clear only owned stages; unknown directories and symlinks are preserved.
     verification: automated
   failure_meaning: The profile, prefix, transaction or exported identity boundary
     regressed.

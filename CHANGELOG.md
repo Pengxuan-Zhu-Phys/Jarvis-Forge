@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- Keep Spack stage ownership in a locked JSON registry outside source directories, so archive expansion and installer workers can recreate semantic stages without rejecting them as unregistered.
 - Resume failed or interrupted profile creation without requiring manual removal, reuse completed compiler packages, and reuse an already-ready profile.
 - Hold profile lifecycle locks outside the directory being removed and close internal lock descriptors before deletion. Preserve ownership and deletion records after partial failure, recover stale lock-only remnants, and protect unknown user files.
 - Isolate node scratch by Forge home as well as profile name, avoiding collisions between independent installations. Release the global profile namespace lock during long compiler builds.
