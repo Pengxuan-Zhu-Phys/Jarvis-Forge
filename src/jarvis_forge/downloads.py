@@ -109,8 +109,11 @@ def fetch(url: str, target: Path, logs: Path, *, timeout: float = 300, progress=
         raise ForgeError(f"Download failed for {url}; see {logs.with_suffix('.stderr.log')}", code=1)
 
 
-def unpack(archive: Path, destination: Path) -> None:
+def unpack(archive: Path, destination: Path, *, strip_prefix: str = "") -> None:
     """Extract files first, then validate internal links without following archive writes."""
+    prefix = PurePosixPath(strip_prefix)
+    if prefix.is_absolute() or ".." in prefix.parts or "\\" in strip_prefix:
+        raise ForgeError(f"Unsafe archive prefix: {strip_prefix!r}", code=1)
     destination.mkdir(parents=True, exist_ok=False, mode=0o700)
     total, count = 0, 0
     links = []
@@ -125,7 +128,9 @@ def unpack(archive: Path, destination: Path) -> None:
         count += 1
         if size < 0 or total > 4 * 1024**3 or count > 200000:
             raise ForgeError("Archive exceeds the extraction limits.", code=1)
-        return destination.joinpath(*path.parts)
+        if path.parts[:len(prefix.parts)] != prefix.parts:
+            return None
+        return destination.joinpath(*path.parts[len(prefix.parts):])
 
     try:
         if zipfile.is_zipfile(archive):
@@ -136,6 +141,8 @@ def unpack(archive: Path, destination: Path) -> None:
                     if kind not in {0, 0o040000, 0o100000, 0o120000}:
                         raise ForgeError(f"Archive special files are unsupported: {member.filename}", code=1)
                     path = target(member.filename, member.file_size)
+                    if path is None:
+                        continue
                     if kind == 0o120000:
                         if member.file_size > 65536:
                             raise ForgeError("Archive link target is too long.", code=1)
@@ -153,8 +160,16 @@ def unpack(archive: Path, destination: Path) -> None:
                     if not (member.isdir() or member.isfile() or member.issym() or member.islnk()):
                         raise ForgeError(f"Archive special files are unsupported: {member.name}", code=1)
                     path = target(member.name, member.size)
+                    if path is None:
+                        continue
                     if member.issym() or member.islnk():
-                        links.append((path, member.linkname, "symlink" if member.issym() else "hardlink"))
+                        linkname = member.linkname
+                        if member.islnk() and prefix.parts:
+                            linked = PurePosixPath(linkname)
+                            if linked.is_absolute() or ".." in linked.parts or linked.parts[:len(prefix.parts)] != prefix.parts:
+                                raise ForgeError(f"Archive hardlink escapes selected prefix: {linkname}", code=1)
+                            linkname = str(PurePosixPath(*linked.parts[len(prefix.parts):]))
+                        links.append((path, linkname, "symlink" if member.issym() else "hardlink"))
                     elif member.isdir():
                         path.mkdir(parents=True, exist_ok=True)
                     else:

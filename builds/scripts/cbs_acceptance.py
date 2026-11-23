@@ -1,4 +1,4 @@
-"""Check that an in-place CBS build can list registered analyses."""
+"""Run the built CBS executable and check that it can read its analysis list."""
 
 from pathlib import Path
 import re
@@ -22,8 +22,8 @@ def main():
         raise SystemExit(listed.stderr or listed.stdout or "CBS --list-analyses failed")
     count = listed_count(listed.stdout)
     if not count:
-        raise SystemExit("CBS --list-analyses returned no registered analyses")
-    print(f"CBS startup passed: {count} registered analyses.", flush=True)
+        raise SystemExit("CBS --list-analyses returned no analysis entries")
+    print(f"CBS startup passed: {count} analysis entries.", flush=True)
 
 
 if __name__ == "__main__":

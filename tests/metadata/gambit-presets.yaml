@@ -1,0 +1,230 @@
+schema_version: 1
+kind: test-metadata
+project_id: jarvis-forge
+scope:
+  component: gambit-presets
+definitions:
+- id: forge.presets.shared-checkout
+  title: GAMBIT and CBS share an explicit checkout
+  purpose: Both application cards use the same pinned source archive and native preset-owned build directory.
+  binding: {adapter: pytest, selector: 'tests/test_build_cards.py::test_gambit_and_cbs_automatically_share_profile_sources'}
+  scenario:
+    inputs: {environment: Local cards and a temporary profile root}
+    action: Plan both application graphs with no source override.
+  criteria:
+  - id: layout
+    expected: Each graph uses the same managed source, ROOT dependency, source lock and matching configure/build presets, with its own required executable.
+    verification: automated
+  failure_meaning: Applications use different source trees or override the upstream preset layout.
+  limitations: [No CMake configure or compilation]
+  review: {status: draft}
+- id: forge.presets.inheritance
+  title: User preset inclusion and inheritance
+  purpose: Resolve shared included files once and honor first-parent precedence.
+  binding: {adapter: pytest, selector: 'tests/test_build_cards.py::test_preset_user_include_and_first_parent_precedence'}
+  scenario:
+    inputs: {environment: Local project and user preset JSON files}
+    action: Resolve a user preset that includes the project presets and inherits two parents.
+  criteria:
+  - id: resolution
+    expected: The first parent's binary directory wins without a duplicate-preset error.
+    verification: automated
+  failure_meaning: Forge chooses a different build directory from the requested preset.
+  limitations: [Static preset resolution]
+  review: {status: draft}
+- id: forge.presets.cache-switch
+  title: Reconfigure a shared cache after preset changes
+  purpose: Switch application presets while retaining their common build tree.
+  binding: {adapter: pytest, selector: 'tests/test_build_cards.py::test_shared_preset_cache_reconfigures_after_switch_or_manual_change'}
+  scenario:
+    inputs: {environment: Temporary source tree and simulated CMake executor}
+    action: Switch CBS to GAMBIT and back, repeat unchanged, then edit the cache.
+  criteria:
+  - id: cache
+    expected: Preset switches and the cache edit trigger configure. The unchanged request reuses configuration. All commands retain the preset-owned build tree.
+    verification: automated
+  failure_meaning: A shared tree reuses the other application's configuration or loses its cache.
+  limitations: [CMake execution is simulated]
+  review: {status: draft}
+- id: forge.presets.stale-app
+  title: Recheck installed app evidence before reuse
+  purpose: A stale in-place app must enter the build runner again.
+  binding: {adapter: pytest, selector: 'tests/test_build_cards.py::test_install_rechecks_changed_shared_cache_before_reusing_an_app'}
+  scenario:
+    inputs: {environment: Local profile with a stale application receipt and simulated build runner}
+    action: Install the previously successful app after its artifact verification fails.
+  criteria:
+  - id: evidence
+    expected: The runner is called and its failure is reported instead of enabling the stale receipt.
+    verification: automated
+  failure_meaning: A stale app is reported as successfully installed without rebuilding.
+  limitations: [No native package installation or project compilation]
+  review: {status: draft}
+- id: forge.sources.concurrent-reuse
+  title: Acquire one shared source for concurrent users
+  purpose: Serialize download and extraction for applications sharing a source.
+  binding: {adapter: pytest, selector: 'tests/test_build_sources.py::test_concurrent_source_users_download_and_extract_once'}
+  scenario:
+    inputs: {environment: Two threads, a local archive and a temporary source pool}
+    action: Acquire the same pinned archive concurrently.
+  criteria:
+  - id: sharing
+    expected: Download occurs once, both users receive one semantic directory, and stripped symbolic and hard links remain valid.
+    verification: automated
+  failure_meaning: Concurrent applications overwrite or duplicate shared sources.
+  limitations: [Local archive, no compilation]
+  review: {status: draft}
+- id: forge.sources.conflicts
+  title: Preserve conflicting shared sources
+  purpose: Enforce source identity and directory ownership.
+  binding: {adapter: pytest, selector: 'tests/test_build_sources.py::test_conflicting_shared_source_is_preserved'}
+  scenario:
+    inputs: {environment: Conflicting metadata, unregistered files or a symbolic link}
+    action: Request a shared source at the occupied path.
+  criteria:
+  - id: ownership
+    expected: The operation refuses replacement and preserves the existing contents.
+    verification: automated
+  failure_meaning: A recipe silently replaces a different source tree.
+  limitations: [Local fixtures]
+  review: {status: draft}
+- id: forge.sources.failed-acquisition
+  title: Retry failed extraction
+  purpose: Prevent incomplete shared source publication.
+  binding: {adapter: pytest, selector: 'tests/test_build_sources.py::test_failed_extraction_can_retry_without_publishing_partial_source'}
+  scenario:
+    inputs: {environment: Invalid and valid local archives}
+    action: Fail extraction, then retry the same source with a valid archive.
+  criteria:
+  - id: atomicity
+    expected: The failed attempt publishes no destination and the retry succeeds.
+    verification: automated
+  failure_meaning: Applications reuse a partial or failed extraction.
+  limitations: [Local fixtures]
+  review: {status: draft}
+- id: forge.sources.profile-isolation
+  title: Isolate shared sources by profile
+  purpose: Keep each profile's mutable build tree independent.
+  binding: {adapter: pytest, selector: 'tests/test_build_sources.py::test_profiles_have_independent_shared_sources'}
+  scenario:
+    inputs: {environment: Two profiles and one local source archive}
+    action: Acquire in both profiles, then modify only the first tree.
+  criteria:
+  - id: isolation
+    expected: The second tree remains unchanged at a different physical path.
+    verification: automated
+  failure_meaning: One profile modifies another profile's sources.
+  limitations: [Local fixtures]
+  review: {status: draft}
+- id: forge.sources.stripped-links
+  title: Reject links outside the selected archive prefix
+  purpose: Preserve archive safety when removing an upstream root directory.
+  binding: {adapter: pytest, selector: 'tests/test_build_sources.py::test_stripped_archive_rejects_a_link_outside_its_selected_root'}
+  scenario:
+    inputs: {environment: Local archive with an escaping symbolic link}
+    action: Extract while stripping the archive root.
+  criteria:
+  - id: containment
+    expected: Extraction fails before publishing the escaping link.
+    verification: automated
+  failure_meaning: A selected archive subtree writes outside its destination.
+  limitations: [Local fixture]
+  review: {status: draft}
+- id: forge.sources.app-lifecycle
+  title: Install two applications with automatic source sharing
+  purpose: Verify acquisition through the application entry point and source ownership during removal.
+  binding: {adapter: pytest, selector: 'tests/test_build_sources.py::test_two_apps_use_one_managed_source_without_overrides_and_keep_it_on_remove'}
+  scenario:
+    inputs: {environment: Temporary profile, two cards, local archive and simulated CMake commands}
+    action: Install CBS and GAMBIT without source overrides, then remove them sequentially.
+  criteria:
+  - id: lifecycle
+    expected: Both applications use one source and cache; removal preserves the profile-owned pool.
+    verification: automated
+  failure_meaning: Automatic source selection or application removal damages the other application.
+  limitations: [Native compilation is simulated]
+  review: {status: draft}
+- id: forge.python.module-cmake
+  title: Discover CMake configuration from a selected Python module
+  purpose: Bind native CMake packages to the Python environment checked in preflight.
+  binding: {adapter: pytest, selector: 'tests/test_standard_checks.py::test_python_module_cmake_directory_is_checked_in_the_target_python'}
+  scenario:
+    inputs: {environment: Local Python module with a get_cmake_dir interface}
+    action: Probe its native config, then remove the config file and probe again.
+  criteria:
+  - id: discovery
+    expected: The first probe records the config directory and the second fails before construction.
+    verification: automated
+  failure_meaning: A module import can pass while its required CMake configuration is missing.
+  limitations: [Synthetic Python module]
+  review: {status: draft}
+- id: forge.python.shared-library
+  title: Require shared libpython explicitly
+  purpose: Distinguish static development files from a shared embedding library.
+  binding: {adapter: pytest, selector: 'tests/test_standard_checks.py::test_python_shared_library_requirement_rejects_a_static_library'}
+  scenario:
+    inputs: {environment: Simulated sysconfig metadata with a shared or static library}
+    action: Evaluate a shared Python development requirement.
+  criteria:
+  - id: shared
+    expected: Static-only Python fails and shared Python passes.
+    verification: automated
+  failure_meaning: CBS reaches configure without the requested shared Python library.
+  limitations: [No native link test]
+  review: {status: draft}
+- id: forge.python.cmake-binding
+  title: Reject inconsistent Python module CMake selection
+  purpose: Preserve the target Python package identity through configure.
+  binding: {adapter: pytest, selector: 'tests/test_build_cards.py::test_cmake_uses_the_native_config_reported_by_the_selected_python'}
+  scenario:
+    inputs: {environment: Native package directory and a simulated CMake runner}
+    action: Configure with matching, explicitly conflicting or unexpectedly discovered paths.
+  criteria:
+  - id: binding
+    expected: Matching configuration is forwarded; either conflict fails.
+    verification: automated
+  failure_meaning: CMake silently selects a package outside the checked Python environment.
+  limitations: [CMake execution is simulated]
+  review: {status: draft}
+- id: forge.cbs.full-prerequisites
+  title: Declare all prerequisites for the full CBS preset
+  purpose: Prevent incomplete feature requests and missing Python dependencies.
+  binding: {adapter: pytest, selector: 'tests/test_build_cards.py::test_cbs_recipe_declares_the_full_preset_prerequisites'}
+  scenario:
+    inputs: {environment: Local CBS and GAMBIT cards and the CBS platform checker}
+    action: Inspect declared features, modules, native tools and supported architecture.
+  criteria:
+  - id: contract
+    expected: Required features and Python modules are explicit; zlib uses ROOT's compatibility provider.
+    verification: automated
+  failure_meaning: The recipe permits an incomplete CBS installation or duplicate zlib providers.
+  limitations: [Static card inspection]
+  review: {status: draft}
+- id: forge.build.profile-caches
+  title: Keep default build caches inside the profile
+  purpose: Avoid node home writes when build checks import Matplotlib.
+  binding: {adapter: pytest, selector: 'tests/test_build_cards.py::test_profile_build_caches_stay_under_the_profile_by_default'}
+  scenario:
+    inputs: {environment: Temporary profile and inherited environment}
+    action: Prepare and capture the build environment with default and explicit cache settings.
+  criteria:
+  - id: location
+    expected: Default XDG and Matplotlib paths are profile-owned, and explicit user paths are preserved.
+    verification: automated
+  failure_meaning: Python imports write default caches outside the managed profile.
+  limitations: [Environment preparation only]
+  review: {status: draft}
+- id: forge.cbs.startup
+  title: Check CBS startup using its public command
+  purpose: Verify the built executable without reproducing preset configuration validation.
+  binding: {adapter: pytest, selector: 'tests/test_build_cards.py::test_cbs_startup_check_uses_the_binary_without_reinterpreting_cmake'}
+  scenario:
+    inputs: {environment: Executable fixture and a simulated public CBS command}
+    action: Return a populated analysis list, an empty list or a startup failure.
+  criteria:
+  - id: startup
+    expected: A populated list passes; an empty list or nonzero exit fails without requiring internal CMake files.
+    verification: automated
+  failure_meaning: Forge duplicates project-specific configuration logic or accepts a failed startup.
+  limitations: [CBS execution is simulated]
+  review: {status: draft}

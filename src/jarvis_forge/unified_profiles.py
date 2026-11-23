@@ -696,10 +696,13 @@ def build_environment(profile, data, environment):
     compatible(data)
     from .toolchains import environment as tool_environment
 
-    return {
+    result = {
         **tool_environment(data["toolchain"], environment),
         "JFORGE_PROFILE_INSTANCE": data["id"],
     }
+    result.setdefault("XDG_CACHE_HOME", str(profile.root / "cache"))
+    result.setdefault("MPLCONFIGDIR", str(profile.root / "cache/matplotlib"))
+    return result
 
 
 def _instances(base, current=None):

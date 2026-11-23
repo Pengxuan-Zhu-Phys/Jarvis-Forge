@@ -297,7 +297,7 @@ BUILD_ENV_KEYS = {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "CC", "CXX
                   "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "LIBRARY_PATH", "LD_LIBRARY_PATH",
                   "CMAKE_PREFIX_PATH", "CMAKE_INCLUDE_PATH", "CMAKE_LIBRARY_PATH", "PKG_CONFIG_PATH",
                   "PYTHONHOME", "PYTHONPATH", "PYENV_ROOT", "PYENV_VERSION", "VIRTUAL_ENV", "LOADEDMODULES",
-                  "MODULEPATH", "JFORGE_ACTIVE_OUTPUTS"}
+                  "MODULEPATH", "JFORGE_ACTIVE_OUTPUTS", "XDG_CACHE_HOME", "MPLCONFIGDIR"}
 
 
 def safe_environment(values, extra=()):
@@ -867,9 +867,16 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     if "path" in item:
                         source_dir = Path(item["path"])
                     else:
-                        target = named_path(work / "src", name, create=True)
+                        if item.get("shared"):
+                            if not managed:
+                                raise ForgeError("Shared build sources require a project profile.")
+                            from .build_sources import location
+                            target = location(runtime_profile, item)
+                            source_dir = target
+                        else:
+                            target = named_path(work / "src", name, create=True)
+                            source_dir = target / item.get("subdir", "")
                         pending_archives[name] = (item, target)
-                        source_dir = target / item.get("subdir", "")
                         if not source_dir.resolve().is_relative_to(target.resolve()):
                             raise ForgeError("Source subdirectory escapes the extracted archive.")
                     if "path" in item and not source_dir.is_dir():
@@ -892,22 +899,26 @@ def execute(home, reference=None, *, parameters=None, environment_name=None, job
                     for name, (source_spec, target) in list(pending_archives.items()):
                         if "${sources." + name + "}" not in json.dumps(step["with"]):
                             continue
-                        marker = target / ".jforge-extracted"
-                        if not marker.is_file():
-                            log = node_dir / (name + "-download")
+                        log = node_dir / (name + "-download")
+                        def download(spec):
                             detail = f" ({log.with_suffix('.stderr.log')})" if verbose else ""
                             event(f"Download source {name}{detail}")
-                            archive = _source_archive(
-                                home, source_spec, log, name,
-                                show_progress=progress is not None and not verbose and not as_json,
-                            )
-                            if target.exists():
-                                if not (target/".jforge-extracted").is_file():raise ForgeError(f"Unregistered source directory is preserved: {target}")
-                                shutil.rmtree(target)
-                            target.parent.mkdir(exist_ok=True)
-                            event(f"Extract source {name}")
-                            unpack(archive, target)
-                            marker.write_text(source_spec["sha256"])
+                            return _source_archive(home, spec, log, name,
+                                show_progress=progress is not None and not verbose and not as_json)
+                        if source_spec.get("shared"):
+                            from .build_sources import acquire
+                            acquire(runtime_profile, source_spec, download)
+                        else:
+                            marker = target / ".jforge-extracted"
+                            if not marker.is_file():
+                                archive = download(source_spec)
+                                if target.exists():
+                                    if not (target/".jforge-extracted").is_file():raise ForgeError(f"Unregistered source directory is preserved: {target}")
+                                    shutil.rmtree(target)
+                                target.parent.mkdir(exist_ok=True)
+                                event(f"Extract source {name}")
+                                unpack(archive, target)
+                                marker.write_text(source_spec["sha256"])
                         if not Path(bindings["sources." + name]).is_dir():
                             raise ForgeError(f"Source subdirectory missing: {bindings['sources.' + name]}")
                         del pending_archives[name]
@@ -1217,7 +1228,18 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
             if variable is None:
                 continue
             cache.setdefault(variable, {"type": "FILEPATH", "value": value["path"]})
+        python_cmake = {}
         for dependency in used:
+            report = dependency.get("report", {})
+            if report.get("python", {}).get("path") == cache.get("Python3_EXECUTABLE", {}).get("value"):
+                for module in report.get("modules", {}).values():
+                    if module.get("cmake_dir"):
+                        variable = module["cmake_package"] + "_DIR"
+                        expected = module["cmake_dir"]
+                        if variable in cache and Path(cache[variable]["value"]).resolve() != Path(expected).resolve():
+                            raise ForgeError(f"{variable} differs from the selected Python module: {expected}")
+                        cache[variable] = {"type": "PATH", "value": expected}
+                        python_cmake[variable] = expected
             if dependency.get("package") and dependency.get("cmake_dir"):
                 variable = dependency["package"] + "_DIR"
                 cache[variable] = {"type": "PATH", "value": str(Path(dependency["prefix"]) / dependency["cmake_dir"])}
@@ -1232,8 +1254,11 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
                 requested = _configure_fingerprint(argv, script, source, environment)
                 if marker.exists():
                     saved = read_json(marker)
-                    if saved["fingerprint"] == requested or (saved.get("schema_version") is None
-                            and _matches_legacy_configure(saved["fingerprint"], requested, argv, logs, source, environment)):
+                    same_inputs = saved["fingerprint"] == requested or (saved.get("schema_version") is None
+                            and _matches_legacy_configure(saved["fingerprint"], requested, argv, logs, source, environment))
+                    cache_file = build / "CMakeCache.txt"
+                    same_cache = cache_file.is_file() and saved.get("cache_sha256") == digest(cache_file)
+                    if same_inputs and (same_cache or options.get("binary_dir") != "preset"):
                         if saved.get("schema_version") != 2:
                             write_json(marker, {"schema_version": 2, "fingerprint": requested})
                         progress("Reuse CMake configuration")
@@ -1251,6 +1276,9 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
             invoke(invocation[phase], source, title)
             if phase == "configure":
                 actual = cmake.cache_values(build)
+                for variable, expected in python_cmake.items():
+                    if Path(actual.get(variable, "")).resolve() != Path(expected).resolve():
+                        raise ForgeError(f"CMake selected a different {variable} than the selected Python module.", code=1)
                 for dep in used:
                     if dep.get("package") and dep.get("cmake_dir"):
                         expected = Path(dep["prefix"]) / dep["cmake_dir"]
@@ -1269,7 +1297,8 @@ def _step(home, step, options, work, logs, environment, observed, context, recor
                             raise ForgeError(f"CMake selected {path} for {variable}, expected {python_artifacts[variable]}.", code=1)
                 write_json(logs / "cmake-cache.json", actual)
                 shutil.copyfile(build / "CMakeCache.txt", logs / "CMakeCache.txt")
-                write_json(marker, {"schema_version": 2, "fingerprint": requested})
+                write_json(marker, {"schema_version": 2, "fingerprint": requested,
+                                    "cache_sha256": digest(build / "CMakeCache.txt")})
         reply = build / ".cmake/api/v1/reply"
         if reply.is_dir():
             shutil.copytree(reply, logs / "cmake-file-api", dirs_exist_ok=True)

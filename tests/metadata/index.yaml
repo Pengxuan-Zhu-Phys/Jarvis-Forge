@@ -9,3 +9,4 @@ documents:
 - build-tool-reuse.yaml
 - rpath.yaml
 - package-progress.yaml
+- gambit-presets.yaml

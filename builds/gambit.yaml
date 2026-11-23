@@ -1,0 +1,46 @@
+# GAMBIT and CBS use the same checkout and its canonical build/ tree.
+name: gambit
+platforms: [linux]
+environment:
+  outputs_off: [rivet]
+requires:
+  root:
+    build: root
+dependencies:
+  - "cmake@3.24:"
+  - "boost@1.48:"
+  - "eigen@3.3.7:"
+  - "gsl@2.1:"
+  - "openblas+shared"
+  - "hdf5~mpi"
+  - "zlib-ng+compat+shared"
+  - pkgconf
+  - patch
+  - libtool
+  - curl
+  - sqlite
+build:
+  name: GAMBIT
+  version: "2.7.0"
+  source:
+    shared: {name: gambit, version: "2.7.0"}
+    url: https://codeload.github.com/GambitBSM/gambit/tar.gz/f9b01394f90a6185c77304f2320eaa7906a0fcd5
+    sha256: 656d6625754e296483bec56b3b4ba4c4a014e4f66887ccb1f99335007a3cfa66
+    subdir: gambit-f9b01394f90a6185c77304f2320eaa7906a0fcd5
+  in_place: true
+  required_files: [gambit]
+  cmake:
+    preset: gambit-gnu
+    build_preset: gambit-gnu
+    options: {CMAKE_CXX_STANDARD: 17}
+    binary_dir: preset
+    lock: source
+    phases: [configure, build]
+checks:
+  before:
+    python:
+      version: ">=3.10"
+      modules: {yaml: ">=6", pybind11: {version: ">=2.13.6", cmake: pybind11}}
+    tools: {cmake: ">=3.24", cc: ">=9.1", c++: ">=9.1", gfortran: ">=9.1", make: ">=3", git: ">=2"}
+  after:
+    - ["${path}/gambit", --version]

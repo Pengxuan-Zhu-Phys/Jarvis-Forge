@@ -645,6 +645,15 @@ def _install(
     previous = read_json(workspace / "metadata.json").get("install_state", {})
     existing = _matches(base, scope, data["name"] + "@" + data["version"])
     ready = next((row for row in existing if row["status"] == "ready"), None)
+    stale = False
+    if ready:
+        try:
+            builds.artifact(base, ready["artifact_id"])
+        except ForgeError:
+            # Another preset can reconfigure an in-place app's shared cache.
+            # Re-enter the build runner so its evidence is checked and renewed.
+            ready = None
+            stale = True
     if (
         ready
         and not rebuild
@@ -691,6 +700,7 @@ def _install(
                 )
     rebuild = bool(
         rebuild
+        or stale
         or ready
         or data.get("instance")
         and previous.get("fingerprint") != fingerprint

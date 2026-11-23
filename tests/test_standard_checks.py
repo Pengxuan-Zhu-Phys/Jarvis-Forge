@@ -66,3 +66,37 @@ def test_tools_follow_selected_compiler_and_versions(tmp_path, monkeypatch):
 def test_invalid_declarations_fail_before_execution(spec):
     with pytest.raises(ForgeError):
         standard_checks.validate(spec)
+
+
+def test_python_module_cmake_directory_is_checked_in_the_target_python(tmp_path):
+    import os
+    directory = tmp_path / 'native-config'
+    directory.mkdir()
+    config = directory / 'FixtureNativeConfig.cmake'
+    config.write_text('# fixture\n')
+    module = tmp_path / 'native_fixture.py'
+    module.write_text('__version__="1.0"\ndef get_cmake_dir(): return ' + repr(str(directory)) + '\n')
+    env = {**os.environ, 'PYTHONPATH': str(tmp_path)}
+    spec = {'python': {'modules': {'native_fixture': {'version': '>=1', 'cmake': 'FixtureNative'}}}}
+    report = run_check(spec, sys.executable, tmp_path, env=env)
+    assert report['modules']['native_fixture']['cmake_dir'] == str(directory)
+    assert report['modules']['native_fixture']['cmake_package'] == 'FixtureNative'
+    config.unlink()
+    with pytest.raises(ForgeError, match='CMake package FixtureNative is missing'):
+        run_check(spec, sys.executable, tmp_path, env=env)
+
+
+@pytest.mark.parametrize('shared', [False, True])
+def test_python_shared_library_requirement_rejects_a_static_library(tmp_path, monkeypatch, shared):
+    include = tmp_path / 'include'
+    include.mkdir()
+    (include / 'Python.h').write_text('')
+    library = 'libpython.so' if shared else 'libpython.a'
+    (tmp_path / library).write_text('fixture')
+    monkeypatch.setattr(standard_checks.sysconfig, 'get_path', lambda _: str(include))
+    values = {'LIBDIR': str(tmp_path), 'LDLIBRARY': library, 'LIBRARY': 'libpython.a'}
+    monkeypatch.setattr(standard_checks.sysconfig, 'get_config_var', values.get)
+    spec = {'python': {'development': True, 'shared': True}}
+    report = standard_checks.probe(spec)
+    assert report['python']['development']
+    assert bool(standard_checks.evaluate(report, spec)) is (not shared)

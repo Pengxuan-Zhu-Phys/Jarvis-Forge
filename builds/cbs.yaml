@@ -1,4 +1,4 @@
-# In-place CBS build. jforge build run --source PATH selects the GAMBIT checkout.
+# GAMBIT and CBS share a profile-owned, checksum-pinned source tree.
 # Every preset shares ${sourceDir}/build, so this card does not pass -B.
 name: cbs
 platforms: [linux]
@@ -14,17 +14,37 @@ dependencies:
   - "gsl@2.1:"
   - "openblas+shared"
   - "hdf5~mpi"
-  - zlib
+  - "zlib-ng+compat+shared"
+  - pkgconf
+  - patch
+  - libtool
+  - curl
   - sqlite
 build:
   name: CBS
   version: "2.7.0"
-  source: ./gambit
+  source:
+    shared: {name: gambit, version: "2.7.0"}
+    url: https://codeload.github.com/GambitBSM/gambit/tar.gz/f9b01394f90a6185c77304f2320eaa7906a0fcd5
+    sha256: 656d6625754e296483bec56b3b4ba4c4a014e4f66887ccb1f99335007a3cfa66
+    subdir: gambit-f9b01394f90a6185c77304f2320eaa7906a0fcd5
   in_place: true
   required_files: [CBS]
   cmake:
     preset: cbs-gnu
-    options: {CMAKE_CXX_STANDARD: 17}
+    build_preset: cbs-gnu
+    options:
+      CMAKE_CXX_STANDARD: 17
+      WITH_ROOT: "ON"
+      WITH_HDF5: true
+      WITH_SQLite3: true
+      WITH_RESTFRAMES: true
+      WITH_ONNXRUNTIME: true
+      CBS_WITH_RIVET_CONTUR: true
+      CUTFLOW: true
+      WITH_MPI: false
+      GAMBIT_AUTO_DETECT_PYTHON: true
+      GAMBIT_AUTO_DETECT_ROOT: true
     binary_dir: preset
     lock: source
     targets: [CBS]
@@ -34,8 +54,18 @@ checks:
     python:
       version: ">=3.10"
       development: true
-      modules: {yaml: ">=6", pybind11: ">=2.13.6"}
-    tools: {c++: ">=9.1", gfortran: ">=9.1", make: ">=3", git: ">=2"}
+      shared: true
+      modules:
+        yaml: ">=6"
+        pybind11: {version: ">=2.13.6", cmake: pybind11}
+        numpy: null
+        cython: null
+        configobj: null
+        pandas: null
+        matplotlib: null
+    tools: {cmake: ">=3.24", cc: ">=9.1", c++: ">=9.1", gfortran: ">=9.1", make: ">=3", git: ">=2"}
+    scripts:
+      - path: scripts/cbs_preflight.py
   after:
     scripts:
       - path: scripts/cbs_acceptance.py

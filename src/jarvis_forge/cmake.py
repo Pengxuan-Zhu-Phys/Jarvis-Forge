@@ -38,9 +38,11 @@ def commands(options, source, build, prefix, *, jobs=1):
         elif isinstance(value, list):
             value = ";".join(str(v).replace(";", r"\;") for v in value)
         configure += [f"-D{key}:{entry['type']}={value}"]
-    compile_ = [cmake, "--build", str(build)]
+    compile_ = [cmake, "--build"]
     if options.get("build_preset"):
         compile_ += ["--preset", options["build_preset"]]
+    else:
+        compile_.append(str(build))
     compile_ += ["--parallel", str(jobs)]
     if options.get("targets"):
         compile_ += ["--target", *options["targets"]]
@@ -242,10 +244,11 @@ def preset_binary_dir(source, name):
 
 def _configure_presets(source):
     collected = {}
+    seen = set()
     for filename in ("CMakePresets.json", "CMakeUserPresets.json"):
         path = source / filename
         if path.is_file():
-            _load_presets(path, collected, set())
+            _load_presets(path, collected, seen)
     if not collected:
         raise ForgeError(f"No CMake configure presets in {source}.")
     return collected
@@ -298,7 +301,7 @@ def _resolve_preset(presets, name, stack):
     if not isinstance(inherits, list) or not all(isinstance(parent, str) for parent in inherits):
         raise ForgeError(f"CMake preset {name} has an invalid inherits value.")
     merged = {}
-    for parent in inherits:
+    for parent in reversed(inherits):
         if parent not in presets:
             raise ForgeError(f"CMake preset {name} inherits unknown preset {parent}.")
         parent_values = _resolve_preset(presets, parent, stack + [name])

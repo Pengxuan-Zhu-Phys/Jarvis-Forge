@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add a GAMBIT recipe alongside CBS, using the upstream GNU configure and build presets. Both recipes automatically acquire the same checksum-pinned source archive in the current profile and share its canonical `build/` directory.
+- Check shared Python development libraries and discover native CMake package directories from modules in the selected Python environment.
+- Add profile-owned shared source archives with atomic extraction, identity checks and locking. Application removal preserves the shared source pool; different profiles own separate trees.
+
+### Fixed
+
+- Declare the full CBS feature set explicitly so a prior GAMBIT configure cannot leave CBS features disabled. Check Rivet/Contur Python prerequisites. Use the native preset, standard CMake variables and exit codes as the integration contract, archive upstream validation output, and keep the CBS post-build script focused on startup. Use the same zlib-ng compatibility provider as ROOT and declare required native build tools.
+- Bind Python-module CMake packages to the checked interpreter and reject conflicting discovery. Keep default build and Matplotlib caches under the profile.
+- Emit native CMake build-preset commands without a positional binary directory, resolve included user presets once, and respect the first parent's precedence in preset inheritance.
+- Recheck installed app artifacts before reusing them. Shared preset trees reconfigure when another preset or an external configure changes their CMake cache, while preserving the build directory and dependency settings.
+
 ## 1.2.4 — 2026-11-23
 
 ### Fixed

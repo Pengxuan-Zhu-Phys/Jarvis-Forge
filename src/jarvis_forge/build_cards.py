@@ -289,7 +289,7 @@ def normalize(config, path, home=None, library_files=None):
                     if not source:
                         raise ForgeError(f"CMake module {name} requires path or installation.source.")
                     if isinstance(source, dict):
-                        _keys(source, {"url", "sha256", "subdir", "timeout_seconds"}, "installation.source")
+                        _keys(source, {"url", "sha256", "subdir", "timeout_seconds", "shared"}, "installation.source")
                         source = deepcopy(source)
                         source.setdefault("timeout_seconds", defaults["source"]["timeout_seconds"])
                         result["sources"][name] = source

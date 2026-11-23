@@ -45,8 +45,8 @@ jforge build show root --path
 `build fetch APP DIR` creates an external editable workspace. `build install DIR` builds there; the profile records its location but does not load or delete its files. Without DIR, sources, builds and installations belong to the profile. The install command prepares required applications, validates the host and Python, builds and checks outputs, and enables successful installations. Unchanged failed inputs resume automatically.
 
 ```bash
-jforge build fetch cbs /shared/work/cbs
-jforge build install /shared/work/cbs --yes
+jforge build install gambit
+jforge build install cbs
 jforge build install root@6.40.04
 jforge build install root --rebuild --yes
 jforge build remove root --yes
@@ -54,6 +54,8 @@ jforge build autoremove --yes
 ```
 
 Reinstalling an intact installed version enables it without rebuilding. Changing a version leaves the old installation until autoremove. Same-version rebuilding keeps the original absolute prefix and restores it on failure. Enabled dependent applications prevent conflicting version switches and deletion. External in-place source builds cannot restore modified source binaries.
+
+The Linux GNU GAMBIT and CBS recipes automatically download one checksum-pinned source archive into `profiles/NAME/sources/gambit-2.7.0/` and share its `build/` tree through upstream presets. Each app keeps its own receipt and startup check. The source pool belongs to the profile and remains available when an individual app is removed. Python stays in the user's pyenv environment. See [application builds](https://github.com/Pengxuan-Zhu-Phys/Jarvis-Books/blob/main/Docs/Jarvis-Forge/BUILDS.md) for the source and cache rules.
 
 `apt install --dry-run` performs native dependency resolution and saves a history record. It changes no installed software or profile selection. `apt install --from 0001 --yes` replays that exact lock. Preview operations may create planning evidence, download verified recipe assets and write logs. Homebrew previews use native dependency and dry-run commands.
 

@@ -22,10 +22,11 @@ def validate(spec):
     if not isinstance(spec, dict) or not spec or set(spec) - {"python", "tools"}:
         raise ForgeError("Standard checks accept python and tools sections.")
     python = spec.get("python", {})
-    if not isinstance(python, dict) or set(python) - {"version", "development", "modules"}:
-        raise ForgeError("Python checks accept version, development and modules.")
-    if "development" in python and not isinstance(python["development"], bool):
-        raise ForgeError("python.development must be boolean.")
+    if not isinstance(python, dict) or set(python) - {"version", "development", "shared", "modules"}:
+        raise ForgeError("Python checks accept version, development, shared and modules.")
+    for field in ("development", "shared"):
+        if field in python and not isinstance(python[field], bool):
+            raise ForgeError(f"python.{field} must be boolean.")
     modules = python.get("modules", [])
     if isinstance(modules, list):
         modules = {name: None for name in modules if isinstance(name, str)}
@@ -38,8 +39,10 @@ def validate(spec):
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", name):
             raise ForgeError(f"Invalid Python module name: {name}")
         if isinstance(value, dict):
-            if set(value) - {"version", "version_attribute", "distribution"} or not all(isinstance(v, str) for v in value.values()):
+            if set(value) - {"version", "version_attribute", "distribution", "cmake"} or not all(isinstance(v, str) for v in value.values()):
                 raise ForgeError(f"Invalid module check: {name}")
+            if "cmake" in value and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value["cmake"]):
+                raise ForgeError(f"Invalid CMake package name for module {name}")
             constraints.append(value.get("version"))
         elif value is not None and not isinstance(value, str):
             raise ForgeError(f"Module version constraint must be a string: {name}")
@@ -66,13 +69,14 @@ def probe(spec):
     import os
     report = {"python": {"path": sys.executable, "version": sys.version.split()[0]}, "modules": {}, "tools": {}}
     python = spec.get("python", {})
-    if python.get("development"):
+    if python.get("development") or python.get("shared"):
         header = Path(sysconfig.get_path("include")) / "Python.h"
         library = next((Path(sysconfig.get_config_var("LIBDIR") or sys.prefix) / value
                         for value in (sysconfig.get_config_var("LDLIBRARY"), sysconfig.get_config_var("LIBRARY"))
                         if value and (Path(sysconfig.get_config_var("LIBDIR") or sys.prefix) / value).is_file()), None)
         report["python"].update(header=str(header), library=str(library) if library else None,
-                                development=header.is_file() and library is not None)
+                                development=header.is_file() and library is not None,
+                                shared=bool(library and (".so" in library.name or library.suffix == ".dylib")))
     modules = python.get("modules", [])
     modules = {name: {} for name in modules} if isinstance(modules, list) else modules
     for name, settings in modules.items():
@@ -92,6 +96,12 @@ def probe(spec):
                     pass
             report["modules"][name] = {"status": "found", "path": str(getattr(module, "__file__", None)),
                                         "version": str(version) if version is not None else None}
+            if settings.get("cmake"):
+                package = settings["cmake"]
+                directory = Path(module.get_cmake_dir()).resolve()
+                if not any((directory / file).is_file() for file in (package + "Config.cmake", package.lower() + "-config.cmake")):
+                    raise ValueError(f"CMake package {package} is missing from {directory}")
+                report["modules"][name].update(cmake_package=package, cmake_dir=str(directory))
         except Exception as exc:
             report["modules"][name] = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
     tools = spec.get("tools", [])
@@ -134,6 +144,8 @@ def evaluate(report, spec):
     version("Python", report["python"]["version"], spec.get("python", {}).get("version"))
     if spec.get("python", {}).get("development") and not report["python"].get("development"):
         failures.append("Python development headers/library are missing")
+    if spec.get("python", {}).get("shared") and not report["python"].get("shared"):
+        failures.append("Python shared library is missing")
     modules = spec.get("python", {}).get("modules", [])
     modules = {name: None for name in modules} if isinstance(modules, list) else modules
     for name, expected in modules.items():
