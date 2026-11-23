@@ -66,6 +66,7 @@ def native(tmp_path, monkeypatch):
     request=row('tool'); dag=[row('app',root=True,dependencies=[edge('tool','build')]),request]
     file=tmp_path/'dag.json';write_json(file,{'packages':dag})
     class Spec:
+        variants = {}
         external=False
         name='tool';version='1.0'
         def __init__(self,prefix,hash):self.prefix=prefix;self.hash=hash
@@ -228,3 +229,120 @@ def test_executable_symlink_retargeting_invalidates_source_identity(native):
     reuse.check_files([selected])
     binary.unlink();binary.symlink_to(second)
     with pytest.raises(ForgeError,match='changed'):reuse.check_files([selected])
+
+
+@pytest.mark.parametrize("bad_index", [0, 2])
+@pytest.mark.parametrize("failure", ["solver", "patch-order", "unused", "stale-existing", "retained-stale", "unverified"])
+def test_incompatible_candidate_keeps_other_tools(tmp_path, bad_index, failure):
+    home = project_profile(ForgeHome(tmp_path / "forge"), "ubuntu24")
+    (home.root / "tools/pkg/.spack-db").mkdir(parents=True)
+    op = tmp_path / "op"
+    env = op / "candidate"
+    config = env / ".jforge-config/packages.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(yaml.safe_dump({"packages": {}}))
+    names = ["first", "second", "third"]
+    bad = names[bad_index]
+    dag = [row("app", root=True, dependencies=[edge(name, "build") for name in names])]
+    candidates = []
+    for name in names:
+        tool = row(name)
+        dag.append(tool)
+        prefix = home.root / "tools/pkg" / name
+        prefix.mkdir()
+        tool["node"]["parameters"]["patches"] = ["a", "b"]
+        tool["node"]["patches"] = ["b", "a"]
+        candidates.append({
+            "name": name, "target_hash": name, "prefix": str(prefix), "spec": f"{name}@=1.0",
+            "parameters": tool["node"]["parameters"], "patches": ["b", "a"],
+            "checks": {}, "runtime_prefixes": [str(prefix)],
+        })
+    initial = copy.deepcopy(dag)
+    stale = initial[bad_index + 1]
+    if failure in {"stale-existing", "retained-stale"}:
+        stale.update(external=True, prefix=candidates[bad_index]["prefix"])
+    if failure == "unused":
+        candidates[bad_index]["checks"] = {str(tmp_path / "disappeared"): "old"}
+    (env / "spack.yaml").write_text(yaml.safe_dump({"spack": {"concretizer": {"reuse": {"from": [{"type": "local"}]}}}}))
+    write_json(op / "dag.json", {"packages": initial})
+    committed = tmp_path / "committed.lock"
+    committed.write_text("installed roots")
+
+    def resolve(policy, flags, *, suffix):
+        lock = env / "spack.lock"
+        assert lock.read_text() == "installed roots" and "--force" not in flags
+        rules = yaml.safe_load(config.read_text())["packages"]
+        lock.write_text(",".join(sorted(rules)))
+        if bad in rules and failure == "solver":
+            write_json(op / f"command-concretize{suffix}.json", {"status": "failed", "exit_code": 1})
+            raise ForgeError("incompatible candidate")
+        solved = copy.deepcopy(dag)
+        for tool in solved[1:]:
+            name = tool["name"]
+            if name == bad and failure == "unused":
+                continue
+            if failure == "retained-stale" and name == bad:
+                tool.update(external=True, prefix=candidates[bad_index]["prefix"])
+            if name in rules:
+                tool.update(external=True, prefix=rules[name]["externals"][0]["prefix"])
+                if name == bad and failure == "patch-order":
+                    tool["node"]["patches"].reverse()
+                if name == bad and failure == "unverified":
+                    tool["prefix"] = str(home.root / "tools/pkg/unverified")
+        write_json(op / "dag.json", {"packages": solved})
+        return {"packages": solved}
+
+    def query(options, label):
+        if failure in {"stale-existing", "retained-stale"} and label.endswith("-1"):
+            return {"selected": [], "unsafe_existing": [stale], "rejected": []}
+        return {"selected": candidates, "unsafe_existing": [], "rejected": []}
+
+    messages = []
+    planner = reuse.Planner(home, env, op, query, resolve, committed_lock=committed, progress=messages.append)
+    if failure == "retained-stale":
+        with pytest.raises(reuse.ReuseRejected, match="retained an unsafe"):
+            planner.apply({"packages": initial}, "never", ["concretize"])
+        return
+    result = planner.apply({"packages": initial}, "never", ["concretize"])
+    expected = set(names) - {bad}
+    assert {r["name"] for r in result["packages"] if r["external"]} == expected
+    assert {r["name"] for r in read_json(env / "build-tool-reuse.json")["selected"]} == expected
+    configured = set(names) if failure == "unused" else expected
+    assert set(yaml.safe_load(config.read_text())["packages"]) == configured
+    assert (env / "spack.lock").read_text() == ",".join(sorted(configured))
+    assert messages[-1].startswith("Reused 2 build tools") and bad not in messages[-1]
+
+
+@pytest.mark.parametrize("external_order", [None, ["b", "a"], ["a", "b"]])
+def test_external_spec_lets_spack_derive_ordered_patches(monkeypatch, external_order):
+    class PatchedSpec:
+        prefix = "/installed/tool"
+
+        def __init__(self):
+            self.variants = {"patches": ["a", "b"], "shared": True}
+
+        def node_dict_with_hashes(self):
+            return {"parameters": self.variants, "patches": ["a", "b"]}
+
+        def copy(self, *, deps):
+            assert deps is False
+            return copy.deepcopy(self)
+
+        def format(self, template):
+            assert self.variants == {"shared": True}
+            return "tool@=1.0+shared"
+
+    source = PatchedSpec()
+    externals = ModuleType("spack.externals")
+    def parse(config):
+        assert config == {"spec": "tool@=1.0+shared", "prefix": source.prefix}
+        params = {"patches": ["a", "b"]} if external_order else {}
+        return SimpleNamespace(node_dict_with_hashes=lambda: {"parameters": params, "patches": external_order})
+    externals.external_spec = parse
+    monkeypatch.setitem(sys.modules, "spack.externals", externals)
+    if external_order == ["a", "b"]:
+        assert reuse.external_spec(source) == "tool@=1.0+shared"
+    else:
+        with pytest.raises(ValueError, match="patch hashes and order"):
+            reuse.external_spec(source)
+    assert source.variants["patches"] == ["a", "b"]

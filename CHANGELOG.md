@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Spack build-tool reuse checks that the external specification preserves the installed patch hashes and application order. An unrepresentable tool stays native without invalidating other candidates. If a candidate fails the solve or validation, apt and build retry compatible subsets. Progress distinguishes candidates from tools actually referenced by the final dependency graph.
+- Replanning after a stale historical tool can still reuse healthy tools. Only referenced candidates undergo final file validation. A required external tool that resolves to an unverified prefix is rejected.
+
 ## 1.2.3 — 2026-11-23
 
 ### Changed

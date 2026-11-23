@@ -1,5 +1,6 @@
 """Borrow executable build tools without exposing their old runtime DAG as libraries."""
 from pathlib import Path
+import copy
 import os
 import re
 import shlex
@@ -56,7 +57,8 @@ def matches(requested, source):
     a, b = requested.get("node", {}), source.get("node", {})
     return (requested["name"] == source["name"] and requested["version"] == source["version"]
             and bool(a.get("package_hash")) and a.get("package_hash") == b.get("package_hash")
-            and a.get("parameters") == b.get("parameters") and a.get("arch") == b.get("arch"))
+            and a.get("parameters") == b.get("parameters") and a.get("patches") == b.get("patches")
+            and a.get("arch") == b.get("arch"))
 
 
 def check_files(selection):
@@ -119,6 +121,25 @@ def _executables(prefix, runtime_prefixes):
     return checks
 
 
+def external_spec(spec):
+    fmt = "{name}{@versions}{compiler_flags}{variants}"
+    if "patches" not in spec.variants:
+        return spec.format(fmt)
+
+    # A textual patch variant lacks Spack's internal application order. Check
+    # what its external parser actually preserves before asking for a full solve.
+    from spack.externals import external_spec as parse_external
+    constraint = spec.copy(deps=False)
+    del constraint.variants["patches"]
+    text = constraint.format(fmt)
+    parsed = parse_external({"spec": text, "prefix": str(spec.prefix)}).node_dict_with_hashes()
+    source = spec.node_dict_with_hashes()
+    if (parsed.get("parameters", {}).get("patches") != source["parameters"]["patches"]
+            or parsed.get("patches") != source.get("patches")):
+        raise ValueError("Spack external cannot reproduce the installed patch hashes and order")
+    return text
+
+
 def candidates(options):
     """Run inside the pinned engine: the source Spack DB is authoritative."""
     import spack.store
@@ -162,6 +183,7 @@ def candidates(options):
                     if borrowed and prefix != Path(request["prefix"]).resolve():
                         continue
                     try:
+                        constraint = external_spec(spec)
                         checks, runtime = {}, []
                         for dep in spack.traverse.traverse_nodes([spec], deptype=("link", "run")):
                             if dep.name in PYTHON:
@@ -183,7 +205,7 @@ def candidates(options):
                         checks.update(_executables(prefix, runtime))
                         selected.append({"name": spec.name, "version": str(spec.version), "prefix": str(prefix),
                                          "source_hash": spec.dag_hash(), "target_hash": request["hash"],
-                                         "spec": spec.format("{name}{@versions}{compiler_flags}{variants}"),
+                                         "spec": constraint, "patches": source["node"].get("patches"),
                                          "parameters": source["node"]["parameters"],
                                          "checks": checks, "resolved_paths": {p: str(Path(p).resolve()) for p in checks},
                                          "runtime_prefixes": runtime})
@@ -196,20 +218,14 @@ def candidates(options):
     return {"selected": selected, "rejected": rejected, "unsafe_existing": unsafe}
 
 
-def invalid_uses(packages, selection):
-    allowed = build_only(packages)
-    unsafe = []
-    for request in packages:
-        for source in selection:
-            if (request["name"] == source["name"] and request.get("external")
-                    and Path(request["prefix"]).resolve() == Path(source["prefix"]).resolve()):
-                if request["hash"] not in allowed or request.get("node", {}).get("parameters") != source["parameters"]:
-                    unsafe.append(request)
-    return unsafe
-
-
 class ReuseRejected(ForgeError):
     pass
+
+
+class InvalidReferences(ReuseRejected):
+    def __init__(self, rows, reason):
+        super().__init__(reason, code=1)
+        self.rows = rows
 
 
 class Planner:
@@ -222,23 +238,54 @@ class Planner:
         self.original = {}
         self.selection = []
         self.attempt = 0
-        self.disabled = False
+        self.excluded_names = set()
         self.omit_cached_build_deps = False
+
+    def _needed_tools(self, dag, plan, fixed):
+        store = (self.home.root / "tools/pkg").resolve()
+        needed = {r["hash"] for r in plan["packages"]}
+        _, runtime = graph_roles(dag)
+        return [r for r in dag if r.get("external") and r["name"] not in fixed
+                and (r["hash"] in needed or runtime is None or r["hash"] in runtime)
+                and Path(r["prefix"]).resolve().is_relative_to(store)]
+
+    def _restore_rules(self, rules):
+        for name, original in self.original.items():
+            if original is None:
+                rules.pop(name, None)
+            else:
+                rules[name] = copy.deepcopy(original)
+
+    def _references(self, packages):
+        by_prefix = {}
+        for row in packages:
+            if row.get("external"):
+                key = row["name"], Path(row["prefix"]).resolve()
+                by_prefix.setdefault(key, []).append(row)
+        for source in self.selection:
+            refs = by_prefix.get((source["name"], Path(source["prefix"]).resolve()))
+            if refs:
+                yield source, refs
 
     def _save(self, packages):
         from .storage import write_json
-        selected = []
-        for source in self.selection:
-            refs = [r["hash"] for r in packages if r.get("external") and r["name"] == source["name"]
-                    and Path(r["prefix"]).resolve() == Path(source["prefix"]).resolve()]
-            if refs:
-                selected.append({**source, "external_hashes": refs})
+        selected = [{**source, "external_hashes": [r["hash"] for r in refs]}
+                    for source, refs in self._references(packages)]
         write_json(self.envdir / "build-tool-reuse.json", {"schema_version": 1, "selected": selected})
+        return selected
 
     def validate(self, packages):
-        check_files(self.selection)
-        if invalid_uses(packages, self.selection):
-            raise ReuseRejected("A reused build tool became a link/runtime dependency.", code=1)
+        allowed = build_only(packages)
+        for source, refs in self._references(packages):
+            for row in refs:
+                node = row.get("node", {})
+                if (row["hash"] not in allowed or node.get("parameters") != source["parameters"]
+                        or node.get("patches") != source.get("patches")):
+                    raise InvalidReferences(refs, f"Reused tool {source['name']} changed role, parameters or patch order.")
+            try:
+                check_files([source])
+            except ReuseRejected as exc:
+                raise InvalidReferences(refs, str(exc)) from exc
 
     def _fresh(self, policy, flags, label):
         lock = self.envdir / "spack.lock"
@@ -253,32 +300,30 @@ class Planner:
             retry_flags = list(dict.fromkeys([*flags, "--force"]))
         return self.resolve(policy, retry_flags, suffix="-" + label, **options)
 
-    def _fallback(self, policy, flags, hashes):
+    def _fallback(self, policy, flags, hashes, *, invalid_names=()):
         import yaml
         from .storage import write_json
         config = self.envdir / ".jforge-config/packages.yaml"
         document = yaml.safe_load(config.read_text())
-        for name, original in self.original.items():
-            if original is None:
-                document["packages"].pop(name, None)
-            else:
-                document["packages"][name] = original
+        self._restore_rules(document["packages"])
         config.write_text(yaml.safe_dump(document, sort_keys=False))
         manifest = self.envdir / "spack.yaml"
         document = yaml.safe_load(manifest.read_text())
         for source in document["spack"]["concretizer"]["reuse"]["from"]:
             source.setdefault("exclude", []).extend("/" + h for h in sorted(set(hashes)))
         manifest.write_text(yaml.safe_dump(document, sort_keys=False))
-        self.disabled = True
+        self.excluded_names.update(invalid_names)
         self.selection = []
         write_json(self.envdir / "build-tool-reuse.json", {"schema_version": 1, "selected": []})
         if self.progress:
-            self.progress("Build-tool reuse is unavailable; resolve with native builds")
+            if invalid_names:
+                self.progress("Resolve again without invalid build tools · " + ", ".join(sorted(invalid_names)))
+            else:
+                self.progress("Build-tool reuse is unavailable; resolve with native builds")
         return self.apply(self._fresh(policy, flags, f"build-tools-fallback-{self.attempt}"), policy, flags,
-                          omit_cached_build_deps=self.omit_cached_build_deps)
+                          omit_cached_build_deps=self.omit_cached_build_deps, native_only=not invalid_names)
 
-    def apply(self, plan, policy, flags, *, omit_cached_build_deps=False):
-        import copy
+    def apply(self, plan, policy, flags, *, omit_cached_build_deps=False, native_only=False):
         import yaml
         from .storage import write_json
         from .unified_profiles import record
@@ -291,17 +336,17 @@ class Planner:
         config = yaml.safe_load(config_file.read_text())
         fixed = [name for name, value in config.get("packages", {}).items()
                  if isinstance(value, dict) and value.get("buildable") is False and name not in self.original]
-        borrowed = [r for r in dag if r.get("external") and r["name"] not in fixed
-                    and Path(r["prefix"]).resolve().is_relative_to(tools.resolve() / "pkg")]
-        _, runtime_nodes = graph_roles(dag)
-        needed = {r["hash"] for r in plan["packages"]}
-        borrowed = [r for r in borrowed if r["hash"] in needed or runtime_nodes is None or r["hash"] in runtime_nodes]
-        if self.disabled and not borrowed:
+        borrowed = self._needed_tools(dag, plan, fixed)
+        if any(r["name"] in self.excluded_names for r in borrowed):
+            raise ReuseRejected("Native resolution retained an unsafe build-tool reference.", code=1)
+        if native_only and not borrowed:
             return plan
         if not (tools / "pkg/.spack-db").is_dir():
             if not borrowed:
+                self.selection = []
+                self._save(dag)
                 return plan
-            if self.replay or self.disabled:
+            if self.replay or native_only:
                 raise ReuseRejected("The historical build-tool store is unavailable.", code=1)
             self.attempt += 1
             return self._fallback(policy, flags, [r["hash"] for r in borrowed])
@@ -313,20 +358,23 @@ class Planner:
         if response["unsafe_existing"]:
             if self.replay:
                 raise ReuseRejected("Historical build tools are unavailable or required for linking/runtime.", code=1)
-            if self.disabled:
+            if native_only:
                 raise ReuseRejected("Native resolution retained an unsafe build-tool reference.", code=1)
-            return self._fallback(policy, flags, [r["hash"] for r in response["unsafe_existing"]])
-        selection = response["selected"]
+            unsafe = response["unsafe_existing"]
+            return self._fallback(policy, flags, [r["hash"] for r in unsafe],
+                                  invalid_names={r["name"] for r in unsafe})
+        selection = [r for r in response["selected"] if r["name"] not in self.excluded_names]
         self.selection = selection
         existing = {r["hash"] for r in borrowed}
         proposed = [r for r in selection if r["target_hash"] not in existing]
-        if not proposed or self.replay or self.disabled or not self.allow_new or policy == "only":
+        if not proposed or self.replay or native_only or not self.allow_new or policy == "only":
             try:
                 self.validate(dag)
-            except ReuseRejected:
-                if self.replay or self.disabled:
+            except InvalidReferences as exc:
+                if self.replay or native_only:
                     raise
-                return self._fallback(policy, flags, [r["hash"] for r in borrowed])
+                return self._fallback(policy, flags, [r["hash"] for r in exc.rows],
+                                      invalid_names={r["name"] for r in exc.rows})
             self._save(dag)
             return plan
         rules = config.setdefault("packages", {})
@@ -334,24 +382,58 @@ class Planner:
             name = source["name"]
             if name not in self.original:
                 self.original[name] = copy.deepcopy(rules.get(name))
-            rule = rules.setdefault(name, {})
-            external = {"spec": source["spec"], "prefix": source["prefix"]}
-            rule["externals"] = [external]
-            rule["buildable"] = False
-        config_file.write_text(yaml.safe_dump(config, sort_keys=False))
+
+        def trial(rows, label):
+            self._restore_rules(rules)
+            for source in rows:
+                rule = rules.setdefault(source["name"], {})
+                rule["externals"] = [{"spec": source["spec"], "prefix": source["prefix"]}]
+                rule["buildable"] = False
+            config_file.write_text(yaml.safe_dump(config, sort_keys=False))
+            self.selection = rows
+            try:
+                replacement = self._fresh(policy, flags, label)
+                solved = read_json(self.op / "dag.json")["packages"]
+                verified = {(r["name"], Path(r["prefix"]).resolve()) for r in rows}
+                for ref in self._needed_tools(solved, replacement, fixed):
+                    if (ref["name"], Path(ref["prefix"]).resolve()) not in verified:
+                        raise ReuseRejected(f"Unverified build-tool reference: {ref['name']}", code=1)
+                self.validate(solved)
+            except ForgeError as exc:
+                from .spack_backend import _completed_install_failure, _reject_cache_security_failure
+                _reject_cache_security_failure(self.op, "concretize-" + label, exc)
+                if not isinstance(exc, ReuseRejected) and not _completed_install_failure(self.op, "concretize-" + label):
+                    raise
+                return None
+            return replacement
+
         if self.progress:
-            self.progress(f"Reuse {len(selection)} installed build tools from this profile")
-        retry_label = f"build-tools-{self.attempt}"
-        try:
-            replacement = self._fresh(policy, flags, retry_label)
-            dag = read_json(self.op / "dag.json")["packages"]
-            self.validate(dag)
-        except ForgeError as exc:
-            from .spack_backend import _completed_install_failure, _reject_cache_security_failure
-            _reject_cache_security_failure(self.op, "concretize-" + retry_label, exc)
-            if not isinstance(exc, ReuseRejected) and not _completed_install_failure(self.op, "concretize-" + retry_label):
-                raise
+            self.progress(f"Check {len(proposed)} candidate build tools from this profile")
+        label = f"build-tools-{self.attempt}"
+        replacement = trial(selection, label)
+        if replacement is None and len(selection) > 1:
+            # Keep each successful subset in the next trial so the final plan
+            # proves the retained tools can be used together.
+            retained = [r for r in selection if r["target_hash"] in existing]
+            middle = len(proposed) // 2
+            pending = [proposed[middle:], proposed[:middle]] if middle else []
+            sequence = 0
+            while pending:
+                group = pending.pop()
+                sequence += 1
+                replacement = trial(retained + group, f"{label}-subset-{sequence}")
+                if replacement is not None:
+                    retained.extend(group)
+                elif len(group) > 1:
+                    middle = len(group) // 2
+                    pending.extend((group[middle:], group[:middle]))
+            if replacement is None and retained:
+                replacement = trial(retained, label + "-retained")
+        if replacement is None:
             return self._fallback(policy, flags, [r["hash"] for r in read_json(self.op / "dag.json")["packages"]
                                                 if r.get("external") and r["name"] in self.original])
-        self._save(dag)
+        reused = self._save(read_json(self.op / "dag.json")["packages"])
+        if self.progress:
+            names = ", ".join(row["name"] for row in reused)
+            self.progress(f"Reused {len(reused)} build tools" + (f" · {names}" if names else ""))
         return replacement

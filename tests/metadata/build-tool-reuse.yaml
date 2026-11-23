@@ -263,3 +263,35 @@ definitions:
   failure_meaning: A failed incremental install can remove previously installed files.
   limitations: [Local transaction fixture]
   review: {status: draft}
+- id: forge.build-tools.partial-reuse
+  title: Preserve compatible build tools after a candidate fails
+  purpose: Isolate optional solver and patch-order failures across multiple tools.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_incompatible_candidate_keeps_other_tools
+  scenario:
+    inputs: {environment: Three tools and a committed lock in a local solver fixture}
+    action: Reject a candidate during solving or validation, remove an unused candidate, or recover from a stale historical reference.
+  criteria:
+  - id: compatible-tools
+    expected: The plan and evidence retain the compatible tools. A required stale reference or unverified external prefix is never accepted.
+    verification: automated
+  failure_meaning: One incompatible tool causes unrelated rebuilds or incorrect reuse evidence.
+  limitations: [Simulated solver]
+  review: {status: draft}
+- id: forge.build-tools.external-patches
+  title: Derive patch variants from the recipe
+  purpose: Keep ordered source patches intact while formatting an external constraint.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_external_spec_lets_spack_derive_ordered_patches
+  scenario:
+    inputs: {environment: Local patched spec fixture}
+    action: Format a candidate with a patch and another variant.
+  criteria:
+  - id: patch-identity
+    expected: The external constraint retains the ordinary variant and the source retains its original patches.
+    verification: automated
+  failure_meaning: External solving can lose patch metadata or mutate the installed spec.
+  limitations: [Spec-format fixture]
+  review: {status: draft}
