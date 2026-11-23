@@ -126,9 +126,69 @@ def test_rebuild_requires_plan_confirmation_before_detaching_or_moving(native):
         install(['lib@1.0 +shared'])
     assert db==before and (home.root/'pkg/lib-1.0/payload').read_text()=='lib-1.0-plain'
     assert not any(label=='database-detach' for label in calls)
+    preview = install(["lib@1.0 +shared"], dry_run=True)
+    assert not preview["changes"]["install"]
+    assert [p["name"] for p in preview["changes"]["rebuild"]] == ["lib"]
     selected=[]
-    install(['lib@1.0 +shared'],confirm=lambda plan:selected.extend(plan['rebuild']))
+    result = install(['lib@1.0 +shared'],confirm=lambda plan:selected.extend(plan['rebuild']))
+    assert result['changes']['install'] == []
     assert selected[0]['name']=='lib' and len(db)==1
+
+
+def test_additive_install_preserves_constraints_and_refuses_changed_roots(native, monkeypatch):
+    home, db, calls, _, install = native
+    first = install(["app@1.0"])
+    before = deepcopy(db)
+    state = (home.root / "packages.json").read_bytes()
+    previous_lock = Path(first["lockfile"]).read_bytes()
+    run = backend.run
+
+    def drift(scope, args, operation, label, **kwargs):
+        result = run(scope, args, operation, label, **kwargs)
+        if label == "dag":
+            dag = json.loads(result)
+            next(row for row in dag["packages"] if row["name"] == "app")["hash"] = "different"
+            return json.dumps(dag)
+        return result
+
+    calls.clear()
+    monkeypatch.setattr(backend, "run", drift)
+    with pytest.raises(ForgeError, match="would change installed roots: app"):
+        install(["app", "new-package"])
+    assert "install" not in calls and "database-detach" not in calls
+    assert db == before and (home.root / "packages.json").read_bytes() == state
+    assert Path(first["lockfile"]).read_bytes() == previous_lock
+    monkeypatch.setattr(backend, "run", run)
+    result = install(["app", "new-package"])
+    assert result["roots"] == ["app@1.0", "new-package"]
+    assert [row["name"] for row in result["changes"]["install"]] == ["new-package"]
+    assert not result["changes"]["rebuild"]
+
+
+@pytest.mark.parametrize("plan_inventory", [True, False])
+def test_rollback_keeps_installed_packages_after_plan_cache_invalidation(native, monkeypatch, plan_inventory):
+    from jarvis_forge.build_tool_reuse import Planner
+
+    home, db, calls, fail, install = native
+    install(["app"])
+    before = deepcopy(db)
+    original = Planner.apply
+
+    def invalidate(planner, *args, **kwargs):
+        plan = original(planner, *args, **kwargs)
+        write_json(planner.envdir / "build-tool-reuse.json", {"selected": []})
+        if plan_inventory:
+            plan["inventory"] = list(before.values())
+        return plan
+
+    monkeypatch.setattr(Planner, "apply", invalidate)
+    fail["install"] = True
+    with pytest.raises(ForgeError, match="native build failed"):
+        install(["new-package"])
+    assert db == before
+    for old in before.values():
+        assert (Path(old["prefix"]) / "payload").read_text() == old["hash"]
+    assert not (home.root / "pkg/new-package-1.0").exists()
 
 
 def test_remove_dependency_also_removes_dependent_roots_but_keeps_automatic_libraries(native):

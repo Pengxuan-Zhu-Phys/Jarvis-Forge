@@ -113,6 +113,7 @@ class Transaction:
         for name in (
             "spack/spack.yaml",
             "spack/spack.lock",
+            "spack/build-tool-reuse.json",
             "packages.json",
             "activate.sh",
             "profile.yaml",

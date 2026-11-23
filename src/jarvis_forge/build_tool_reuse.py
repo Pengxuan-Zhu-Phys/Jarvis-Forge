@@ -214,10 +214,11 @@ class ReuseRejected(ForgeError):
 
 class Planner:
     """Operation-local optional externals; native fallback never changes the source store."""
-    def __init__(self, home, envdir, op, run, resolve, *, progress=None, replay=False, enabled=True, allow_new=True):
+    def __init__(self, home, envdir, op, run, resolve, *, progress=None, replay=False, enabled=True, allow_new=True, committed_lock=None):
         self.home, self.envdir, self.op = home, Path(envdir), Path(op)
         self.run, self.resolve, self.progress = run, resolve, progress
         self.replay, self.enabled, self.allow_new = replay, enabled, allow_new
+        self.committed_lock = committed_lock
         self.original = {}
         self.selection = []
         self.attempt = 0
@@ -244,7 +245,13 @@ class Planner:
         if lock.exists():
             lock.rename(self.op / f"spack-before-{label}.lock")
         options = {"omit_cached_build_deps": True} if self.omit_cached_build_deps else {}
-        return self.resolve(policy, [*dict.fromkeys([*flags, "--force"])], suffix="-" + label, **options)
+        if self.committed_lock is not None:
+            # Recompute the new roots while Spack keeps the installed concrete roots.
+            shutil.copy2(self.committed_lock, lock)
+            retry_flags = list(flags)
+        else:
+            retry_flags = list(dict.fromkeys([*flags, "--force"]))
+        return self.resolve(policy, retry_flags, suffix="-" + label, **options)
 
     def _fallback(self, policy, flags, hashes):
         import yaml

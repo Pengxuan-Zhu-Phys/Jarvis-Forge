@@ -24,6 +24,7 @@ def transaction(tmp_path):
     row=package(home)
     write_json(home.root/'packages.json',{'selected':'old'})
     (home.root/'activate.sh').write_text('old activation\n')
+    write_json(home.root/'spack/build-tool-reuse.json', {'selected': ['old-tool']})
     op=tmp_path/'operation';op.mkdir()
     checkpoint=op/'database-before.json';checkpoint.write_text('{"old":"native-record"}')
     calls=[]
@@ -40,9 +41,11 @@ def test_same_version_rebuild_uses_original_prefix_and_restores_files_database_a
     prefix=Path(new['prefix']);prefix.mkdir();(prefix/'payload').write_text('new but failed')
     (home.root/'activate.sh').write_text('failed new activation')
     write_json(home.root/'packages.json',{'selected':'failed'})
+    (home.root/'spack/build-tool-reuse.json').unlink()
     tx.rollback()
     assert (prefix/'payload').read_text()=='old'
     assert read_json(home.root/'packages.json')=={'selected':'old'}
+    assert read_json(home.root/'spack/build-tool-reuse.json') == {'selected': ['old-tool']}
     assert (home.root/'activate.sh').read_text()=='old activation\n'
     assert calls[-1]['action']=='restore'
     assert not tx.backup.exists()

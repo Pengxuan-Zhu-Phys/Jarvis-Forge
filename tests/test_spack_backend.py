@@ -849,7 +849,7 @@ def test_auto_cache_failure_validates_source_plan_before_fallback(managed, monke
 
     monkeypatch.setattr(b, "run", cache_miss)
     if conflict:
-        with pytest.raises(ForgeError, match="multiple instances|confirm"):
+        with pytest.raises(ForgeError, match="multiple instances|would replace the active package"):
             b.transact(home, "install", ["fixture-app"])
         assert (home.root / "packages.json").read_bytes() == before
         assert Path(first["activation"]).is_file()
@@ -1049,7 +1049,7 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
 
     monkeypatch.setattr(b, "run", stale_index)
     if invalid_retry:
-        with pytest.raises(ForgeError, match="confirm|requires the external Python|requires target=x86_64|unapproved deprecated versions"):
+        with pytest.raises(ForgeError, match="would replace the active package|requires the external Python|requires target=x86_64|unapproved deprecated versions"):
             b.transact(home, "install", ["fixture-app", "fixture-source"],
                        target="x86_64" if invalid_retry == "target" else None,
                        deprecated_versions={"fixture-app": "1.0"})
@@ -1423,8 +1423,9 @@ def test_eigen_activation_exports_legacy_header_hints(managed):
     assert '_JFORGE_APT_HAD_EIGEN3_ROOT' in text
 
 
+@pytest.mark.parametrize('reject_optional', [False, True])
 @pytest.mark.parametrize('cache', ['never', 'auto'])
-def test_build_tool_reuse_is_applied_in_native_transactions_and_cache_fallback(managed, monkeypatch, cache):
+def test_build_tool_reuse_is_applied_in_native_transactions_and_cache_fallback(managed, monkeypatch, cache, reject_optional):
     from jarvis_forge import toolchains, unified_profiles
     from jarvis_forge.storage import digest
     home, calls = managed
@@ -1436,6 +1437,11 @@ def test_build_tool_reuse_is_applied_in_native_transactions_and_cache_fallback(m
     monkeypatch.setattr(toolchains, 'binding', lambda h: {'version':'13.3.0','prefix':'/compiler',
                                                         'drivers':{'CC':'/compiler/bin/gcc','CXX':'/compiler/bin/g++','FC':'/compiler/bin/gfortran'},'tools':{}})
     monkeypatch.setattr(toolchains, 'validate_plan', lambda *a: None)
+    first = b.transact(home, "install", ["fixture-existing@1.0"], cache="never")
+    previous = Path(first["environment"])
+    (previous / "spack.lock").write_text("committed fixture lock")
+    # Simulate a previous transaction that retained a historical build-only reference.
+    write_json(previous / "build-tool-reuse.json", {"selected": [{"external_hashes": ["historical-tool"]}]})
     (home.root/'tools/pkg/.spack-db').mkdir(parents=True)
     source = home.root/'tools/pkg/fixture-lib-1.0';source.mkdir()
     executable = source/'tool';executable.write_text('retained build tool')
@@ -1446,6 +1452,14 @@ def test_build_tool_reuse_is_applied_in_native_transactions_and_cache_fallback(m
     labels=[]
     def engine(home,args,op,label,**kwargs):
         labels.append(label)
+        if label.startswith("concretize"):
+            lock = kwargs["envdir"] / "spack.lock"
+            assert lock.read_text() == "committed fixture lock"
+            assert "--force" not in args
+            lock.write_text("new candidate lock")
+            if reject_optional and label.startswith("concretize-build-tools-") and "fallback" not in label:
+                write_json(op / f"command-{label}.json", {"status": "failed", "exit_code": 1})
+                raise ForgeError("fixture optional tool cannot be used")
         if label.startswith('build-tool-candidates'):
             return json.dumps({'selected':[selected], 'rejected':[], 'unsafe_existing':[]})
         if cache=='auto' and label=='install-cache':
@@ -1470,10 +1484,16 @@ def test_build_tool_reuse_is_applied_in_native_transactions_and_cache_fallback(m
     result=b.transact(home,'install',['fixture-app'],cache=cache)
     assert result['state_committed']
     tool=next(p for p in result['packages'] if p['name']=='fixture-lib')
-    assert tool['external'] and tool['prefix']==str(source)
+    assert result["changes"]["rebuild"] == []
+    assert "fixture-existing@1.0" in result["roots"]
     assert any(label.startswith('concretize-build-tools-') for label in labels)
-    assert read_json(home.root/'spack/build-tool-reuse.json')['selected']
     assert executable.read_text()=='retained build tool'
+    if reject_optional:
+        assert not tool["external"]
+        assert any("build-tools-fallback" in label for label in labels)
+        return
+    assert tool['external'] and tool['prefix']==str(source)
+    assert read_json(home.root/'spack/build-tool-reuse.json')['selected']
     # A later request starts without treating the old optional external as a
     # default provider; its new graph must establish eligibility again.
     op=home.root/'next-operation';op.mkdir()

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.3 — 2026-11-23
 
 ### Changed
 
@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Incremental Spack installs keep existing root specs and their concrete dependency graphs when trying build-tool reuse or falling back to native builds. An incompatible plan stops before replacing installed roots. Installation summaries list an in-place rebuild only once.
+- Preserve previously installed packages and build-tool reuse records when an installation fails after replanning.
 - Keep package progress live after displaying installation and fallback plans. Profile creation, apt installation and build dependencies share the active progress console; long plans use concise counts, and successful profile creation finalizes package progress.
 - Preserve recipe summary tables when descriptions are long, and move long app installation paths below aligned summaries. Measure error panel contents by terminal cells so Unicode paths remain complete and copyable.
 - Keep package inventories aligned on ordinary SSH terminals. When the Source column does not fit, group packages by source and retain the four-column table; narrow screens place package metadata on a separate line without truncating names or versions.

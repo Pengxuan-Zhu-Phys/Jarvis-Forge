@@ -231,3 +231,35 @@ definitions:
     exact replay and cache guarantees.
   limitations: *id001
   review: *id002
+- id: forge.build-tools.incremental-root-preservation
+  title: Preserve installed roots during incremental installation
+  purpose: Keep explicit constraints when adding a package and stop solver drift before a write.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_transactions.py::test_additive_install_preserves_constraints_and_refuses_changed_roots
+  scenario:
+    inputs: {environment: Temporary native store with a deterministic solver fixture}
+    action: Add an unrelated root while requesting the installed application by name.
+  criteria:
+  - id: roots
+    expected: Changed root hashes are refused before installation. A stable plan installs only the new package.
+    verification: automated
+  failure_meaning: Adding a package can silently replace installed applications or their dependencies.
+  limitations: [Local transaction fixture]
+  review: {status: draft}
+- id: forge.build-tools.rollback-after-planning-cache-invalidation
+  title: Protect installed files after replanning
+  purpose: Verify rollback uses the original store inventory even when the planning cache expires.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_transactions.py::test_rollback_keeps_installed_packages_after_plan_cache_invalidation
+  scenario:
+    inputs: {environment: Temporary native store with an installed app and library}
+    action: Invalidate the plan cache and fail a subsequent installation.
+  criteria:
+  - id: rollback
+    expected: Existing payloads and database records survive and the new prefix is absent.
+    verification: automated
+  failure_meaning: A failed incremental install can remove previously installed files.
+  limitations: [Local transaction fixture]
+  review: {status: draft}

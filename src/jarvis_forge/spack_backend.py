@@ -723,7 +723,7 @@ def _gcc_runtime_target(home):
     return _generic_host_target(home)
 
 
-def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None, expected_packages=None):
+def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None, expected_packages=None, preserve_lock=False):
     from .recipe_releases import ensure
     from .toolchains import binding, spack_requirements
 
@@ -767,7 +767,7 @@ def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None,
     if target:
         _require_target(packages, target)
     package_config.write_text(yaml.safe_dump(config, sort_keys=False))
-    if previous and not prior_tools and (Path(previous) / "spack.lock").is_file():
+    if previous and (preserve_lock or not prior_tools) and (Path(previous) / "spack.lock").is_file():
         shutil.copy2(Path(previous) / "spack.lock", directory / "spack.lock")
     return directory
 
@@ -1225,6 +1225,13 @@ def _publish(home, op, envdir, roots, snapshot):
     return records
 
 
+def _package_changes(plan, replacements, removed):
+    rebuilding = {row["prefix"] for row in replacements}
+    installs = [row for row in plan["packages"] if not row["installed"] and not row["external"]
+                and row["prefix"] not in rebuilding]
+    return {"install": installs, "rebuild": replacements, "remove": removed}
+
+
 def _requested_roots(before, action, translated):
     if action == "remove":
         names = {name_of(s) for s in translated}
@@ -1244,6 +1251,9 @@ def _requested_roots(before, action, translated):
         else:roots = before["roots"]
     else:
         names = {name_of(s) for s in translated}
+        if action in {"install", "check"}:
+            prior = {name_of(spec): spec for spec in before["roots"]}
+            translated = [prior.get(spec, spec) for spec in translated]
         roots = [s for s in before["roots"] if name_of(s) not in names] + translated
     if action == "check" and not translated:
         roots = before["roots"]
@@ -1343,7 +1353,19 @@ def transact(
             roots=[spec for spec in before['roots'] if name_of(spec) not in names]
         result["roots"] = roots
         previous = before.get("environment") if action not in {"upgrade", "full-upgrade"} else None
-        envdir = _candidate(home, op, roots, previous, reuse_buildcache=cache != "never", target=target,expected_packages=expected_packages)
+        additive = (action in {"install", "check"} and not selected_history
+                    and bool(before["roots"]) and set(before["roots"]).issubset(roots))
+        committed_lock = None
+        protected_roots = {}
+        protected_prefixes = {}
+        if additive:
+            if not previous or not (Path(previous) / "spack.lock").is_file():
+                raise ForgeError("Cannot preserve the installed profile: its Spack lockfile is missing.")
+            committed_lock = Path(previous) / "spack.lock"
+            protected_roots = {row["name"]: row["hash"] for row in before["packages"] if row.get("root")}
+            protected_prefixes = {row["prefix"]: row["hash"] for row in before["packages"] if not row["external"]}
+        envdir = _candidate(home, op, roots, previous, reuse_buildcache=cache != "never", target=target,
+                            expected_packages=expected_packages, preserve_lock=additive)
         if selected_history:
             shutil.copy2(selected_history/'spack.lock',envdir/'spack.lock')
             document=yaml.safe_load((envdir/'spack.yaml').read_text())
@@ -1409,7 +1431,7 @@ def transact(
                              envdir=envdir, timeout=timeout), "build-tool candidates")
         tool_reuse = Planner(home, envdir, op, tool_candidates, resolve_plan, progress=progress,
                              replay=bool(selected_history), enabled=bool(toolchain) and action != "remove",
-                             allow_new=cache != "only")
+                             allow_new=cache != "only", committed_lock=committed_lock)
 
         def validate_plan(plan, label, policy, flags, *, omit_cached_build_deps=False):
             nonlocal runtime_retried
@@ -1417,9 +1439,6 @@ def transact(
             write_json(op / f"{label}.json", {**plan, "cache_policy": policy})
             _validate_deprecated_versions(plan["packages"], allowed)
             _validate_external_python(home, plan["packages"])
-            if expected_packages is not None:
-                from .profile_exports import compare
-                compare(expected_packages,read_json(op/'dag.json')['packages'])
             if toolchain and roots:
                 validate_toolchain_plan(toolchain, read_json(op / "dag.json")["packages"])
             try:
@@ -1447,7 +1466,21 @@ def transact(
                 if any(p["name"] == "gcc-runtime" and not p["external"] and p["hash"] != installed
                        for p in plan["packages"]):
                     raise ForgeError("Spack could not reuse the installed gcc-runtime.", code=1)
-            tool_reuse.validate(read_json(op / "dag.json")["packages"])
+            dag = read_json(op / "dag.json")["packages"]
+            if expected_packages is not None:
+                from .profile_exports import compare
+                compare(expected_packages, dag)
+            if protected_roots:
+                resolved = {row["name"]: row["hash"] for row in dag if row.get("root")}
+                changed_roots = sorted(name for name, old in protected_roots.items() if resolved.get(name) != old)
+                if changed_roots:
+                    raise ForgeError("Incremental installation would change installed roots: " + ", ".join(changed_roots),
+                                     hint="Review the requested constraints and preview an explicit upgrade if needed.")
+            for row in plan["packages"]:
+                old = protected_prefixes.get(row["prefix"])
+                if not row["external"] and old is not None and row["hash"] != old:
+                    raise ForgeError(f"Incremental installation would replace the active package {row['name']} at {row['prefix']}.")
+            tool_reuse.validate(dag)
             evidence = envdir / "build-tool-reuse.json"
             if evidence.is_file():
                 result["reused_build_tools"] = [
@@ -1467,7 +1500,7 @@ def transact(
                 previous_roots = {name_of(r): r for r in before["roots"]}
                 changed = any(
                     name_of(r) in previous_roots and previous_roots[name_of(r)] != r
-                    for r in translated
+                    for r in roots
                 )
                 if changed and "--force" not in flags:
                     flags.append("--force")
@@ -1478,15 +1511,25 @@ def transact(
                 # Native concretization writes a valid empty lock, not the previous DAG.
                 plan = resolve_plan(plan_cache, flags)
             plan = validate_plan(plan, "plan", plan_cache, flags)
-            if action == "check" or dry_run:
-                from .spack_planning import current as combined_plan
-                combined=combined_plan(op,envdir)
-                inventory=combined['result'].get('inventory',[]) if combined else []
+            from .spack_planning import current as combined_plan
+            combined = combined_plan(op, envdir)
+            inventory = plan.get("inventory")
+            if inventory is None and combined:
+                inventory = combined["result"].get("inventory")
+            checkpoint = op / "database-before.json"
+            preview = action == "check" or dry_run
+            if inventory is None or (not preview and not checkpoint.is_file()):
+                # The checkpoint can outlive the planning cache after a tool-reuse retry.
+                raw = run(home, ["python", str(Path(__file__).with_name("spack_bridge.py")),
+                                 "inventory", str(checkpoint)], op, "inventory", envdir=envdir)
+                inventory = _json(raw, "native inventory")["packages"]
+            if preview:
                 preview_removed=[row for row in inventory if action=='remove' and row['name'] in names and not row['external']]
                 lifecycle.protect_apps(home,preview_removed)
-                result['changes']={'install':[row for row in plan['packages'] if not row['installed'] and not row['external']],
-                                   'rebuild':[old for old in inventory for row in plan['packages'] if not row['external'] and old['prefix']==row['prefix'] and (old['hash']!=row['hash'] or row['name'] in overwrite)],
-                                   'remove':preview_removed}
+                replacements = [old for old in inventory for row in plan["packages"]
+                                if not row["external"] and old["prefix"] == row["prefix"]
+                                and (old["hash"] != row["hash"] or row["name"] in overwrite)]
+                result["changes"] = _package_changes(plan, replacements, preview_removed)
                 result.update(
                     backend="spack",
                     dry_run=dry_run,
@@ -1508,12 +1551,6 @@ def transact(
                         "remaining source dependencies are validated before building."
                     )
                 return result
-            from .spack_planning import current as combined_plan
-            combined=combined_plan(op,envdir)
-            inventory=combined['result'].get('inventory',[]) if combined else []
-            if not (op/'database-before.json').is_file():
-                raw=run(home,['python',str(Path(__file__).with_name('spack_bridge.py')),'inventory',str(op/'database-before.json')],op,'inventory',envdir=envdir)
-                inventory=_json(raw,'native inventory')['packages']
             def database(options):
                 return run(home,['python',str(Path(__file__).with_name('spack_bridge.py')),'database',json.dumps(options)],op,
                            'database-'+options['action'],envdir=envdir,timeout=timeout)
@@ -1522,8 +1559,7 @@ def transact(
             if action=='remove':
                 removed=[row for row in inventory if row['name'] in names and not row['external']]
                 lifecycle.protect_apps(home,removed)
-            change_plan={'install':[p for p in plan['packages'] if not p['installed'] and not p['external']],
-                         'rebuild':replacements,'remove':removed}
+            change_plan = _package_changes(plan, replacements, removed)
             result['changes']=change_plan
             if replacements or removed:
                 if confirm is None:raise ForgeError('Package removal or in-place rebuilding requires confirmation.',hint='Repeat with --yes after reviewing the package plan.')
