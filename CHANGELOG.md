@@ -1,7 +1,6 @@
 # Changelog
 
-## Unreleased
-
+## 1.2.5 — 2026-11-23
 ### Added
 
 - Add a GAMBIT recipe alongside CBS, using the upstream GNU configure and build presets. Both recipes automatically acquire the same checksum-pinned source archive in the current profile and share its canonical `build/` directory.
