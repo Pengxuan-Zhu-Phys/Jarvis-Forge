@@ -1,7 +1,6 @@
 # Changelog
 
-## Unreleased
-
+## 1.2.6 — 2026-11-24
 ### Added
 
 - Build recipes can declare their supported built-in `profiles`. Catalog list/search results follow the current profile, installation rejects unsupported profiles before downloading or preparing dependencies, and `build show` lists profile requirements.
