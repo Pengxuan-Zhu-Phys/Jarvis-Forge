@@ -39,7 +39,7 @@ def test_cbs_build_card_is_in_place_and_uses_the_preset_directory():
     assert step["with"]["phases"] == ["configure", "build"]
     assert step["with"]["required_files"] == ["CBS"]
     assert builds.host_requirements(loaded["config"]) == {
-        "platforms": ["linux"], "apt_backend": "spack"}
+        "platforms": ["linux"], "profiles": ["ubuntu24", "ubuntu26"], "apt_backend": "spack"}
     assert loaded["config"]["requires"]["root"]["build"] == "root"
     assert loaded["config"]["environment"]["outputs_off"] == ["rivet"]
 
@@ -293,3 +293,28 @@ def test_cbs_startup_check_uses_the_binary_without_reinterpreting_cmake(tmp_path
         with pytest.raises(SystemExit, match='fixture startup failed' if mode == 'failed' else 'no analysis entries'):
             module.main()
     assert calls == [[str(executable), '--list-analyses']]
+
+
+@pytest.mark.parametrize('name', ['cbs', 'gambit'])
+def test_preset_recipes_require_suite_cmake_only_in_preflight(name):
+    import yaml
+    raw = yaml.safe_load((ROOT / 'builds' / (name + '.yaml')).read_text())
+    assert not any(spec.split('@', 1)[0] == 'cmake' for spec in raw['dependencies'])
+    assert raw['checks']['before']['tools']['cmake'] == '>=3.24'
+    loaded = builds.load(ROOT / 'builds' / (name + '.yaml'))['config']
+    deps = next(step for step in loaded['steps'] if step['uses'] == 'apt.install')
+    assert not any(spec.split('@', 1)[0] == 'cmake' for spec in deps['with']['specs'])
+
+
+@pytest.mark.parametrize('name', ['cbs', 'gambit'])
+def test_preset_recipes_support_only_profiles_with_cmake_3_24(name):
+    # The ubuntu22 suite pins CMake 3.22, below the presets' minimum.
+    from jarvis_forge.unified_profiles import presets
+    from packaging.version import Version
+    loaded = builds.load(ROOT / 'builds' / (name + '.yaml'))['config']
+    assert loaded['profiles'] == ['ubuntu24', 'ubuntu26']
+    assert builds.host_requirements(loaded) == {'platforms': ['linux'], 'profiles': ['ubuntu24', 'ubuntu26'],
+                                                'apt_backend': 'spack'}
+    for preset, value in presets().items():
+        if value['backend'] == 'spack':
+            assert (Version(value['versions']['cmake']) >= Version('3.24')) == (preset in loaded['profiles'])

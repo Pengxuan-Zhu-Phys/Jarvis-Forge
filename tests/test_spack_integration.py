@@ -133,3 +133,21 @@ case "$PATH" in *forge-app*) exit 13 ;; esac
     assert [p["name"] for p in removed["packages"]] == ["forge-lib"]
     assert removed["store_retained"]
     assert all(Path(p["prefix"]).exists() for p in first["packages"])
+
+
+def test_real_incremental_build_tool_reuse(tmp_path):
+    """Solver-only; supply engine, builtin repo and prebuilt clingo via env paths."""
+    import json
+    import sys
+    names = ('JFORGE_SPACK_ENGINE', 'JFORGE_SPACK_BUILTIN_REPO', 'JFORGE_SPACK_SOLVER_PATH')
+    missing = [name for name in names if not os.environ.get(name)]
+    if missing:
+        pytest.skip('solver fixture paths required: ' + ', '.join(missing))
+    probe = Path(__file__).with_name('spack_reuse_probe.py')
+    environment = dict(os.environ)
+    environment['PYTHONPATH'] = str(Path(__file__).parents[1] / 'src')
+    process = subprocess.run([sys.executable, str(probe), *(os.environ[n] for n in names),
+                              str(tmp_path / 'solver')], env=environment, capture_output=True, text=True, timeout=240)
+    assert process.returncode == 0, process.stdout + process.stderr
+    result = json.loads(process.stdout.splitlines()[-1])
+    assert result['status'] == 'passed' and result['historical'] != result['native']

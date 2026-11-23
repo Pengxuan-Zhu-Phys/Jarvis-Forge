@@ -80,6 +80,10 @@ def test_profile_inventory_unifies_stores_without_changing_native_state(tmp_path
                     root=manual, automatic=not manual, external=external, installed=True, active=True)
     gcc = package(tools, 'gcc', '13.3.0', 'tool-gcc', manual=True)
     cmake = package(tools, 'cmake', '3.28.6', 'tool-cmake', manual=True)
+    metadata = read_json(profile.root / 'metadata.json')
+    metadata['toolchain']['tools']['cmake'] = {'version': cmake['version'], 'prefix': cmake['prefix'],
+                                                'commands': {}, 'fingerprints': {}}
+    write_json(profile.root / 'metadata.json', metadata)
     bootstrap_gmp = package(tools, 'gmp', '6.3.0', 'host-gmp')
     old_runtime = package(tools, 'gcc-runtime', '11.5.0', 'host-runtime')
     write_json(tools / 'packages.json', {'spack': {'packages': [gcc, cmake, bootstrap_gmp, old_runtime]}})

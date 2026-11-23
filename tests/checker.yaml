@@ -40,6 +40,7 @@ groups:
 - id: build-engine
   match:
   - tests/test_project_builds.py
+  - tests/test_build_sources.py
   - tests/test_standard_checks.py
   - tests/test_build_cards.py
   inputs:
@@ -52,6 +53,7 @@ groups:
   - src/jarvis_forge/schemas/build.schema.json
   - src/jarvis_forge/downloads.py
   - tests/test_project_builds.py
+  - tests/test_build_sources.py
   - pyproject.toml
   - src/jarvis_forge/paths.py
   - src/jarvis_forge/storage.py
@@ -113,6 +115,7 @@ groups:
   - tests/test_parallelism.py
   inputs:
   - src/jarvis_forge/build_tool_reuse.py
+  - src/jarvis_forge/toolchains.py
   - tests/test_build_tool_reuse.py
   - src/jarvis_forge/unified_profiles.py
   - src/jarvis_forge/presentation.py
@@ -153,6 +156,10 @@ groups:
     JFORGE_SPACK_INTEGRATION: '1'
   inputs:
   - tests/test_spack_integration.py
+  - tests/spack_reuse_probe.py
+  - tests/fixtures/spack_repo/forge_test/**
+  - src/jarvis_forge/build_tool_reuse.py
+  - src/jarvis_forge/toolchains.py
   - src/jarvis_forge/spack*.py
 - id: environments
   match:

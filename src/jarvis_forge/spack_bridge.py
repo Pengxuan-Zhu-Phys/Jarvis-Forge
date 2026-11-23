@@ -5,6 +5,7 @@ Spack owns DAGs, prefixes and environment semantics. JSON is the adapter boundar
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -169,6 +170,52 @@ def snapshot(runtime_only=False, policy=None, overwrite=(), omit_cached_build_de
     return document
 
 
+@contextmanager
+def historical_build_tools(hashes):
+    """Keep old build edges without offering their nodes to new solver inputs.
+
+    Spack 1.2.2 registers concrete inputs twice, outside reuse.from selectors.
+    Patch those two entry points only: a freshly validated external selector
+    must still be able to offer the same tool hash for a new build-only use.
+    """
+    blocked = set(hashes)
+    if not blocked:
+        yield
+        return
+    import spack
+    import spack.solver.asp as asp
+    from jarvis_forge.spack_backend import ENGINE_VERSION
+
+    extract = asp.Solver.__dict__.get('_extract_concrete_specs')
+    define = asp.SpackSolverSetup.__dict__.get('define_concrete_input_specs')
+    if (spack.__version__ != ENGINE_VERSION or not isinstance(extract, staticmethod)
+            or not callable(extract.__func__) or not callable(define)):
+        raise RuntimeError('Spack historical build-tool filtering requires the verified '
+                           f'{ENGINE_VERSION} solver interface; running {spack.__version__}.')
+
+    def eligible(spec):
+        return not spec.concrete or spec.dag_hash() not in blocked
+
+    def filtered_extract(specs):
+        return [spec for spec in extract.__func__(specs) if eligible(spec)]
+
+    def filtered_inputs(setup, specs, possible):
+        for root in specs:
+            if not eligible(root):
+                raise RuntimeError(f'Historical build tool cannot be a preserved root: {root.name}')
+            for spec in root.traverse():
+                if spec.concrete and eligible(spec):
+                    setup.register_concrete_spec(spec, possible)
+
+    asp.Solver._extract_concrete_specs = staticmethod(filtered_extract)
+    asp.SpackSolverSetup.define_concrete_input_specs = filtered_inputs
+    try:
+        yield
+    finally:
+        asp.Solver._extract_concrete_specs = extract
+        asp.SpackSolverSetup.define_concrete_input_specs = define
+
+
 def resolve_plan(options):
     """One engine import/solver session supplies DAG, cache status and plan."""
     import spack.main
@@ -183,7 +230,8 @@ def resolve_plan(options):
     if not options.get('from_lock'):
         command = spack.main.SpackCommand('concretize')
         try:
-            output = command(*flags[1:])
+            with historical_build_tools(options.get('historical_tool_hashes', [])):
+                output = command(*flags[1:])
         except spack.main.SpackCommandError as exc:
             sys.stderr.write(command.output)
             raise SystemExit(exc.code) from exc

@@ -675,7 +675,8 @@ def test_runtime_conflict_retries_with_installed_spec_and_original_lock(managed,
     named_layout(home)
     first = b.transact(home, "install", ["fixture-app"], cache="never")
     original_lock = Path(first["environment"]) / "spack.lock"
-    original_lock.write_text("original roots")
+    write_json(original_lock, {"roots": [], "concrete_specs": {}})
+    original_bytes = original_lock.read_bytes()
     prefix = home.root / "pkg/gcc-runtime-11.4.0"
     spec = prefix / ".spack/spec.json"
     spec.parent.mkdir(parents=True)
@@ -694,7 +695,7 @@ def test_runtime_conflict_retries_with_installed_spec_and_original_lock(managed,
         if label == "concretize":
             lock.write_text("first plan")
         if label == "concretize-runtime-retry":
-            assert lock.read_text() == "original roots"
+            assert lock.read_bytes() == original_bytes
             assert args == ["concretize"]
             document = yaml.safe_load((envdir / "spack.yaml").read_text())["spack"]
             assert document["packages"]["gcc-runtime"]["require"] == [
@@ -984,7 +985,8 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
     named_layout(home)
     first = b.transact(home, "install", ["fixture-existing"], cache="never")
     original_lock = Path(first["environment"]) / "spack.lock"
-    original_lock.write_text("committed lock")
+    write_json(original_lock, {"roots": [], "concrete_specs": {}})
+    original_bytes = original_lock.read_bytes()
     before = (home.root / "packages.json").read_bytes()
     calls.clear()
     run = b.run
@@ -996,7 +998,7 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
             lock.write_text("binary lock")
         if label == "concretize-cache-retry":
             assert yaml.safe_load((envdir / ".jforge-config/config.yaml").read_text())["config"]["deprecated"] is True
-            assert lock.read_text() == "committed lock"
+            assert lock.read_bytes() == original_bytes
             assert args == ["concretize"]
             document = yaml.safe_load((envdir / "spack.yaml").read_text())["spack"]
             assert document["specs"] == ["fixture-existing", "fixture-app", "fixture-source"]
@@ -1062,7 +1064,7 @@ def test_unavailable_indexed_binary_reconcretizes_for_source(managed, monkeypatc
         assert (op / "spack-before-cache-retry.lock").read_text() == "binary lock"
         assert read_json(op / "source-plan.json")["cache_policy"] == "auto"
         assert {p["name"]: p["hash"] for p in result["packages"]}["fixture-app"] == "source-fixture-app"
-    assert original_lock.read_text()==("committed lock" if invalid_retry else "source lock")
+    assert original_lock.read_bytes() == (original_bytes if invalid_retry else b"source lock")
     assert (home.root/"pkg/fixture-existing-1.0").is_dir()
     assert [args[args.index("--use-buildcache") + 1] for args, _ in calls if args[0] == "install"] == (
         ["only", "only"] if invalid_retry else ["only", "only", "never"]
@@ -1439,7 +1441,8 @@ def test_build_tool_reuse_is_applied_in_native_transactions_and_cache_fallback(m
     monkeypatch.setattr(toolchains, 'validate_plan', lambda *a: None)
     first = b.transact(home, "install", ["fixture-existing@1.0"], cache="never")
     previous = Path(first["environment"])
-    (previous / "spack.lock").write_text("committed fixture lock")
+    write_json(previous / "spack.lock", {"roots": [], "concrete_specs": {}})
+    committed_bytes = (previous / "spack.lock").read_bytes()
     # Simulate a previous transaction that retained a historical build-only reference.
     write_json(previous / "build-tool-reuse.json", {"selected": [{"external_hashes": ["historical-tool"]}]})
     (home.root/'tools/pkg/.spack-db').mkdir(parents=True)
@@ -1454,9 +1457,10 @@ def test_build_tool_reuse_is_applied_in_native_transactions_and_cache_fallback(m
         labels.append(label)
         if label.startswith("concretize"):
             lock = kwargs["envdir"] / "spack.lock"
-            assert lock.read_text() == "committed fixture lock"
+            assert lock.read_bytes() == committed_bytes
+            assert "historical-tool" in kwargs["planning"]["historical_tool_hashes"]
             assert "--force" not in args
-            lock.write_text("new candidate lock")
+            write_json(lock, {"roots": [], "concrete_specs": {}})
             if reject_optional and label.startswith("concretize-build-tools-") and "fallback" not in label:
                 write_json(op / f"command-{label}.json", {"status": "failed", "exit_code": 1})
                 raise ForgeError("fixture optional tool cannot be used")
@@ -1500,4 +1504,6 @@ def test_build_tool_reuse_is_applied_in_native_transactions_and_cache_fallback(m
     candidate=b._candidate(home,op,['fixture-lib'],result['environment'])
     assert not (candidate/'spack.lock').exists()
     reuse=yaml.safe_load((candidate/'spack.yaml').read_text())['spack']['concretizer']['reuse']
-    assert all('/hash-fixture-lib' in source['exclude'] for source in reuse['from'])
+    assert all('/hash-fixture-lib' in source.get('exclude', [])
+               for source in reuse['from'] if source['type'] != 'external')
+    assert not next(source for source in reuse['from'] if source['type'] == 'external').get('exclude')

@@ -2,13 +2,13 @@
 # Every preset shares ${sourceDir}/build, so this card does not pass -B.
 name: cbs
 platforms: [linux]
+profiles: [ubuntu24, ubuntu26]
 environment:
   outputs_off: [rivet]
 requires:
   root:
     build: root
 dependencies:
-  - "cmake@3.24:"
   - "boost@1.48:"
   - "eigen@3.3.7:"
   - "gsl@2.1:"

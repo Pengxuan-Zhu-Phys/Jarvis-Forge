@@ -88,6 +88,22 @@ def entries(home):
     return _index(home).get("builds", [])
 
 
+def _current_profile(home):
+    from .apt_profiles import active_home
+    from .unified_profiles import record
+    try:
+        data = record(active_home(home))
+    except ForgeError:
+        return None
+    return (data.get("preset") or data.get("name")) if data else None
+
+
+def visible(home):
+    """Recipes for the current profile; without a usable profile every cached recipe is listed."""
+    current = _current_profile(home)
+    return [row for row in entries(home) if not current or not row.get("profiles") or current in row["profiles"]]
+
+
 def libraries(home):
     return _index(home).get("libraries", [])
 
@@ -211,6 +227,9 @@ def _refresh(home, url, platform, temporary, logs):
         for item in companions:
             target = destination.parent / item["path"]
             _cache_asset(bundle / item["path"], target, item["sha256"], "companion script")
+        # The Release index carries platforms only; profile support comes from the verified recipe.
+        if loaded["config"].get("profiles"):
+            row = {**row, "profiles": loaded["config"]["profiles"]}
         selected.append(row)
     write_json(home.root / "builds/catalog/index.json",
                {**index, "builds": selected, "platform": platform, "excluded_builds": excluded})

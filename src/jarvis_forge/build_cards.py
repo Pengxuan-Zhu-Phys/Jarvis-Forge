@@ -71,9 +71,10 @@ def _cache(options):
 
 def native_card(config):
     """Readable Forge project card; legacy module spelling stays an adapter detail."""
-    _keys(config, {"name", "path", "environment", "platforms", "dependencies", "requires", "build", "checks"}, "project build")
+    _keys(config, {"name", "path", "environment", "platforms", "profiles", "dependencies", "requires", "build",
+                   "checks"}, "project build")
     workflow = {"name": config["name"]}
-    for key in ("path", "environment", "platforms"):
+    for key in ("path", "environment", "platforms", "profiles"):
         if key in config:
             workflow[key] = config[key]
     checks = config.get("checks", {})
@@ -149,7 +150,7 @@ def normalize(config, path, home=None, library_files=None):
         config = native_card(config)
     _keys(config, {"Workflow", "LibDeps", "Calculators"}, "build card")
     workflow = config.get("Workflow", {})
-    _keys(workflow, {"name", "path", "environment", "cxx_standard", "platforms"}, "Workflow")
+    _keys(workflow, {"name", "path", "environment", "cxx_standard", "platforms", "profiles"}, "Workflow")
     defaults, default_sha = default_card("build_default")
     provenance = [{"card": "jforge:build_default", "sha256": default_sha}]
     project = (path.parent / str(workflow.get("path", "."))).resolve()
@@ -158,8 +159,9 @@ def normalize(config, path, home=None, library_files=None):
     if workflow.get("environment"):
         environment = workflow["environment"]
         result["environment"] = {"name": environment} if isinstance(environment, str) else environment
-    if workflow.get("platforms"):
-        result["platforms"] = workflow["platforms"]
+    for key in ("platforms", "profiles"):
+        if workflow.get(key):
+            result[key] = workflow[key]
     ends, module_deps, groups, calculator_outputs = {}, {}, [], []
     for group_name in ("LibDeps", "Calculators"):
         group = config.get(group_name, {})
@@ -261,12 +263,13 @@ def normalize(config, path, home=None, library_files=None):
                         raise ForgeError(f"Modules request conflicting parameter {key}.")
                     result["parameters"][key] = value
                 result["sources"].update({name + "." + k: v for k, v in expanded.get("sources", {}).items()})
-                if expanded.get("platforms"):
-                    supported = set(expanded["platforms"])
-                    supported &= set(result.get("platforms", supported))
-                    if not supported:
-                        raise ForgeError("Modules have incompatible supported platforms.")
-                    result["platforms"] = sorted(supported)
+                for key in ("platforms", "profiles"):
+                    if expanded.get(key):
+                        supported = set(expanded[key])
+                        supported &= set(result.get(key, supported))
+                        if not supported:
+                            raise ForgeError(f"Modules have incompatible supported {key}.")
+                        result[key] = sorted(supported)
                 output = deepcopy(expanded["outputs"]["installation"])
                 output["step"] = name + "." + output["step"]
                 output["publish_after"] = [name + "." + x for x in output["publish_after"]]

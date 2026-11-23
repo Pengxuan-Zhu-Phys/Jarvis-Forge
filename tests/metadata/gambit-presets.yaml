@@ -228,3 +228,73 @@ definitions:
   failure_meaning: Forge duplicates project-specific configuration logic or accepts a failed startup.
   limitations: [CBS execution is simulated]
   review: {status: draft}
+- id: forge.presets.profile-suite-preflight
+  title: Require profile CMake in preflight only
+  purpose: CBS and GAMBIT obtain fixed CMake from the profile without creating a package
+    dependency root.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_cards.py::test_preset_recipes_require_suite_cmake_only_in_preflight
+  scenario:
+    inputs:
+      environment: Local CBS/GAMBIT recipe sources
+    action: Expand each recipe and inspect package dependencies and preflight checks.
+  criteria:
+  - id: cmake
+    expected: Neither raw nor expanded package dependencies contain cmake; both preflight
+      checks retain cmake >= 3.24.
+    verification: automated
+  failure_meaning: A fixed tool is redundantly added to the application package roots
+    or its required version is unchecked.
+  limitations:
+  - Recipe validation only; no CBS or GAMBIT build.
+  review:
+    status: draft
+- id: forge.builds.stale-workspace-repair
+  title: Repair a stale installed workspace offline
+  purpose: Keep the existing automatic rebuild behavior covered when an installed
+    artifact disappears.
+  binding:
+    adapter: pytest
+    selector: tests/test_project_builds.py::test_install_fetches_internal_workspace_and_reuses_offline
+  scenario:
+    inputs:
+      environment: Temporary profile and a tiny local CMake library release
+    action: Install, reuse offline, delete an installed header and install again with
+      catalog downloads disabled.
+  criteria:
+  - id: repair
+    expected: Unchanged inputs reuse the first artifact; a missing header triggers
+      a new build and renewed artifact verification at the same prefix, restoring
+      the header without downloading the catalog.
+    verification: automated
+  failure_meaning: A stale app is silently reused or automatic repair requires network
+    access.
+  limitations:
+  - Tiny local CMake build only; no HPC application build.
+  review:
+    status: draft
+- id: forge.recipes.declared-client-floor
+  title: Honor the declared recipe client requirement
+  purpose: Verify that recipe publication and client loading honor the client requirement
+    declared by the recipe source.
+  binding:
+    adapter: pytest
+    selector: tests/test_recipe_publisher.py::test_project_release_requires_the_current_client
+  scenario:
+    inputs:
+      environment: Local build recipe sources and simulated asset downloads
+    action: Build recipe indexes, refuse an older client before payload downloads
+      and load the root recipe with the current client.
+  criteria:
+  - id: compatibility
+    expected: Both asset builders preserve the source client requirement; an older
+      client is refused before payloads are downloaded and the current client resolves
+      root.
+    verification: automated
+  failure_meaning: Version assertions drift from recipe declarations or unsupported
+    clients download incompatible recipes.
+  limitations:
+  - Asset generation and simulated downloads only; no publication or GitHub access.
+  review:
+    status: draft

@@ -295,3 +295,321 @@ definitions:
   failure_meaning: External solving can lose patch metadata or mutate the installed spec.
   limitations: [Spec-format fixture]
   review: {status: draft}
+- id: forge.build-tools.lock-history
+  title: Discover historical tools in the full lock
+  purpose: The lock remains authoritative, retained evidence carries consumer hashes,
+    and evidence omissions do not remove exclusions.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_history_is_derived_from_the_lock_after_evidence_is_empty
+  scenario:
+    inputs:
+      environment: Local isolated dependency graph and engine fixtures
+    action: Reconstruct old external build edges after an intervening transaction
+      selects no tools.
+  criteria:
+  - id: contract
+    expected: The lock remains authoritative, retained evidence carries consumer hashes,
+      and evidence omissions do not remove exclusions.
+    verification: automated
+  failure_meaning: A historical build tool crosses a dependency-use boundary, changes
+    an installed root or loses its validation evidence.
+  limitations:
+  - Local development test; the Linux host installation is verified separately by
+    the maintainer.
+  review:
+    status: draft
+- id: forge.build-tools.corrupt-history
+  title: Reject corrupt preserved runtime references
+  purpose: Stop before solving and identify the owning root, historical tool and explicit
+    rebuild remedy.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_corrupt_historical_root_or_runtime_stops_before_solving
+  scenario:
+    inputs:
+      environment: Local isolated dependency graph and engine fixtures
+    action: Inspect locked roots which use a tool-store external directly or through
+      link/run edges.
+  criteria:
+  - id: contract
+    expected: Stop before solving and identify the owning root, historical tool and
+      explicit rebuild remedy.
+    verification: automated
+  failure_meaning: A historical build tool crosses a dependency-use boundary, changes
+    an installed root or loses its validation evidence.
+  limitations:
+  - Local development test; the Linux host installation is verified separately by
+    the maintainer.
+  review:
+    status: draft
+- id: forge.build-tools.unsafe-use-reasons
+  title: Explain tool dependency uses
+  purpose: Candidate evidence distinguishes root, runtime, link-edge, compiler and
+    missing-source reasons by hash.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_unsafe_references_report_the_dependency_use
+  scenario:
+    inputs:
+      environment: Local isolated dependency graph and engine fixtures
+    action: Inspect required tools used as roots, runtime dependencies, linked libraries
+      or compiler providers, or whose source disappeared.
+  criteria:
+  - id: contract
+    expected: Candidate evidence distinguishes root, runtime, link-edge, compiler
+      and missing-source reasons by hash.
+    verification: automated
+  failure_meaning: A historical build tool crosses a dependency-use boundary, changes
+    an installed root or loses its validation evidence.
+  limitations:
+  - Local development test; the Linux host installation is verified separately by
+    the maintainer.
+  review:
+    status: draft
+- id: forge.build-tools.bounded-fallback
+  title: Bound fallback to changed solver inputs
+  purpose: Forward historical hashes to the solver, preserve the committed lock and
+    retained evidence, and reject a retry which cannot change inputs.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_fallback_requires_a_growing_hash_set_and_retains_history
+  scenario:
+    inputs:
+      environment: Local isolated dependency graph and engine fixtures
+    action: Retry with a larger exclusion set, then request a second retry with the
+      same set.
+  criteria:
+  - id: contract
+    expected: Forward historical hashes to the solver, preserve the committed lock
+      and retained evidence, and reject a retry which cannot change inputs.
+    verification: automated
+  failure_meaning: A historical build tool crosses a dependency-use boundary, changes
+    an installed root or loses its validation evidence.
+  limitations:
+  - Local development test; the Linux host installation is verified separately by
+    the maintainer.
+  review:
+    status: draft
+- id: forge.build-tools.solver-interface
+  title: Guard the private Spack solver interface
+  purpose: Filter only the two concrete-input entry points, preserve external registration,
+    reject an incompatible interface and always restore both original descriptors.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_solver_filter_checks_the_engine_and_restores_descriptors
+  scenario:
+    inputs:
+      environment: Local isolated dependency graph and engine fixtures
+    action: Filter concrete-input registration, exercise exceptions and simulate missing
+      methods or an unverified engine version.
+  criteria:
+  - id: contract
+    expected: Filter only the two concrete-input entry points, preserve external registration,
+      reject an incompatible interface and always restore both original descriptors.
+    verification: automated
+  failure_meaning: A historical build tool crosses a dependency-use boundary, changes
+    an installed root or loses its validation evidence.
+  limitations:
+  - Local development test; the Linux host installation is verified separately by
+    the maintainer.
+  review:
+    status: draft
+- id: forge.build-tools.native-role-change
+  title: Resolve a reused tool as a new native root
+  purpose: Install only the new native tool while preserving consumers and fixed CMake
+    bindings.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_transactions.py::test_historical_tool_becomes_a_native_root_without_rebuilding_consumers
+  scenario:
+    inputs:
+      environment: Local isolated dependency graph and engine fixtures
+    action: Install a build-only consumer, optionally add fixed CMake as an explicit
+      root, add an unrelated package and promote the borrowed tool through apt or
+      a build recipe dependency step.
+  criteria:
+  - id: contract
+    expected: The consumer and fixed CMake keep their hashes and prefixes; only the
+      new native tool is installed, optional source evidence persists without CMake,
+      and no fallback solve is repeated.
+    verification: automated
+  failure_meaning: A historical build tool crosses a dependency-use boundary, changes
+    an installed root or loses its validation evidence.
+  limitations:
+  - Local development test; the Linux host installation is verified separately by
+    the maintainer.
+  review:
+    status: draft
+- id: forge.build-tools.forced-resolution
+  title: Preserve explicit full resolution
+  purpose: Use force for each nonincremental action and fresh for upgrades; incremental
+    filtering does not change these semantics.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_transactions.py::test_nonincremental_resolution_keeps_force_semantics
+  scenario:
+    inputs:
+      environment: Local isolated dependency graph and engine fixtures
+    action: Upgrade, full-upgrade or explicitly change an existing root version.
+  criteria:
+  - id: contract
+    expected: Use force for each nonincremental action and fresh for upgrades; incremental
+      filtering does not change these semantics.
+    verification: automated
+  failure_meaning: A historical build tool crosses a dependency-use boundary, changes
+    an installed root or loses its validation evidence.
+  limitations:
+  - Local development test; the Linux host installation is verified separately by
+    the maintainer.
+  review:
+    status: draft
+- id: forge.build-tools.replay-history
+  title: Validate all tools during exact replay
+  purpose: Validate the old source, refuse replay without solving and preserve exact
+    lock bytes.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_replay_validates_even_unused_historical_build_edges
+  scenario:
+    inputs:
+      environment: Local isolated dependency graph and engine fixtures
+    action: Replay a lock whose historical build-only source is missing even though
+      its installed consumer needs no rebuild.
+  criteria:
+  - id: contract
+    expected: Validate the old source, refuse replay without solving and preserve
+      exact lock bytes.
+    verification: automated
+  failure_meaning: A historical build tool crosses a dependency-use boundary, changes
+    an installed root or loses its validation evidence.
+  limitations:
+  - Local development test; the Linux host installation is verified separately by
+    the maintainer.
+  review:
+    status: draft
+- id: forge.build-tools.real-concrete-input-reuse
+  title: Verify concrete-input filtering with real Spack
+  purpose: Keep fixed suite bindings and historical optional tools separate in the
+    real Spack solver.
+  binding:
+    adapter: pytest
+    selector: tests/test_spack_integration.py::test_real_incremental_build_tool_reuse
+  scenario:
+    inputs:
+      environment: Local isolated dependency graph and engine fixtures
+    action: Solve fixture packages and a fixed CMake root with Spack 1.2.2, preserve
+      their locks, promote a historical tool to a new root or link dependency and
+      re-offer it to a fresh build-only consumer.
+  criteria:
+  - id: contract
+    expected: Filtering resolves new native uses while preserving historical consumer
+      hashes and edges. Revalidated external reuse remains available and fixed CMake
+      retains its bound prefix and hash.
+    verification: automated
+  failure_meaning: A historical build tool crosses a dependency-use boundary, changes
+    an installed root or loses its validation evidence.
+  limitations:
+  - Local development test; the Linux host installation is verified separately by
+    the maintainer.
+  - Opt in with JFORGE_SPACK_INTEGRATION=1 and local JFORGE_SPACK_ENGINE, JFORGE_SPACK_BUILTIN_REPO
+    and JFORGE_SPACK_SOLVER_PATH; prebuilt clingo only, bootstrap disabled.
+  review:
+    status: draft
+- id: forge.build-tools.fixed-suite-boundary
+  title: Distinguish fixed tool-suite bindings
+  purpose: Treat a changed fixed CMake identity as a profile binding error.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_fixed_tool_suite_roots_are_not_optional_historical_loans
+  scenario:
+    inputs:
+      environment: Local profile metadata and temporary filesystem
+    action: Preserve a valid fixed CMake root, then change its locked prefix and start
+      an incremental transaction.
+  criteria:
+  - id: identity
+    expected: Suite names are never classified as optional loans; a changed prefix
+      raises a profile binding error before solving and recommends checking or recreating
+      the profile.
+    verification: automated
+  failure_meaning: Fixed tools are confused with optional loans, or a changed prefix
+    escapes validation.
+  limitations:
+  - Local filesystem and metadata fixture.
+  review:
+    status: draft
+- id: forge.build-tools.retargeted-tool-prefix
+  title: Track retargeted historical prefixes
+  purpose: An external whose lexical tool-store prefix became an escaping symlink
+    still requires historical source validation.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_retargeted_tool_prefix_remains_a_historical_reference
+  scenario:
+    inputs:
+      environment: Local profile metadata and temporary filesystem
+    action: Track retargeted historical prefixes
+  criteria:
+  - id: identity
+    expected: An external whose lexical tool-store prefix became an escaping symlink
+      still requires historical source validation.
+    verification: automated
+  failure_meaning: Fixed tools are confused with optional loans, or a changed prefix
+    escapes validation.
+  limitations:
+  - Local filesystem and metadata fixture.
+  review:
+    status: draft
+- id: forge.build-tools.suite-name-consistency
+  title: Use one suite definition at all reuse boundaries
+  purpose: Solver externals, history, Planner fixed names and inventory use the same
+    suite names. Trial buildable:false candidates remain optional; inventories without
+    suite metadata retain their previous classification.
+  binding:
+    adapter: pytest
+    selector: tests/test_build_tool_reuse.py::test_suite_names_are_shared_by_history_planner_and_inventory
+  scenario:
+    inputs:
+      environment: Temporary profile, native transaction fixture and full concrete
+        lock
+    action: Use one suite definition at all reuse boundaries
+  criteria:
+  - id: binding
+    expected: Solver externals, history, Planner fixed names and inventory use the
+      same suite names. Trial buildable:false candidates remain optional; inventories
+      without suite metadata retain their previous classification.
+    verification: automated
+  failure_meaning: Suite identity drift is confused with optional reuse, or an invalid
+    fixed binding reaches the solver.
+  limitations:
+  - Local development fixtures; Linux host installation remains a separate maintainer
+    check.
+  review:
+    status: draft
+- id: forge.build-tools.locked-suite-binding
+  title: Reject locked fixed-tool identity drift before solving
+  purpose: A GCC or CMake build-only node with a different version or prefix raises
+    a profile binding error before any solver invocation and preserves the committed
+    state.
+  binding:
+    adapter: pytest
+    selector: tests/test_profile_transactions.py::test_fixed_binding_is_checked_on_the_full_committed_dag_before_solving
+  scenario:
+    inputs:
+      environment: Temporary profile, native transaction fixture and full concrete
+        lock
+    action: Reject locked fixed-tool identity drift before solving
+  criteria:
+  - id: binding
+    expected: A GCC or CMake build-only node with a different version or prefix raises
+      a profile binding error before any solver invocation and preserves the committed
+      state.
+    verification: automated
+  failure_meaning: Suite identity drift is confused with optional reuse, or an invalid
+    fixed binding reaches the solver.
+  limitations:
+  - Local development fixtures; Linux host installation remains a separate maintainer
+    check.
+  review:
+    status: draft

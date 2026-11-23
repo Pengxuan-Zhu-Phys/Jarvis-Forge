@@ -89,7 +89,7 @@ def list_builds(
     from .cli import emit
 
     rows = (
-        [{**row, "app": app_name(row["id"])} for row in catalog.entries(ctx.obj.home)]
+        [{**row, "app": app_name(row["id"])} for row in catalog.visible(ctx.obj.home)]
         if available
         else _rows(ctx)
     )
@@ -109,7 +109,7 @@ def search(ctx: typer.Context, term: str = typer.Argument(...)):
 
     rows = [
         {**row, "app": app_name(row["id"])}
-        for row in catalog.entries(ctx.obj.home)
+        for row in catalog.visible(ctx.obj.home)
         if term.casefold()
         in (app_name(row["id"]) + " " + row.get("description", "")).casefold()
     ]

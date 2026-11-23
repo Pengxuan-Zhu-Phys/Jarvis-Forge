@@ -723,7 +723,8 @@ def _gcc_runtime_target(home):
     return _generic_host_target(home)
 
 
-def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None, expected_packages=None, preserve_lock=False):
+def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None, expected_packages=None,
+               preserve_lock=False, historical_tool_hashes=None):
     from .recipe_releases import ensure
     from .toolchains import binding, spack_requirements
 
@@ -735,10 +736,14 @@ def _candidate(home, op, roots, previous, *, reuse_buildcache=True, target=None,
     directory = op / "candidate"
     directory.mkdir(parents=True, exist_ok=True)
     reuse = _python_reuse(buildcache=reuse_buildcache and not toolchain)
-    old_reuse = Path(previous) / "build-tool-reuse.json" if previous else None
-    prior_tools = read_json(old_reuse).get("selected", []) if old_reuse and old_reuse.is_file() else []
+    from .build_tool_reuse import history
+    prior_tools = (history(home, previous)[1] if historical_tool_hashes is None else set(historical_tool_hashes))
     for source in reuse["from"]:
-        source.setdefault("exclude", []).extend("/" + h for row in prior_tools for h in row.get("external_hashes", []))
+        # A transaction may re-offer a validated tool via the external selector,
+        # even with the same hash as an old build edge. Concrete inputs are
+        # filtered separately in the solver bridge.
+        if source['type'] != 'external':
+            source.setdefault("exclude", []).extend("/" + h for h in sorted(prior_tools))
     document = {
         "spack": {
             "specs": roots,
@@ -1362,10 +1367,16 @@ def transact(
             if not previous or not (Path(previous) / "spack.lock").is_file():
                 raise ForgeError("Cannot preserve the installed profile: its Spack lockfile is missing.")
             committed_lock = Path(previous) / "spack.lock"
+            if toolchain:
+                from .build_tool_reuse import lock_packages
+                validate_toolchain_plan(toolchain, lock_packages(committed_lock))
             protected_roots = {row["name"]: row["hash"] for row in before["packages"] if row.get("root")}
             protected_prefixes = {row["prefix"]: row["hash"] for row in before["packages"] if not row["external"]}
+        from .build_tool_reuse import history
+        historical_tools, historical_hashes = history(home, selected_history or before.get('environment'), preserve=additive)
         envdir = _candidate(home, op, roots, previous, reuse_buildcache=cache != "never", target=target,
-                            expected_packages=expected_packages, preserve_lock=additive)
+                            expected_packages=expected_packages, preserve_lock=additive,
+                            historical_tool_hashes=historical_hashes)
         if selected_history:
             shutil.copy2(selected_history/'spack.lock',envdir/'spack.lock')
             document=yaml.safe_load((envdir/'spack.yaml').read_text())
@@ -1399,7 +1410,7 @@ def transact(
         # A fresh solver may itself have to build clingo-bootstrap from source.
         patch_jobs = jobs if cache != "only" and action not in {"check", "remove"} else None
 
-        def resolve_plan(policy, flags, *, suffix="", omit_cached_build_deps=False):
+        def resolve_plan(policy, flags, *, suffix="", omit_cached_build_deps=False, historical_tool_hashes=None):
             nonlocal cache_first, plan_cache
             run(home, flags, op, "concretize" + suffix, envdir=envdir,
                 timeout=timeout, progress=progress, patch_jobs=patch_jobs,
@@ -1407,6 +1418,8 @@ def transact(
                           "omit_cached_build_deps": omit_cached_build_deps,
                           "source_if_uncached": cache_first and policy == "only",
                           "from_lock":bool(selected_history),
+                          "historical_tool_hashes": sorted(tool_reuse.excluded_hashes if historical_tool_hashes is None
+                                                           else historical_tool_hashes),
                           "database_checkpoint":str(op/'database-before.json')})
             from .spack_planning import current as combined_plan
             combined = combined_plan(op, envdir)
@@ -1431,7 +1444,8 @@ def transact(
                              envdir=envdir, timeout=timeout), "build-tool candidates")
         tool_reuse = Planner(home, envdir, op, tool_candidates, resolve_plan, progress=progress,
                              replay=bool(selected_history), enabled=bool(toolchain) and action != "remove",
-                             allow_new=cache != "only", committed_lock=committed_lock)
+                             allow_new=cache != "only", committed_lock=committed_lock,
+                             historical=historical_tools, excluded_hashes=historical_hashes)
 
         def validate_plan(plan, label, policy, flags, *, omit_cached_build_deps=False):
             nonlocal runtime_retried

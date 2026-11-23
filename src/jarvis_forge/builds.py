@@ -50,6 +50,11 @@ def load(path, *, home=None, library_files=None):
     if errors:
         error = errors[0]
         raise ForgeError(f"Invalid build at {'.'.join(map(str, error.absolute_path))}: {error.message}")
+    if config.get("profiles") and config.get("platforms"):
+        from .unified_profiles import presets
+        known = presets()
+        if any(known[name]["platform"] not in config["platforms"] for name in config["profiles"]):
+            raise ForgeError(f"Build {config['id']} lists profiles outside its supported platforms.")
     for name in [*config.get("sources", {}), *config.get("requires", {}), *config.get("outputs", {})]:
         identifier(name)
     environment = config.get("environment", {})
@@ -169,8 +174,11 @@ def graph(home, reference, *, parameters=None):
 
 def host_requirements(config):
     workflow = config.get("Workflow")
-    platforms = config.get("platforms") or (workflow.get("platforms") if isinstance(workflow, dict) else None)
-    result = {"platforms": platforms} if platforms else {}
+    result = {}
+    for key in ("platforms", "profiles"):
+        value = config.get(key) or (workflow.get(key) if isinstance(workflow, dict) else None)
+        if value:
+            result[key] = value
     steps = config.get("steps")
     if config.get("dependencies") or (isinstance(steps, list) and any(
             isinstance(step, dict) and step.get("uses") == "apt.install" for step in steps)):
@@ -538,6 +546,12 @@ def _check_host(home, selected_graph, saved_nodes=None, apt_profile=None):
             supported = ", ".join(platforms)
             raise ForgeError(f"Build {config['id']} requires platform {supported}. Current platform is {sys.platform}.",
                              hint=f"Run this build on a supported host ({supported}).")
+        profiles = config.get("profiles", [])
+        current = managed.get("preset") or managed["name"]
+        if profiles and current not in profiles:
+            supported = ", ".join(profiles)
+            raise ForgeError(f"Build {config['id']} supports profiles {supported}. Current profile is {current}.",
+                             hint=f"jforge profile create {profiles[0]}; jforge profile use {profiles[0]}")
     for key, node in nodes.items():
         saved_steps = saved_nodes.get(key, {}).get("steps", {})
         if any(step["uses"] == "apt.install" and step["id"] not in saved_steps for step in node["ordered"]):

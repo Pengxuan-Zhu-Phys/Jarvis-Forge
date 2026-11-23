@@ -903,6 +903,8 @@ def package_inventory(profile):
     if not data:
         from .apt_profiles import backend_name
         return packages(profile, backend_name(profile))
+    from .toolchains import suite
+    fixed = suite(data['toolchain']) if data['backend'] == 'spack' and data.get('toolchain') else None
     from .build_apps import reading
     with reading(profile):
         tools = ForgeHome(profile.root / "tools")
@@ -914,8 +916,9 @@ def package_inventory(profile):
                 # Equal names/versions in different stores remain separate.
                 key = (package["name"], str(package.get("version", "")),
                        str(Path(prefix).resolve()) if prefix else (source, index))
-                category = ("base-tool" if package.get("root") or package.get("automatic") is False
-                            else "bootstrap-dependency") if source == "tools" else "application"
+                base_tool = (package['name'] in fixed if fixed is not None
+                             else package.get('root') or package.get('automatic') is False)
+                category = ("base-tool" if base_tool else "bootstrap-dependency") if source == "tools" else "application"
                 reference = {"source": source, **{key: package[key] for key in
                              ("hash", "install_id", "external", "root", "active") if key in package}}
                 if key not in inventory:

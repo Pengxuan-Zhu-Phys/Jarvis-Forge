@@ -131,10 +131,19 @@ def use(*args, **kwargs):
     raise ForgeError('A profile uses the compiler of its platform.',hint='jforge profile use NAME')
 
 
+def suite(record):
+    """Names define fixed tools; binding validation checks their identities."""
+    if not record:
+        return {}
+    selected = {"gcc": record, **record.get("tools", {})}
+    return {name: {key: tool[key] for key in ("version", "prefix")} for name, tool in selected.items()}
+
+
 def spack_requirements(record, packages):
-    compiler = "gcc@=" + record["version"]
+    selected = suite(record)
+    compiler = "gcc@=" + selected["gcc"]["version"]
     drivers = record["drivers"]
-    external = {"spec": compiler + " languages=c,c++,fortran", "prefix": record["prefix"],
+    external = {"spec": compiler + " languages=c,c++,fortran", "prefix": selected["gcc"]["prefix"],
                 "extra_attributes": {"compilers": {"c": drivers["CC"], "cxx": drivers["CXX"],
                                                     "fortran": drivers["FC"]}}}
     gcc = packages.setdefault("gcc", {})
@@ -144,19 +153,29 @@ def spack_requirements(record, packages):
         packages.setdefault(language, {})["require"] = [compiler]
     if record.get("target"):
         packages.setdefault("all", {})["target"] = [record["target"]]
-    for name, tool in record.get("tools", {}).items():
+    for name, tool in selected.items():
+        if name == "gcc":
+            continue
         spec = f"{name}@={tool['version']}"
         packages.setdefault(name, {}).update(
             externals=[{"spec": spec, "prefix": tool["prefix"]}], buildable=False, require=[spec])
 
 
 def validate_plan(record, packages):
-    selected = {"gcc": record, **record.get("tools", {})}
+    selected = suite(record)
     for package in packages:
         tool = selected.get(package["name"])
         if tool and (not package["external"] or package["version"] != tool["version"]
                      or Path(package["prefix"]).resolve() != Path(tool["prefix"])):
-            raise ForgeError(f"Spack selected {package['name']} at {package['prefix']}, expected {tool['prefix']}.")
+            name = package['name']
+            profile = record.get('id', 'NAME')
+            kind = 'external' if package['external'] else 'native'
+            prefix = package['prefix'] or '<not recorded in lock>'
+            raise ForgeError(f"Fixed tool binding mismatch for {name}.\n"
+                             f"Spack selected {name}@{package['version']} ({kind}) at {prefix}.\n"
+                             f"Profile requires {name}@{tool['version']} (external) at {tool['prefix']}.",
+                             hint=f"Check the profile with jforge profile check {profile}. "
+                                  "Recreate the profile if its fixed tool binding cannot be restored.")
 
 
 def check_tools(record):

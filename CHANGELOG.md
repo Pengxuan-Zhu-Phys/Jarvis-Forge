@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Build recipes can declare their supported built-in `profiles`. Catalog list/search results follow the current profile, installation rejects unsupported profiles before downloading or preparing dependencies, and `build show` lists profile requirements.
+- CBS and GAMBIT support `ubuntu24` and `ubuntu26`; ubuntu22 pins CMake 3.22.6, below the presets' minimum of 3.24.
+
+### Fixed
+
+- Preserve installed packages when a previously reused build tool becomes a requested root or a link/runtime dependency. Incremental apt and build installs resolve the new use natively without rebuilding existing consumers; validated build-only tools remain reusable.
+- Keep build-tool history across incremental installs and source fallbacks. Explain dependency-role changes, validate historical references during exact replay, and stop retries that cannot change the installation plan.
+- Use one fixed-tool definition for solver requirements, package inventory and binding checks. Reject inconsistent GCC, CMake or other suite bindings before incremental solving, and identify the profile that needs checking or recreation.
+- Use the selected profile's CMake for CBS and GAMBIT, checking its required version during preflight without adding a redundant package root. Explicit `jforge apt install cmake` remains supported.
+
+### Compatibility and upgrade notes
+
+- Published recipes using `profiles` require Jarvis-Forge 1.2.6 or newer. Upgrade the client before refreshing the recipe catalog.
+
 ## 1.2.5 — 2026-11-23
 ### Added
 

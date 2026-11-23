@@ -375,6 +375,8 @@ def _step_detail(step):
 def _show_host_requirements(console, requirements):
     if requirements.get("platforms"):
         line(console, "Platform: " + _join(requirements["platforms"]))
+    if requirements.get("profiles"):
+        line(console, "Profiles: " + _join(requirements["profiles"]))
     if requirements.get("apt_backend") == "spack":
         line(console, "APT profile: Spack")
 

@@ -596,6 +596,19 @@
         ]
       }
     },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "ubuntu22",
+          "ubuntu24",
+          "ubuntu26",
+          "macos"
+        ]
+      }
+    },
     "resources": {
       "type": "array",
       "items": {

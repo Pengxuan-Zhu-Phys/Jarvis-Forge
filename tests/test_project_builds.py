@@ -413,6 +413,62 @@ def test_catalog_refresh_downloads_only_supported_builds(tmp_path, home, monkeyp
     assert len(downloaded) == 3
 
 
+def test_profile_restricted_recipes_are_hidden_and_refused(tmp_path, home, monkeypatch, capsys):
+    # The fixture profile uses the ubuntu24 preset.
+    paths = {}
+
+    def row(name, profiles):
+        extra = {"profiles": profiles} if profiles else {}
+        paths[name] = save(tmp_path / f"{name}.yaml", id=name, platforms=["linux"],
+                           steps=[{"id": "x", "uses": "command", "with": {"argv": ["true"]}}], **extra)
+        return {"id": name, "revision": "r1", "url": paths[name].as_uri(), "sha256": digest(paths[name]),
+                "platforms": ["linux"]}
+
+    rows = [row("any-profile", None), row("recipe-current", ["ubuntu24", "ubuntu26"]),
+            row("recipe-newer", ["ubuntu26"])]
+    index = tmp_path / "index.json"
+    write_json(index, {"schema_version": 1, "requires_forge": ">=1.1.0", "builds": rows})
+    result = build_catalog.update(home, index.as_uri(), platform="linux")
+    assert [r.get("profiles") for r in result["builds"]] == [None, ["ubuntu24", "ubuntu26"], ["ubuntu26"]]
+    assert [r["id"] for r in build_catalog.entries(home)] == ["any-profile", "recipe-current", "recipe-newer"]
+    assert [r["id"] for r in build_catalog.visible(home)] == ["any-profile", "recipe-current"]
+
+    assert main(["--home", str(home.root), "--json", "build", "list", "--available"]) == 0
+    assert [r["id"] for r in json.loads(capsys.readouterr().out)["builds"]] == ["any-profile", "recipe-current"]
+    assert main(["--home", str(home.root), "--json", "build", "search", "recipe"]) == 0
+    assert [r["id"] for r in json.loads(capsys.readouterr().out)["builds"]] == ["recipe-current"]
+
+    monkeypatch.setattr(builds, "sys", SimpleNamespace(platform="linux"))
+    builds._check_host(home, builds.graph(home, "recipe-current"))
+    with pytest.raises(ForgeError, match="Build recipe-newer supports profiles ubuntu26. "
+                                         "Current profile is ubuntu24.") as error:
+        builds._check_host(home, builds.graph(home, "recipe-newer"))
+    assert error.value.hint == "jforge profile create ubuntu26; jforge profile use ubuntu26"
+    assert builds.host_requirements(builds.load(paths["recipe-newer"])["config"]) == {
+        "platforms": ["linux"], "profiles": ["ubuntu26"]}
+
+    # Reads never require a usable profile: without one every cached recipe stays listed.
+    from jarvis_forge import apt_profiles
+
+    def unavailable(base):
+        raise ForgeError("No project profile is selected.")
+
+    monkeypatch.setattr(apt_profiles, "active_home", unavailable)
+    assert [r["id"] for r in build_catalog.visible(home)] == ["any-profile", "recipe-current", "recipe-newer"]
+
+
+@pytest.mark.parametrize("profiles,platforms,message", [
+    (["ubuntu20"], ["linux"], "Invalid build at profiles"),
+    (["ubuntu24", "ubuntu24"], ["linux"], "Invalid build at profiles"),
+    (["macos"], ["linux"], "lists profiles outside its supported platforms"),
+])
+def test_recipe_profiles_are_built_in_names_on_supported_platforms(tmp_path, profiles, platforms, message):
+    path = save(tmp_path / "bad.yaml", id="bad", platforms=platforms, profiles=profiles,
+                steps=[{"id": "x", "uses": "command", "with": {"argv": ["true"]}}])
+    with pytest.raises(ForgeError, match=message):
+        builds.load(path)
+
+
 def test_build_cli_read_only_show_and_retired_plan(tmp_path,capsys):
     path=save(tmp_path/'flow.yaml',id='test',steps=[{'id':'x','uses':'command','with':{'argv':['true']}}])
     absent=tmp_path/'absent'
@@ -1312,9 +1368,13 @@ def test_install_fetches_internal_workspace_and_reuses_offline(home,projects,tmp
     assert main(argv)==0
     second=json.loads(capsys.readouterr().out)
     assert second['apps'][0]['artifact_id']==first['apps'][0]['artifact_id'] and not second['runs']
-    prefix=Path(first['apps'][0]['prefix']);(prefix/'include/value.h').unlink()
-    assert main(argv)==1
-    assert 'missing or modified' in json.loads(capsys.readouterr().out)['error']['message']
+    prefix=Path(first['apps'][0]['prefix']);header=prefix/'include/value.h'
+    expected=header.read_bytes();header.unlink()
+    assert main(argv)==0
+    repaired=json.loads(capsys.readouterr().out)
+    assert repaired['runs'] and repaired['runs'][0]['run_id']!=first['runs'][0]['run_id']
+    builds.artifact(home,repaired['apps'][0]['artifact_id'])
+    assert repaired['apps'][0]['prefix']==str(prefix) and header.read_bytes()==expected
 
 
 def test_workspace_fetch_rejects_collisions_and_read_only_plan_stays_offline(home, tmp_path, monkeypatch, capsys):
